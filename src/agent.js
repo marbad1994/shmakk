@@ -7,7 +7,7 @@ const path = require('path');
 const { execFile } = require('child_process');
 const { makeClient, modelFor, isConfigured } = require('./llm');
 const { classifyRunCommand, isSecretPath } = require('./safety');
-const { buildOrRefreshIndex, relevantFiles } = require('./workspace-index');
+const { buildOrRefreshIndex, relevantSubgraph } = require('./workspace-index');
 
 const MAX_FILE_BYTES = 64 * 1024;
 const MAX_FETCH_BYTES = 128 * 1024;
@@ -28,6 +28,27 @@ function trimForContext(history, maxEntries) {
   let cut = history.length - maxEntries;
   while (cut > 0 && history[cut] && history[cut].role === 'tool') cut--;
   return history.slice(cut);
+}
+
+function normalizeToolCalls(rawToolCalls, iter) {
+  const calls = [];
+  let seq = 0;
+  for (const tc of rawToolCalls || []) {
+    if (!tc || tc.type !== 'function') continue;
+    const name = String(tc.function?.name || '').trim();
+    if (!name) continue;
+    const id = String(tc.id || '').trim() || `tc_${iter}_${seq++}`;
+    const argsRaw = typeof tc.function?.arguments === 'string' ? tc.function.arguments : '';
+    calls.push({
+      id,
+      type: 'function',
+      function: {
+        name,
+        arguments: argsRaw || '{}',
+      },
+    });
+  }
+  return calls;
 }
 
 // Tiny spinner so the user sees "the agent is thinking" while we wait on
@@ -67,13 +88,35 @@ function within(roots, p) {
 const TOOLS = [
   { type: 'function', function: {
     name: 'read_file',
-    description: 'Read a UTF-8 file inside the workspace.',
-    parameters: { type: 'object', required: ['path'], properties: { path: { type: 'string' } } },
+    description: 'Read a UTF-8 file inside the workspace. Supports compact partial reads.',
+    parameters: {
+      type: 'object',
+      required: ['path'],
+      properties: {
+        path: { type: 'string' },
+        mode: { type: 'string', enum: ['full', 'head', 'tail', 'grep', 'imports', 'exports', 'symbol'] },
+        max_lines: { type: 'number', minimum: 1, maximum: 400 },
+        query: { type: 'string' },
+      },
+    },
   }},
   { type: 'function', function: {
     name: 'write_file',
     description: 'Write or overwrite a UTF-8 file inside the workspace.',
     parameters: { type: 'object', required: ['path', 'content'], properties: { path: { type: 'string' }, content: { type: 'string' } } },
+  }},
+  { type: 'function', function: {
+    name: 'edit_file',
+    description: 'Edit an existing UTF-8 file inside the workspace by replacing a specific string with a new string.',
+    parameters: {
+      type: 'object',
+      required: ['path', 'old_string', 'new_string'],
+      properties: {
+        path: { type: 'string' },
+        old_string: { type: 'string' },
+        new_string: { type: 'string' },
+      },
+    },
   }},
   { type: 'function', function: {
     name: 'make_dir',
@@ -138,9 +181,10 @@ function classifyTool(name, args) {
 }
 
 function describeTool(name, args) {
-  if (name === 'read_file') return `read_file ${args.path}`;
+  if (name === 'read_file') return `read_file ${args.path}${args.mode ? ` [${args.mode}]` : ''}`;
   if (name === 'list_dir') return `list_dir ${args.path || '.'}`;
   if (name === 'write_file') return `write_file ${args.path} (${(args.content || '').length} bytes)`;
+  if (name === 'edit_file') return `edit_file ${args.path} (${(args.old_string || '').slice(0, 40)}…)`;
   if (name === 'make_dir') return `make_dir ${args.path}`;
   if (name === 'delete_file') return `delete_file ${args.path}`;
   if (name === 'run') return `run: ${args.cmd}`;
@@ -186,7 +230,49 @@ async function dispatchTool(name, args, roots, confirmTool, signal) {
     if (!p) return { error: 'path outside workspace' };
     try {
       const buf = fs.readFileSync(p);
-      return { content: buf.slice(0, MAX_FILE_BYTES).toString('utf8'), truncated: buf.length > MAX_FILE_BYTES };
+      const text = buf.slice(0, MAX_FILE_BYTES).toString('utf8');
+      const lines = text.split(/\r?\n/);
+      const mode = args.mode || 'full';
+      const maxLines = Math.max(1, Math.min(400, Number(args.max_lines) || 80));
+      if (mode === 'head') {
+        return { content: lines.slice(0, maxLines).join('\n'), mode, truncated: lines.length > maxLines };
+      }
+      if (mode === 'tail') {
+        return { content: lines.slice(-maxLines).join('\n'), mode, truncated: lines.length > maxLines };
+      }
+      if (mode === 'grep') {
+        const q = String(args.query || '').toLowerCase();
+        if (!q) return { error: 'query required for grep mode' };
+        const hits = [];
+        for (let i = 0; i < lines.length; i++) {
+          if (!lines[i].toLowerCase().includes(q)) continue;
+          const start = Math.max(0, i - 2);
+          const end = Math.min(lines.length, i + 3);
+          hits.push(lines.slice(start, end).join('\n'));
+          if (hits.length >= 5) break;
+        }
+        return { content: hits.join('\n---\n'), mode, truncated: hits.length >= 5 };
+      }
+      if (mode === 'imports') {
+        const out = lines.filter((line) => /\bimport\b|require\(/.test(line)).slice(0, maxLines).join('\n');
+        return { content: out, mode, truncated: out.split(/\r?\n/).length >= maxLines };
+      }
+      if (mode === 'exports') {
+        const out = lines.filter((line) => /\bexport\b|module\.exports/.test(line)).slice(0, maxLines).join('\n');
+        return { content: out, mode, truncated: out.split(/\r?\n/).length >= maxLines };
+      }
+      if (mode === 'symbol') {
+        const q = String(args.query || '').toLowerCase();
+        if (!q) return { error: 'query required for symbol mode' };
+        for (let i = 0; i < lines.length; i++) {
+          if (!lines[i].toLowerCase().includes(q)) continue;
+          const start = Math.max(0, i - 8);
+          const end = Math.min(lines.length, i + Math.max(12, maxLines));
+          return { content: lines.slice(start, end).join('\n'), mode, truncated: end < lines.length };
+        }
+        return { error: `symbol/query not found: ${args.query}` };
+      }
+      return { content: text, mode: 'full', truncated: buf.length > MAX_FILE_BYTES };
     } catch (e) { return { error: String(e.message) }; }
   }
   if (name === 'list_dir') {
@@ -204,6 +290,23 @@ async function dispatchTool(name, args, roots, confirmTool, signal) {
     fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.writeFileSync(p, args.content ?? '');
     return { ok: true };
+  }
+  if (name === 'edit_file') {
+    const p = within(roots, args.path);
+    if (!p) return { error: 'path outside workspace' };
+    try {
+      const content = fs.readFileSync(p, 'utf8');
+      const oldString = String(args.old_string ?? '');
+      const newString = String(args.new_string ?? '');
+      if (!oldString) return { error: 'old_string is required' };
+      const first = content.indexOf(oldString);
+      if (first === -1) return { error: 'old_string not found' };
+      const second = content.indexOf(oldString, first + oldString.length);
+      if (second !== -1) return { error: 'old_string is ambiguous; appears multiple times' };
+      const updated = content.slice(0, first) + newString + content.slice(first + oldString.length);
+      fs.writeFileSync(p, updated);
+      return { ok: true, replaced: 1 };
+    } catch (e) { return { error: String(e.message) }; }
   }
   if (name === 'make_dir') {
     const p = within(roots, args.path);
@@ -257,19 +360,43 @@ function decodeDdgUrl(href) {
 
 function parseDdgLite(html, maxResults = 5) {
   const results = [];
+  const seen = new Set();
+
+  // Primary: old/current lite table result rows
   const rowRe = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
   let row;
   while ((row = rowRe.exec(html)) && results.length < maxResults) {
     const block = row[1];
-    const link = /<a[^>]+class="result-link"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i.exec(block);
+    const link = /<a[^>]+(?:class="result-link"|rel="nofollow")[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i.exec(block);
     if (!link) continue;
+    const url = decodeDdgUrl(link[1]);
+    if (!/^https?:\/\//i.test(url) || seen.has(url)) continue;
     const snippetMatch = /<td[^>]+class="result-snippet"[^>]*>([\s\S]*?)<\/td>/i.exec(block);
+    const title = stripTags(link[2]);
+    if (!title) continue;
+    seen.add(url);
     results.push({
-      title: stripTags(link[2]),
-      url: decodeDdgUrl(link[1]),
+      title,
+      url,
       snippet: snippetMatch ? stripTags(snippetMatch[1]) : '',
     });
   }
+
+  // Fallback: generic anchor extraction for changed DDG markup
+  if (results.length < maxResults) {
+    const anchorRe = /<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+    let a;
+    while ((a = anchorRe.exec(html)) && results.length < maxResults) {
+      const url = decodeDdgUrl(a[1]);
+      if (!/^https?:\/\//i.test(url) || seen.has(url)) continue;
+      if (/duckduckgo\.com\/(?:lite|html|\?|$)/i.test(url)) continue;
+      const title = stripTags(a[2]);
+      if (!title || title.length < 3) continue;
+      seen.add(url);
+      results.push({ title, url, snippet: '' });
+    }
+  }
+
   return results;
 }
 
@@ -295,15 +422,25 @@ async function webSearch(query, maxResults, signal) {
   const q = String(query || '').trim();
   if (!q) return { error: 'query required' };
   const limit = Math.max(1, Math.min(10, Number(maxResults) || 5));
-  const url = `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(q)}`;
-  try {
-    const resp = await fetchWithTimeout(url, {
-      signal,
-      headers: { 'user-agent': 'aiterm/0.1 (+https://duckduckgo.com/lite)' },
-    });
+  const liteUrl = `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(q)}`;
+  const htmlUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`;
+  const headers = { 'user-agent': 'Mozilla/5.0 (compatible; aiterm/0.1; +https://duckduckgo.com)' };
+
+  async function searchOne(url) {
+    const resp = await fetchWithTimeout(url, { signal, headers });
     const html = await resp.text();
-    if (!resp.ok) return { error: `search failed: HTTP ${resp.status}` };
-    return { query: q, results: parseDdgLite(html, limit) };
+    if (!resp.ok) return { error: `search failed: HTTP ${resp.status}`, results: [] };
+    return { results: parseDdgLite(html, limit) };
+  }
+
+  try {
+    const lite = await searchOne(liteUrl);
+    if (lite.results.length) return { query: q, results: lite.results, source: 'ddg-lite' };
+
+    const html = await searchOne(htmlUrl);
+    if (html.results.length) return { query: q, results: html.results, source: 'ddg-html-fallback' };
+
+    return { query: q, results: [], source: 'ddg-lite+html', note: lite.error || html.error || 'no results parsed' };
   } catch (e) {
     return { error: String(e.message || e) };
   }
@@ -406,9 +543,9 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
   let indexHint = '';
   try {
     const idx = buildOrRefreshIndex(roots[0]);
-    const picks = relevantFiles(idx, input, 20);
-    if (picks.length) {
-      indexHint = `\n\nIndexed relevant files for this task (ranked):\n${picks.map((p) => `- ${p}`).join('\n')}\nUse this as a starting point before broad exploration.`;
+    const graph = relevantSubgraph(idx, input, 12, 1);
+    if (graph.length) {
+      indexHint = `\n\nCompact relevant subgraph for this task:\n${graph.map((n) => `- ${n.path} [role=${n.role}] symbols=${n.symbols.slice(0, 4).join(', ') || '-'} edges=${n.edges.slice(0, 4).join(', ') || '-'} snippet=${(n.snippet || []).slice(0, 3).join(' | ') || '-'}`).join('\n')}\nStart with these files and their immediate dependencies before broad exploration. Prefer these snippet cues before reading full files.`;
     }
   } catch {}
 const sys = `You are an expert AI coding assistant running inside aiterm.
@@ -480,6 +617,15 @@ Exploration Rules:
 - Use recursive listing only for focused subdirectories or when the project is small enough.
 - Read only files relevant to the task.
 - Before modifying code, inspect nearby files, imports, existing patterns, and dependency files when relevant.
+- Prefer compact file reads before full-file reads.
+- Default read order for large files/code should be:
+  1. read_file(mode="imports")
+  2. read_file(mode="exports")
+  3. read_file(mode="symbol", query="...")
+  4. read_file(mode="grep", query="...")
+  5. read_file(mode="head" or mode="tail")
+  6. read_file(mode="full") only if still necessary.
+- Use full-file reads only when compact modes are insufficient to understand or safely edit the target.
 
 Dependency Files:
 When relevant, check project dependency/config files such as:
@@ -724,7 +870,9 @@ ${indexHint}
       content = '';
     }
 
-    const signature = toolCalls
+    const normalizedToolCalls = normalizeToolCalls(toolCalls, i);
+
+    const signature = normalizedToolCalls
       .map((c) => `${c.function.name}:${c.function.arguments || '{}'}`)
       .join('|');
     if (signature && signature === lastSignature) repeatedSignatureCount += 1;
@@ -737,16 +885,18 @@ ${indexHint}
     }
 
     // Persist this turn for history.
+    const hasToolCalls = normalizedToolCalls.length > 0;
+    const hasContent = !!content;
     const msg = {
       role: 'assistant',
-      content: content || null,
+      ...(hasContent ? { content } : (hasToolCalls ? { content: null } : { content: '' })),
       ...(reasoningContent ? { reasoning_content: reasoningContent } : {}),
-      ...(toolCalls.length ? { tool_calls: toolCalls.filter(Boolean) } : {}),
+      ...(hasToolCalls ? { tool_calls: normalizedToolCalls } : {}),
     };
-    messages.push(msg);
+    if (hasContent || hasToolCalls || reasoningContent) messages.push(msg);
 
     // No tools → done.
-    if (!toolCalls.length) {
+    if (!normalizedToolCalls.length) {
       if (content) {
         write(content);
         if (!content.endsWith('\n')) write('\n');
@@ -759,7 +909,7 @@ ${indexHint}
     }
 
     // Dispatch tool calls.
-    for (const c of toolCalls) {
+    for (const c of normalizedToolCalls) {
       let args = {};
       try { args = JSON.parse(c.function.arguments || '{}'); } catch {}
       write(dim(`→ ${c.function.name}(${shortArgs(args)})`) + '\n');
@@ -806,6 +956,7 @@ function summarizeToolResult(name, r) {
   if (name === 'web_search' && Array.isArray(r.results)) return `${r.results.length} results`;
   if (name === 'fetch_url' && typeof r.status !== 'undefined') return `HTTP ${r.status}`;
   if (name === 'write_file' && r.ok) return 'written';
+  if (name === 'edit_file' && r.ok) return 'edited';
   if (name === 'make_dir' && r.ok) return 'created';
   if (name === 'delete_file' && r.ok) return 'deleted';
   return '';

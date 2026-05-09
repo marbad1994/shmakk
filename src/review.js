@@ -7,9 +7,22 @@ function makePrompter(pty, write) {
       const tag = defaultYes ? '[Y/n/?]' : '[y/N/?]';
       write(`${question} ${tag} `);
       let buf = '';
+      function finishYesNo(ans) {
+        write('\n');
+        release();
+        return resolve(ans);
+      }
       const release = pty.captureStdin((data) => {
         for (const ch of data.toString('utf8')) {
           const code = ch.charCodeAt(0);
+          if (!buf && (ch === 'y' || ch === 'Y')) return finishYesNo(true);
+          if (!buf && (ch === 'n' || ch === 'N')) return finishYesNo(false);
+          if (!buf && ch === '?') {
+            write('\n');
+            if (onWhy) onWhy();
+            write(`${question} ${tag} `);
+            continue;
+          }
           if (ch === '\r' || ch === '\n') {
             write('\n');
             const ans = buf.trim().toLowerCase();

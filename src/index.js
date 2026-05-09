@@ -46,7 +46,7 @@ async function main() {
   }
 
   if (opts.profile && !normalizeProfile(opts.profile)) {
-    process.stderr.write('[aiterm] invalid --profile. Use: tiny|balanced|deep\n');
+    process.stderr.write('[aiterm] invalid --profile. Use: tiny|balanced|deep|builder|large-app\n');
     process.exit(2);
   }
 

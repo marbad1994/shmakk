@@ -2,6 +2,8 @@ const PRESETS = {
   tiny: { contextMode: 'tiny', maxToolIters: 10 },
   balanced: { contextMode: 'balanced', maxToolIters: 16 },
   deep: { contextMode: 'deep', maxToolIters: 24 },
+  builder: { contextMode: 'deep', maxToolIters: 32 },
+  'large-app': { contextMode: 'deep', maxToolIters: 32 },
 };
 
 function normalizeProfile(name) {

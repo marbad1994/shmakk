@@ -3,14 +3,24 @@ const path = require('path');
 
 const SKIP_DIRS = new Set(['.git', 'node_modules', '.next', 'dist', 'build', 'coverage']);
 const MAX_FILE_BYTES = 96 * 1024;
+const CODE_EXTS = new Set(['.js', '.cjs', '.mjs', '.ts', '.tsx', '.jsx', '.py', '.go', '.rs']);
 
 function safeRead(p) {
   try { return fs.readFileSync(p, 'utf8'); } catch { return ''; }
 }
 
+function firstNonEmptyLines(content, limit = 20) {
+  return String(content || '')
+    .split(/\r?\n/)
+    .map((x) => x.trimEnd())
+    .filter((x) => x.trim())
+    .slice(0, limit);
+}
+
 function extractHints(content) {
   const symbols = [];
   const imports = [];
+  const exports = [];
   const lines = String(content || '').split(/\r?\n/).slice(0, 400);
   for (const l of lines) {
     const s = l.trim();
@@ -19,11 +29,46 @@ function extractHints(content) {
       || /^class\s+([a-zA-Z0-9_]+)/.exec(s)
       || /^const\s+([a-zA-Z0-9_]+)\s*=\s*\(/.exec(s);
     if (m) symbols.push(m[1]);
+    m = /^module\.exports\s*=\s*([a-zA-Z0-9_]+)/.exec(s)
+      || /^export\s+default\s+([a-zA-Z0-9_]+)/.exec(s)
+      || /^export\s*\{\s*([^}]+)\s*\}/.exec(s);
+    if (m) exports.push(m[1]);
     m = /^import\s+.*?from\s+['"]([^'"]+)['"]/.exec(s)
       || /^const\s+.*?=\s*require\(['"]([^'"]+)['"]\)/.exec(s);
     if (m) imports.push(m[1]);
   }
-  return { symbols: symbols.slice(0, 20), imports: imports.slice(0, 20) };
+  return {
+    symbols: symbols.slice(0, 20),
+    imports: imports.slice(0, 20),
+    exports: exports.slice(0, 20),
+  };
+}
+
+function detectRole(rel) {
+  const base = path.basename(rel).toLowerCase();
+  const dir = path.dirname(rel).toLowerCase();
+  if (base === 'package.json' || /tsconfig|vite\.config|next\.config|dockerfile|readme/.test(base)) return 'config';
+  if (dir.includes('test') || base.includes('.test.') || base.includes('.spec.')) return 'test';
+  if (base === 'index.js' || base === 'main.js' || rel.startsWith('bin/')) return 'entry';
+  if (dir.includes('hooks')) return 'hook';
+  if (dir.includes('services')) return 'service';
+  if (dir.includes('src')) return 'source';
+  return 'file';
+}
+
+function resolveImportTarget(rel, imp, allFiles) {
+  if (!imp || !imp.startsWith('.')) return null;
+  const baseDir = path.dirname(rel);
+  const raw = path.normalize(path.join(baseDir, imp));
+  const candidates = [
+    raw,
+    `${raw}.js`, `${raw}.cjs`, `${raw}.mjs`, `${raw}.ts`, `${raw}.tsx`, `${raw}.jsx`,
+    path.join(raw, 'index.js'), path.join(raw, 'index.ts'), path.join(raw, 'index.tsx'),
+  ];
+  for (const c of candidates) {
+    if (allFiles.has(c)) return c;
+  }
+  return null;
 }
 
 function walkFiles(root, dir = root, out = []) {
@@ -83,9 +128,25 @@ function buildOrRefreshIndex(root) {
       path: rel,
       mtimeMs,
       size,
+      ext: path.extname(rel).toLowerCase(),
+      role: detectRole(rel),
       symbols: hints.symbols,
       imports: hints.imports,
+      exports: hints.exports,
+      snippet: firstNonEmptyLines(sample, 12),
+      edges: [],
     };
+  }
+
+  const allFiles = new Set(Object.keys(existing.files));
+  for (const rel of Object.keys(existing.files)) {
+    const f = existing.files[rel];
+    const edges = [];
+    for (const imp of f.imports || []) {
+      const target = resolveImportTarget(rel, imp, allFiles);
+      if (target) edges.push(target);
+    }
+    f.edges = edges.slice(0, 30);
   }
 
   existing.updatedAt = now;
@@ -114,4 +175,35 @@ function relevantFiles(index, query, limit = 20) {
   return scored.slice(0, limit).map((x) => x.file);
 }
 
-module.exports = { buildOrRefreshIndex, relevantFiles };
+function relevantSubgraph(index, query, limit = 12, maxHops = 1) {
+  const seeds = relevantFiles(index, query, Math.max(4, Math.min(limit, 8)));
+  const files = index.files || {};
+  const visited = new Set(seeds);
+  const queue = seeds.map((file) => ({ file, hop: 0 }));
+  const out = [];
+
+  while (queue.length && out.length < limit) {
+    const { file, hop } = queue.shift();
+    const node = files[file];
+    if (!node) continue;
+    out.push({
+      path: node.path,
+      role: node.role,
+      symbols: node.symbols || [],
+      imports: node.imports || [],
+      exports: node.exports || [],
+      snippet: node.snippet || [],
+      edges: node.edges || [],
+    });
+    if (hop >= maxHops) continue;
+    for (const next of node.edges || []) {
+      if (visited.has(next)) continue;
+      visited.add(next);
+      queue.push({ file: next, hop: hop + 1 });
+    }
+  }
+
+  return out;
+}
+
+module.exports = { buildOrRefreshIndex, relevantFiles, relevantSubgraph };

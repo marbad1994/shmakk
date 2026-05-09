@@ -21,11 +21,13 @@
     "test": "node test/units.js",
     "check": "node -e \"require('./src/index'); require('./src/agent'); require('./src/orchestrator'); console.log('check-ok')\"",
     "mock-llm": "node test/mock-llm.js",
-    "global:link": "npm link",
+    "global:setup": "node src/global-setup.js",
+    "global:link": "npm link && npm run global:setup",
     "global:unlink": "npm unlink -g aiterm",
-    "global:install": "npm install -g .",
-    "global:reinstall": "npm uninstall -g aiterm && npm install -g .",
+    "global:install": "npm install -g . && npm run global:setup",
+    "global:reinstall": "npm uninstall -g aiterm && npm install -g . && npm run global:setup",
     "setup": "npm install && npm run check && npm run test"
+    ,"global:doctor": "node src/global-doctor.js"
   },
   "engines": {
     "node": ">=18"

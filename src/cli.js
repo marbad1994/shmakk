@@ -57,14 +57,14 @@ Control (run from inside an aiterm session):
   aiterm --exit                   Cleanly exit the parent aiterm
   aiterm --restart                Restart the inner shell (preserves window)
   aiterm --reset                  Clear the AI conversation history (keep session)
-  aiterm --profile-set <name>     Switch profile and restart (tiny|balanced|deep)
+  aiterm --profile-set <name>     Switch profile and restart (tiny|balanced|deep|builder|large-app)
 
 Optional:
   --no-ai                         Disable AI entirely (pure passthrough)
   --no-correction                 Disable command correction
   --yes-files                     Auto-accept write_file and make_dir in auto mode
   --workspace <path>              Override workspace root
-  --profile <name>                Startup profile: tiny|balanced|deep
+  --profile <name>                Startup profile: tiny|balanced|deep|builder|large-app
   --debug                         Verbose logging to stderr
   --print-config                  Print resolved configuration and exit
 

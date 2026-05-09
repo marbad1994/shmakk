@@ -29,7 +29,6 @@ function makeToolConfirm(opts, ask, out, getAbort) {
       return true;
     }
     out([
-      '',
       '\x1b[36m── aiterm tool ──\x1b[0m',
       `  action:    ${description}`,
       `  safety:    ${safety}`,
@@ -312,6 +311,9 @@ async function runOneSession(opts, registerSession) {
           profile: opts.profile,
         });
         history = trimHistory(updated || history);
+        // Force the interactive shell to redraw its prompt so the user is
+        // returned cleanly to the terminal without needing to press Enter.
+        session.childWrite('\r');
       } catch (e) {
         if (isAbortError(e)) out('\r\n\x1b[33m[aiterm] interrupted\x1b[0m\r\n');
         else out(`\r\n[aiterm] task error: ${e.message}\r\n`);

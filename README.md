@@ -1,7 +1,5 @@
 # aiterm
 
-## Vibe coded, it's a tool and it works for me, dont care.
-
 AI-supervised terminal wrapper with:
 
 - command correction
@@ -76,11 +74,13 @@ Use profiles instead of many tuning env vars:
 - `tiny` → minimal context/loop budget (fastest)
 - `balanced` → default
 - `deep` → larger tasks/investigations
+- `builder` / `large-app` → best for editing, building, and maintaining large projects
 
 Start with profile:
 
 ```bash
 aiterm --profile tiny
+aiterm --profile builder
 ```
 
 Switch profile from inside a running session (auto restart/reload):
@@ -91,11 +91,13 @@ aiterm --profile-set deep
 
 ## Global usage (automated)
 
-Install globally from local source:
+Install globally from local source (recommended):
 
 ```bash
 npm run global:install
 ```
+
+This now also runs PATH setup for your shell so `aiterm` works in new terminals.
 
 Or create a live dev link:
 
@@ -119,6 +121,30 @@ Remove global install/link:
 
 ```bash
 npm run global:unlink
+```
+
+Diagnose global command issues:
+
+```bash
+npm run global:doctor
+```
+
+Run PATH setup manually (if needed):
+
+```bash
+npm run global:setup
+```
+
+If `aiterm` is still not found, open a **new terminal** and run:
+
+```bash
+aiterm --help
+```
+
+If it still fails, run:
+
+```bash
+npm run global:doctor
 ```
 
 ## End-to-end workflow (recommended)
@@ -157,6 +183,7 @@ npm run global:reinstall
 - `tiny` for fast/low-overhead work on big repositories
 - `balanced` for normal daily usage (default)
 - `deep` for larger multi-step tasks and investigations
+- `builder` / `large-app` for implementation/build workflows across many files
 
 Examples:
 
@@ -164,6 +191,8 @@ Examples:
 aiterm --profile tiny
 aiterm --profile balanced
 aiterm --profile deep
+aiterm --profile builder
+aiterm --profile large-app
 ```
 
 Switch during a running session:
