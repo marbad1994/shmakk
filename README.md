@@ -1,5 +1,7 @@
 # aiterm
 
+## Vibe coded, it's a tool and it works for me, dont care.
+
 AI-supervised terminal wrapper with:
 
 - command correction
