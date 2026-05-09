@@ -1,0 +1,23 @@
+node_modules/
+*.log
+.DS_Store
+
+# local env / runtime artifacts
+.env
+history.txt
+tmp/
+.aiterm/
+
+# editor / misc
+.vscode/
+.codemakk/
+
+# accidental external artifacts
+*.tmp
+*.wav
+*.fit
+*.aff
+*.dic
+--help
+conftest.c
+create-ml-country-mapping-arch.conf
