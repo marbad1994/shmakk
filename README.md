@@ -185,6 +185,22 @@ npm run global:reinstall
 - `deep` for larger multi-step tasks and investigations
 - `builder` / `large-app` for implementation/build workflows across many files
 
+Discovery/read budget defaults by profile:
+
+- `tiny` → 1 discovery call per round
+- `balanced` → 2 discovery calls per round
+- `deep` → 3 discovery calls per round
+- `builder` → 4 discovery calls per round
+- `large-app` → 4 discovery calls per round
+
+(`discovery` = `read_file`, `list_dir`, `web_search`, `fetch_url`)
+
+Override manually if needed:
+
+```bash
+export AITERM_MAX_DISCOVERY_CALLS_PER_ROUND=2
+```
+
 Examples:
 
 ```bash
@@ -221,10 +237,48 @@ Why it helps:
 - less blind exploration
 - fewer repeated heavy reads on large projects
 
+## Long-task reliability and resume
+
+aiterm now includes stronger long-task behavior:
+
+- adaptive tool-round budget during active progress
+- progress-aware loop stall detection (less premature stopping)
+- forced finalization pass before giving up
+- persistent task journal at:
+
+```text
+.aiterm/state/task-journal.json
+```
+
+Resume behavior:
+
+- if a task is interrupted, the next run can continue with resume context from the journal
+- when a task fully completes, the journal is cleared automatically
+- if a task pauses mid-way, journal state is kept for continuation
+- `aiterm --reset` clears both conversation history and the task journal
+
+Session lifecycle (how resume works):
+
+1. A task starts and journal is set to `running`.
+2. After each tool call, journal is updated (input, touched files, timestamps, profile, budget).
+3. If interrupted or stalled, journal is kept as `paused`.
+4. On next task run, aiterm loads journal and injects a short resume context into the next prompt.
+5. If task reaches a normal final answer (or forced finalization answer), journal is deleted.
+
+If you want to hard reset task continuity:
+
+```bash
+aiterm --reset
+```
+
 ## Useful commands
 
 - `aiterm --help`
 - `aiterm --status`
+- `aiterm --stats` (session/task stats, active skill, audit event count)
+- `aiterm --compact` (clear conversation + journal to free context)
+- `aiterm --load-skill <name>` (load Claude/Codex compatible local skill)
+- `aiterm --resume-status` (print current task journal summary)
 - `aiterm --restart`
 - `aiterm --reset` (clear conversation history)
 - `aiterm --exit`

@@ -8,14 +8,17 @@ const { execFile } = require('child_process');
 const { makeClient, modelFor, isConfigured } = require('./llm');
 const { classifyRunCommand, isSecretPath } = require('./safety');
 const { buildOrRefreshIndex, relevantSubgraph } = require('./workspace-index');
+const { readActiveSkill } = require('./skills');
 
 const MAX_FILE_BYTES = 64 * 1024;
 const MAX_FETCH_BYTES = 128 * 1024;
 const MAX_TOOL_ITERS = Math.max(1, Number(process.env.AITERM_MAX_TOOL_ITERS) || 16);
 const CONTEXT_PROFILES = {
-  tiny: { historyEntries: 10, maxToolIters: Math.min(MAX_TOOL_ITERS, 10), stallRepeat: 2 },
-  balanced: { historyEntries: 20, maxToolIters: MAX_TOOL_ITERS, stallRepeat: 3 },
-  deep: { historyEntries: 40, maxToolIters: Math.max(MAX_TOOL_ITERS, 24), stallRepeat: 4 },
+  tiny: { historyEntries: 10, maxToolIters: Math.min(MAX_TOOL_ITERS, 10), stallRepeat: 2, maxDiscoveryCallsPerRound: 1 },
+  balanced: { historyEntries: 20, maxToolIters: MAX_TOOL_ITERS, stallRepeat: 3, maxDiscoveryCallsPerRound: 2 },
+  deep: { historyEntries: 40, maxToolIters: Math.max(MAX_TOOL_ITERS, 24), stallRepeat: 4, maxDiscoveryCallsPerRound: 3 },
+  builder: { historyEntries: 50, maxToolIters: Math.max(MAX_TOOL_ITERS, 32), stallRepeat: 5, maxDiscoveryCallsPerRound: 4 },
+  'large-app': { historyEntries: 50, maxToolIters: Math.max(MAX_TOOL_ITERS, 32), stallRepeat: 5, maxDiscoveryCallsPerRound: 4 },
 };
 
 function contextProfile(mode) {
@@ -28,6 +31,32 @@ function trimForContext(history, maxEntries) {
   let cut = history.length - maxEntries;
   while (cut > 0 && history[cut] && history[cut].role === 'tool') cut--;
   return history.slice(cut);
+}
+
+function journalPath(root) {
+  return path.join(root, '.aiterm', 'state', 'task-journal.json');
+}
+
+function loadTaskJournal(root) {
+  try {
+    const p = journalPath(root);
+    if (!fs.existsSync(p)) return null;
+    return JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function saveTaskJournal(root, journal) {
+  try {
+    const p = journalPath(root);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, JSON.stringify(journal, null, 2));
+  } catch {}
+}
+
+function clearTaskJournal(root) {
+  try { fs.rmSync(journalPath(root), { force: true }); } catch {}
 }
 
 function normalizeToolCalls(rawToolCalls, iter) {
@@ -49,6 +78,18 @@ function normalizeToolCalls(rawToolCalls, iter) {
     });
   }
   return calls;
+}
+
+function applyRoundToolBudget(toolCalls, maxDiscoveryCalls) {
+  const discovery = new Set(['read_file', 'list_dir', 'web_search', 'fetch_url']);
+  const actionCalls = [];
+  const discoveryCalls = [];
+  for (const c of toolCalls) {
+    if (discovery.has(c.function?.name)) discoveryCalls.push(c);
+    else actionCalls.push(c);
+  }
+  // Progress-first bias: execute action calls first, then only a small discovery budget.
+  return [...actionCalls, ...discoveryCalls.slice(0, maxDiscoveryCalls)];
 }
 
 // Tiny spinner so the user sees "the agent is thinking" while we wait on
@@ -540,6 +581,28 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
   }
   const client = makeClient();
   const rootList = roots.length === 1 ? roots[0] : roots.join(', ');
+  const priorJournal = loadTaskJournal(roots[0]);
+  const activeSkill = readActiveSkill(roots[0]);
+  const touchedFiles = new Set(Array.isArray(priorJournal?.touchedFiles) ? priorJournal.touchedFiles : []);
+  const startedAt = Date.now();
+  const baseToolBudget = runtimeSafeNumber(contextProfile(profile).maxToolIters, 16);
+  let dynamicToolBudget = baseToolBudget;
+  let noProgressRepeats = 0;
+
+  function persistJournal(state) {
+    saveTaskJournal(roots[0], {
+      status: state,
+      input,
+      updatedAt: new Date().toISOString(),
+      startedAt: priorJournal?.startedAt || new Date(startedAt).toISOString(),
+      profile,
+      touchedFiles: Array.from(touchedFiles).slice(-200),
+      roundsBudget: dynamicToolBudget,
+      roots,
+    });
+  }
+
+  persistJournal('running');
   let indexHint = '';
   try {
     const idx = buildOrRefreshIndex(roots[0]);
@@ -611,21 +674,22 @@ ${rootList}
 - Never access files outside the allowed roots.
 - Prefer project-relative paths such as "src/index.js", not absolute paths.
 
-Exploration Rules:
-- Start with targeted, shallow exploration.
-- Use list_dir on "." or likely relevant directories first.
-- Use recursive listing only for focused subdirectories or when the project is small enough.
-- Read only files relevant to the task.
-- Before modifying code, inspect nearby files, imports, existing patterns, and dependency files when relevant.
-- Prefer compact file reads before full-file reads.
-- Default read order for large files/code should be:
+Exploration Rules (strict token discipline):
+- Start with targeted, shallow exploration only.
+- Never read full files by default.
+- First, identify 1-3 likely files; do not scan broad directories unless required.
+- Prefer compact reads before any full-file read.
+- Default read order for large files/code:
   1. read_file(mode="imports")
   2. read_file(mode="exports")
   3. read_file(mode="symbol", query="...")
   4. read_file(mode="grep", query="...")
   5. read_file(mode="head" or mode="tail")
-  6. read_file(mode="full") only if still necessary.
-- Use full-file reads only when compact modes are insufficient to understand or safely edit the target.
+  6. read_file(mode="full") only if still necessary and only once per target file.
+- If enough evidence is already gathered, stop reading and act.
+- Do not re-read unchanged files unless the previous read was insufficient.
+- Before modifying code, inspect only minimal nearby context needed for a safe edit.
+- Hard limit: at most ${maxDiscoveryCallsPerRound} discovery calls per round (read/list/search/fetch) unless you already switched to action calls.
 
 Dependency Files:
 When relevant, check project dependency/config files such as:
@@ -790,14 +854,25 @@ Use native tool calls if available.
 Otherwise output only:
 {"aiterm_actions":[{"tool":"tool_name","args":{...}}]}
 ${indexHint}
+${activeSkill ? `\n\nActive loaded skill (${activeSkill.name}) instructions:\n${String(activeSkill.content || '').slice(0, 12000)}` : ''}
 `;
 
   const runtimeProfile = contextProfile(profile);
+  const maxDiscoveryCallsPerRound = Math.max(
+    1,
+    Number(process.env.AITERM_MAX_DISCOVERY_CALLS_PER_ROUND)
+      || runtimeProfile.maxDiscoveryCallsPerRound
+      || 2,
+  );
   const boundedHistory = trimForContext(history, runtimeProfile.historyEntries);
+  const resumeContext = priorJournal && priorJournal.status === 'running'
+    ? `\n\nResume context from previous interrupted run:\n- previous_input: ${String(priorJournal.input || '').slice(0, 300)}\n- touched_files: ${(priorJournal.touchedFiles || []).slice(-20).join(', ') || '(none)'}\n- note: continue from latest completed work, avoid redoing already-touched steps unless necessary.`
+    : '';
+
   const messages = [
     { role: 'system', content: sys },
     ...boundedHistory,
-    { role: 'user', content: input },
+    { role: 'user', content: input + resumeContext },
   ];
 
   // Prevent repeated expensive reads/searches within a single task run.
@@ -808,7 +883,7 @@ ${indexHint}
 
   // Tool loop. Streams content as it arrives; prints each tool call.
   let producedAnything = false;
-  for (let i = 0; i < runtimeProfile.maxToolIters; i++) {
+  for (let i = 0; i < dynamicToolBudget; i++) {
     if (signal && signal.aborted) return messages.slice(1);
 
     // Stream the response so the user sees text as it generates.
@@ -870,19 +945,15 @@ ${indexHint}
       content = '';
     }
 
-    const normalizedToolCalls = normalizeToolCalls(toolCalls, i);
+    const normalizedToolCalls = applyRoundToolBudget(normalizeToolCalls(toolCalls, i), maxDiscoveryCallsPerRound);
 
     const signature = normalizedToolCalls
       .map((c) => `${c.function.name}:${c.function.arguments || '{}'}`)
       .join('|');
-    if (signature && signature === lastSignature) repeatedSignatureCount += 1;
+    const signatureRepeated = !!signature && signature === lastSignature;
+    if (signatureRepeated) repeatedSignatureCount += 1;
     else repeatedSignatureCount = 0;
     lastSignature = signature;
-
-    if (repeatedSignatureCount >= runtimeProfile.stallRepeat) {
-      write(dim('[aiterm] repeated tool pattern detected; stopping early to avoid loop. Try a narrower follow-up or `aiterm --reset`.') + '\n');
-      return messages.slice(1);
-    }
 
     // Persist this turn for history.
     const hasToolCalls = normalizedToolCalls.length > 0;
@@ -905,13 +976,16 @@ ${indexHint}
       if (!producedAnything) {
         write(dim('[aiterm] model returned no response — try `aiterm --reset` or rephrase.') + '\n');
       }
+      clearTaskJournal(roots[0]);
       return messages.slice(1);
     }
 
     // Dispatch tool calls.
+    let iterProgress = false;
     for (const c of normalizedToolCalls) {
       let args = {};
       try { args = JSON.parse(c.function.arguments || '{}'); } catch {}
+      if (typeof args.path === 'string' && args.path) touchedFiles.add(args.path);
       write(dim(`→ ${c.function.name}(${shortArgs(args)})`) + '\n');
       const cacheKey = `${c.function.name}:${JSON.stringify(args || {})}`;
       const canUseCache = cacheableTools.has(c.function.name);
@@ -922,16 +996,57 @@ ${indexHint}
       } else {
         result = await dispatchTool(c.function.name, args, roots, confirmTool, signal);
         if (canUseCache && !result?.error) toolResultCache.set(cacheKey, result);
+        iterProgress = true;
       }
       const summary = summarizeToolResult(c.function.name, result);
       if (summary) write(dim('  ' + summary) + '\n');
       messages.push({ role: 'tool', tool_call_id: c.id, content: JSON.stringify(result).slice(0, 8000) });
       producedAnything = true;
+      persistJournal('running');
       if (signal && signal.aborted) return messages.slice(1);
     }
+
+    if (signatureRepeated && !iterProgress) noProgressRepeats += 1;
+    else noProgressRepeats = 0;
+
+    if (iterProgress && dynamicToolBudget < runtimeProfile.maxToolIters + 12) {
+      dynamicToolBudget += 1;
+    }
+
+    if (repeatedSignatureCount >= runtimeProfile.stallRepeat && noProgressRepeats >= 2) {
+      break;
+    }
   }
-  write(dim('[aiterm] stopped after several tool rounds without a final answer; try a smaller request or run `aiterm --reset`.') + '\n');
+
+  // Finalization pass: force a no-tools answer before giving up.
+  try {
+    const final = await client.chat.completions.create({
+      model: modelFor('agent'),
+      messages: [
+        ...messages,
+        { role: 'user', content: 'Finalize now without using any tools. Summarize completed work and exact next actionable step if blocked.' },
+      ],
+      temperature: 0,
+      tool_choice: 'none',
+      stream: false,
+    }, { signal });
+    const finalText = final.choices?.[0]?.message?.content || '';
+    if (finalText) {
+      write(finalText);
+      if (!finalText.endsWith('\n')) write('\n');
+      clearTaskJournal(roots[0]);
+      return messages.slice(1);
+    }
+  } catch {}
+
+  write(dim('[aiterm] paused after several tool rounds. Resume later continues from task journal; try `aiterm --reset` to clear.') + '\n');
+  persistJournal('paused');
   return messages.slice(1);
+}
+
+function runtimeSafeNumber(v, fallback) {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
 function shortArgs(args) {
@@ -962,4 +1077,4 @@ function summarizeToolResult(name, r) {
   return '';
 }
 
-module.exports = { runAgent, classifyTool, describeTool, parseFallbackActions, parseDdgLite };
+module.exports = { runAgent, classifyTool, describeTool, parseFallbackActions, parseDdgLite, loadTaskJournal, clearTaskJournal };

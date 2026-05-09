@@ -36,9 +36,13 @@ async function main() {
     process.exit(0);
   }
 
-  if (opts.status || opts.exitNow || opts.restart || opts.reset || opts.profileSet) {
+  if (opts.status || opts.stats || opts.compact || opts.loadSkill || opts.resumeStatus || opts.exitNow || opts.restart || opts.reset || opts.profileSet) {
     const ctl = require('./control');
     if (opts.status) process.exit(ctl.status());
+    if (opts.stats) process.exit(ctl.stats());
+    if (opts.compact) process.exit(ctl.compactContext());
+    if (opts.loadSkill) process.exit(ctl.loadSkill(opts.loadSkill));
+    if (opts.resumeStatus) process.exit(ctl.resumeStatus());
     if (opts.exitNow) process.exit(ctl.exitParent());
     if (opts.restart) process.exit(ctl.restartParent());
     if (opts.reset) process.exit(ctl.resetConversation());

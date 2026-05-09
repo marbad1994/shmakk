@@ -10,6 +10,10 @@ function parseArgs(argv) {
     noCorrection: false,
     printConfig: false,
     status: false,
+    stats: false,
+    compact: false,
+    loadSkill: null,
+    resumeStatus: false,
     exitNow: false,
     restart: false,
     profile: null,
@@ -31,6 +35,10 @@ function parseArgs(argv) {
       case '--print-config': opts.printConfig = true; break;
       case '--workspace': opts.workspace = argv[++i] || null; break;
       case '--status': opts.status = true; break;
+      case '--stats': opts.stats = true; break;
+      case '--compact': opts.compact = true; break;
+      case '--load-skill': opts.loadSkill = argv[++i] || null; break;
+      case '--resume-status': opts.resumeStatus = true; break;
       case '--exit': opts.exitNow = true; break;
       case '--restart': opts.restart = true; break;
       case '--reset': opts.reset = true; break;
@@ -54,6 +62,10 @@ Usage:
 
 Control (run from inside an aiterm session):
   aiterm --status                 Show whether this terminal is inside aiterm
+  aiterm --stats                  Show session/task stats (journal, audit, active skill)
+  aiterm --compact                Compact context by clearing conversation + task journal
+  aiterm --load-skill <name>      Load a Claude/Codex-style skill into aiterm workspace state
+  aiterm --resume-status          Show task journal summary for resume continuity
   aiterm --exit                   Cleanly exit the parent aiterm
   aiterm --restart                Restart the inner shell (preserves window)
   aiterm --reset                  Clear the AI conversation history (keep session)

@@ -1,6 +1,6 @@
 const { startSession } = require('./pty');
 const { correct } = require('./correction');
-const { runAgent } = require('./agent');
+const { runAgent, clearTaskJournal } = require('./agent');
 const { loadGlossary } = require('./glossary');
 const { isConfigured } = require('./llm');
 const { makePrompter, decisionBanner } = require('./review');
@@ -186,7 +186,11 @@ async function runOneSession(opts, registerSession) {
   }
 
   session.ev.on('cwd', (p) => { if (p) cwd = p; });
-  function resetHistory() { history = []; out('\r\n\x1b[33m[aiterm] conversation history cleared\x1b[0m\r\n'); }
+  function resetHistory() {
+    history = [];
+    try { clearTaskJournal(currentRoots()[0]); } catch {}
+    out('\r\n\x1b[33m[aiterm] conversation + task journal cleared\x1b[0m\r\n');
+  }
   registerSession(session, resetHistory);
 
   session.ev.on('command', (c) => {
