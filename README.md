@@ -278,12 +278,44 @@ aiterm --reset
 - `aiterm --stats` (session/task stats, active skill, audit event count)
 - `aiterm --compact` (clear conversation + journal to free context)
 - `aiterm --load-skill <name>` (load Claude/Codex compatible local skill)
+- `aiterm --list-skills` (list local skill registry)
+- `aiterm --skill-status` (show active skill details)
+- `aiterm --unload-skill <name>` (remove skill from local registry/cache)
+- `aiterm --install-skill <url>` (download + validate + activate in one step)
 - `aiterm --resume-status` (print current task journal summary)
 - `aiterm --restart`
 - `aiterm --reset` (clear conversation history)
 - `aiterm --exit`
 
 ## Safety UX
+
+## Skill lifecycle (advanced)
+
+aiterm supports a local skill registry with compatibility for both Claude and Codex layouts.
+
+Lookup paths for `--load-skill <name>` include:
+
+- `.claude/skills/<name>.md`
+- `.claude/skills/<name>/SKILL.md`
+- `.codex/skills/<name>.md`
+- `.codex/skills/<name>/SKILL.md`
+- same locations under your home directory
+
+Lifecycle commands:
+
+```bash
+aiterm --load-skill my-skill
+aiterm --install-skill https://example.com/my-skill.md
+aiterm --list-skills
+aiterm --skill-status
+aiterm --unload-skill my-skill
+```
+
+State files:
+
+- `.aiterm/state/skills-registry.json`
+- `.aiterm/state/active-skill.json`
+- `.aiterm/skills/*.md` (local cached skill content)
 
 Prompts support:
 

@@ -36,12 +36,16 @@ async function main() {
     process.exit(0);
   }
 
-  if (opts.status || opts.stats || opts.compact || opts.loadSkill || opts.resumeStatus || opts.exitNow || opts.restart || opts.reset || opts.profileSet) {
+  if (opts.status || opts.stats || opts.compact || opts.loadSkill || opts.installSkill || opts.listSkills || opts.skillStatus || opts.unloadSkill || opts.resumeStatus || opts.exitNow || opts.restart || opts.reset || opts.profileSet) {
     const ctl = require('./control');
     if (opts.status) process.exit(ctl.status());
     if (opts.stats) process.exit(ctl.stats());
     if (opts.compact) process.exit(ctl.compactContext());
     if (opts.loadSkill) process.exit(ctl.loadSkill(opts.loadSkill));
+    if (opts.installSkill) process.exit(await ctl.installSkill(opts.installSkill));
+    if (opts.listSkills) process.exit(ctl.listSkills());
+    if (opts.skillStatus) process.exit(ctl.skillStatus());
+    if (opts.unloadSkill) process.exit(ctl.unloadSkill(opts.unloadSkill));
     if (opts.resumeStatus) process.exit(ctl.resumeStatus());
     if (opts.exitNow) process.exit(ctl.exitParent());
     if (opts.restart) process.exit(ctl.restartParent());

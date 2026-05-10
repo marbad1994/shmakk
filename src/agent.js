@@ -8,7 +8,7 @@ const { execFile } = require('child_process');
 const { makeClient, modelFor, isConfigured } = require('./llm');
 const { classifyRunCommand, isSecretPath } = require('./safety');
 const { buildOrRefreshIndex, relevantSubgraph } = require('./workspace-index');
-const { readActiveSkill } = require('./skills');
+const { renderActiveSkillForPrompt } = require('./skills');
 
 const MAX_FILE_BYTES = 64 * 1024;
 const MAX_FETCH_BYTES = 128 * 1024;
@@ -582,7 +582,7 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
   const client = makeClient();
   const rootList = roots.length === 1 ? roots[0] : roots.join(', ');
   const priorJournal = loadTaskJournal(roots[0]);
-  const activeSkill = readActiveSkill(roots[0]);
+  const activeSkillText = renderActiveSkillForPrompt(roots[0], Number(process.env.AITERM_SKILL_PROMPT_MAX_BYTES) || 12000);
   const touchedFiles = new Set(Array.isArray(priorJournal?.touchedFiles) ? priorJournal.touchedFiles : []);
   const startedAt = Date.now();
   const baseToolBudget = runtimeSafeNumber(contextProfile(profile).maxToolIters, 16);
@@ -854,7 +854,7 @@ Use native tool calls if available.
 Otherwise output only:
 {"aiterm_actions":[{"tool":"tool_name","args":{...}}]}
 ${indexHint}
-${activeSkill ? `\n\nActive loaded skill (${activeSkill.name}) instructions:\n${String(activeSkill.content || '').slice(0, 12000)}` : ''}
+${activeSkillText ? `\n\n${activeSkillText}` : ''}
 `;
 
   const runtimeProfile = contextProfile(profile);

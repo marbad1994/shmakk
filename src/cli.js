@@ -13,6 +13,10 @@ function parseArgs(argv) {
     stats: false,
     compact: false,
     loadSkill: null,
+    listSkills: false,
+    skillStatus: false,
+    unloadSkill: null,
+    installSkill: null,
     resumeStatus: false,
     exitNow: false,
     restart: false,
@@ -38,6 +42,10 @@ function parseArgs(argv) {
       case '--stats': opts.stats = true; break;
       case '--compact': opts.compact = true; break;
       case '--load-skill': opts.loadSkill = argv[++i] || null; break;
+      case '--list-skills': opts.listSkills = true; break;
+      case '--skill-status': opts.skillStatus = true; break;
+      case '--unload-skill': opts.unloadSkill = argv[++i] || null; break;
+      case '--install-skill': opts.installSkill = argv[++i] || null; break;
       case '--resume-status': opts.resumeStatus = true; break;
       case '--exit': opts.exitNow = true; break;
       case '--restart': opts.restart = true; break;
@@ -65,6 +73,10 @@ Control (run from inside an aiterm session):
   aiterm --stats                  Show session/task stats (journal, audit, active skill)
   aiterm --compact                Compact context by clearing conversation + task journal
   aiterm --load-skill <name>      Load a Claude/Codex-style skill into aiterm workspace state
+  aiterm --list-skills            List registered local skills
+  aiterm --skill-status           Show active skill and registry status
+  aiterm --unload-skill <name>    Remove skill from registry/local cache
+  aiterm --install-skill <url>    Download skill markdown from URL, validate, and load
   aiterm --resume-status          Show task journal summary for resume continuity
   aiterm --exit                   Cleanly exit the parent aiterm
   aiterm --restart                Restart the inner shell (preserves window)

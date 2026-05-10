@@ -190,4 +190,61 @@ function loadSkill(name) {
   return 0;
 }
 
-module.exports = { status, exitParent, restartParent, resetConversation, setProfileAndRestart, profileSignalPath, resumeStatus, compactContext, stats, loadSkill };
+function listSkills() {
+  const { listSkills: ls } = require('./skills');
+  const all = ls(process.cwd());
+  if (!all.length) {
+    process.stdout.write('aiterm: no skills loaded in registry\n');
+    return 0;
+  }
+  process.stdout.write('aiterm skills\n');
+  process.stdout.write('------------\n');
+  for (const s of all) {
+    process.stdout.write(`- ${s.name}${s.version ? ` v${s.version}` : ''}${s.active ? ' [active]' : ''}\n`);
+  }
+  return 0;
+}
+
+function skillStatus() {
+  const { skillStatus: ss } = require('./skills');
+  const st = ss(process.cwd());
+  process.stdout.write('aiterm skill status\n');
+  process.stdout.write('------------------\n');
+  process.stdout.write(`total: ${st.total}\n`);
+  if (!st.active) {
+    process.stdout.write('active: none\n');
+    return 0;
+  }
+  process.stdout.write(`active: ${st.active.name}\n`);
+  process.stdout.write(`version: ${st.active.version}\n`);
+  process.stdout.write(`loaded_at: ${st.active.loadedAt || 'n/a'}\n`);
+  process.stdout.write(`bytes: ${st.active.bytes || 0}\n`);
+  process.stdout.write(`source: ${st.active.source || 'n/a'}\n`);
+  return 0;
+}
+
+function unloadSkill(name) {
+  const { unloadSkill: us } = require('./skills');
+  const res = us(name, process.cwd());
+  if (!res.ok) {
+    process.stderr.write(`aiterm --unload-skill: ${res.error}\n`);
+    return 1;
+  }
+  process.stdout.write(`aiterm: unloaded skill '${res.name}'\n`);
+  return 0;
+}
+
+async function installSkill(url) {
+  const { installSkillFromUrl } = require('./skills');
+  const res = await installSkillFromUrl(url, process.cwd());
+  if (!res.ok) {
+    process.stderr.write(`aiterm --install-skill: ${res.error}\n`);
+    return 1;
+  }
+  process.stdout.write(`aiterm: installed + loaded skill '${res.name}'\n`);
+  process.stdout.write(`source: ${res.source}\n`);
+  process.stdout.write(`local: ${res.localPath}\n`);
+  return 0;
+}
+
+module.exports = { status, exitParent, restartParent, resetConversation, setProfileAndRestart, profileSignalPath, resumeStatus, compactContext, stats, loadSkill, listSkills, skillStatus, unloadSkill, installSkill };
