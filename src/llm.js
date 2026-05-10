@@ -14,26 +14,58 @@ function parseHeaders(s) {
   return out;
 }
 
-function isConfigured() {
-  return !!process.env.AITERM_BASE_URL && !!OpenAI;
+function roleSuffix(role) {
+  const r = String(role || '').toLowerCase();
+  if (r === 'correction') return 'CORRECTION';
+  if (r === 'agent') return 'AGENT';
+  if (r === 'chat') return 'CHAT';
+  return '';
 }
 
-function makeClient() {
+function providerNameForRole(role) {
+  const suf = roleSuffix(role);
+  if (!suf) return 'primary';
+  const lane = process.env[`AITERM_${suf}_PROVIDER`];
+  if (!lane) return 'primary';
+  return String(lane).toLowerCase() === 'secondary' ? 'secondary' : 'primary';
+}
+
+function envForProvider(provider) {
+  const secondary = String(provider || '').toLowerCase() === 'secondary';
+  return {
+    baseURL: secondary ? process.env.AITERM_SECONDARY_BASE_URL : process.env.AITERM_BASE_URL,
+    apiKey: secondary ? process.env.AITERM_SECONDARY_API_KEY : process.env.AITERM_API_KEY,
+    headers: secondary ? process.env.AITERM_SECONDARY_HEADERS : process.env.AITERM_HEADERS,
+    model: secondary ? process.env.AITERM_SECONDARY_MODEL : process.env.AITERM_MODEL,
+  };
+}
+
+function isConfigured(role = 'agent') {
+  const provider = providerNameForRole(role);
+  const cfg = envForProvider(provider);
+  return !!cfg.baseURL && !!OpenAI;
+}
+
+function makeClient(role = 'agent') {
   if (!OpenAI) throw new Error('openai sdk not installed');
+  const provider = providerNameForRole(role);
+  const cfg = envForProvider(provider);
   return new OpenAI({
-    baseURL: process.env.AITERM_BASE_URL,
-    apiKey: process.env.AITERM_API_KEY || 'not-needed',
-    defaultHeaders: parseHeaders(process.env.AITERM_HEADERS),
+    baseURL: cfg.baseURL,
+    apiKey: cfg.apiKey || 'not-needed',
+    defaultHeaders: parseHeaders(cfg.headers),
   });
 }
 
 function modelFor(role) {
+  const provider = providerNameForRole(role);
+  const cfg = envForProvider(provider);
   const m = {
     correction: process.env.AITERM_CORRECTION_MODEL,
     agent: process.env.AITERM_AGENT_MODEL,
     chat: process.env.AITERM_CHAT_MODEL,
   }[role];
-  return m || process.env.AITERM_MODEL || 'gpt-4o-mini';
+  return m || cfg.model || 'gpt-4o-mini';
 }
 
 module.exports = { makeClient, modelFor, isConfigured };

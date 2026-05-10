@@ -4,6 +4,15 @@ const { normalizeProfile, resolveProfile } = require('./profiles');
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
 
+  if (opts.colors !== null) {
+    const v = String(opts.colors).toLowerCase();
+    if (v !== 'true' && v !== 'false') {
+      process.stderr.write('[aiterm] invalid --colors. Use: true|false\n');
+      process.exit(2);
+    }
+    opts.colors = v === 'true';
+  }
+
   if (opts.help) {
     process.stdout.write(HELP);
     process.exit(0);
@@ -20,11 +29,17 @@ async function main() {
       shell: process.env.SHELL,
       term: process.env.TERM,
       baseUrl: process.env.AITERM_BASE_URL || null,
+      secondaryBaseUrl: process.env.AITERM_SECONDARY_BASE_URL || null,
       model: process.env.AITERM_MODEL || null,
+      secondaryModel: process.env.AITERM_SECONDARY_MODEL || null,
       correctionModel: process.env.AITERM_CORRECTION_MODEL || null,
       agentModel: process.env.AITERM_AGENT_MODEL || null,
       chatModel: process.env.AITERM_CHAT_MODEL || null,
+      correctionProvider: process.env.AITERM_CORRECTION_PROVIDER || 'primary',
+      agentProvider: process.env.AITERM_AGENT_PROVIDER || 'primary',
+      chatProvider: process.env.AITERM_CHAT_PROVIDER || 'primary',
       profile: profile.name,
+      colors: opts.colors,
     };
     process.stdout.write(JSON.stringify(cfg, null, 2) + '\n');
     process.exit(0);

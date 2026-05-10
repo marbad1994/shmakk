@@ -24,6 +24,10 @@ function isAbortError(e) {
   return e && (e.name === 'AbortError' || /aborted/i.test(String(e.message || '')));
 }
 
+function stripAnsi(s) {
+  return String(s || '').replace(/\x1b\[[0-9;]*m/g, '');
+}
+
 function trimHistory(history) {
   if (history.length <= HISTORY_MAX_ENTRIES) return history;
   // Drop oldest, but keep tool_call/tool pairs intact: walk from the end
@@ -72,7 +76,8 @@ function makeToolConfirm(opts, ask, out, getAbort) {
 
 async function runOneSession(opts, registerSession) {
   const session = startSession({ debug: opts.debug });
-  const out = (s) => session.stdoutWrite(s);
+  const colorsEnabled = opts.colors !== false;
+  const out = (s) => session.stdoutWrite(colorsEnabled ? s : stripAnsi(s));
   const ask = makePrompter(session, out);
   const glossary = loadGlossary();
   // Workspace tracking: explicit --workspace is "pinned"; otherwise cwd
@@ -274,6 +279,7 @@ async function runOneSession(opts, registerSession) {
           signal: ctrl.signal,
           history,
           profile: opts.profile,
+          colors: colorsEnabled,
         });
         history = trimHistory(updated || history);
         // Force the interactive shell to redraw its prompt so the user is

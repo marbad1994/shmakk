@@ -117,7 +117,7 @@ function looksLikeNaturalLanguage(input) {
 }
 
 async function correct({ input, glossary, signal }) {
-  if (!isConfigured()) {
+  if (!isConfigured('correction')) {
     return { category: 'not_a_correction', proposed: null, safety: 'uncertain', reason: 'LLM not configured' };
   }
   // Free, local, instant: skip correction for clearly-natural-language input.
@@ -129,7 +129,7 @@ async function correct({ input, glossary, signal }) {
   // the few-shot are enough for typo fixing.
   const userMsg = `input: ${input}\ncandidates: ${candidates.join(', ') || '(none)'}`;
 
-  const client = makeClient();
+  const client = makeClient('correction');
   const resp = await client.chat.completions.create({
     model: modelFor('correction'),
     temperature: 0,

@@ -11,6 +11,10 @@ function isAbortError(e) {
   return e && (e.name === 'AbortError' || /aborted/i.test(String(e.message || '')));
 }
 
+function stripAnsi(s) {
+  return String(s || '').replace(/\x1b\[[0-9;]*m/g, '');
+}
+
 async function start(opts) {
   let runtimeProfile = normalizeProfile(opts.profile || process.env.AITERM_PROFILE) || 'balanced';
   let lastExit = 0;

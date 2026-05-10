@@ -51,11 +51,11 @@ function main() {
   console.log('shell      :', shell || '(unknown)');
   if (changed) {
     console.log('\nUpdated shell config. Open a new terminal, then run:');
-    console.log('  aiterm --help');
+    console.log('  shmakk --help');
   } else {
     console.log('\nShell config already contains npm global bin path.');
     console.log('Open a new terminal, then run:');
-    console.log('  aiterm --help');
+    console.log('  shmakk --help');
   }
 }
 

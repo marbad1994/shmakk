@@ -22,6 +22,7 @@ function parseArgs(argv) {
     restart: false,
     profile: null,
     profileSet: null,
+    colors: null,
     unknown: [],
   };
 
@@ -52,36 +53,38 @@ function parseArgs(argv) {
       case '--reset': opts.reset = true; break;
       case '--profile': opts.profile = argv[++i] || null; break;
       case '--profile-set': opts.profileSet = argv[++i] || null; break;
+      case '--colors': opts.colors = argv[++i] || null; break;
       default: opts.unknown.push(a);
     }
   }
   return opts;
 }
 
-const HELP = `aiterm - AI-supervised terminal wrapper
+const HELP = `shmakk - AI-supervised terminal wrapper
 
 Usage:
-  aiterm                          Launch in auto mode
-  aiterm --review                 Launch in review mode (confirm every AI action)
-  aiterm --yes-files              Auto-accept AI file writes, edits, and directory creation
-  aiterm --update-command-glossary
+  shmakk                          Launch in auto mode
+  shmakk --review                 Launch in review mode (confirm every AI action)
+  shmakk --yes-files              Auto-accept AI file writes, edits, and directory creation
+  shmakk --update-command-glossary
                                   Scan PATH and build local command glossary
-  aiterm --help                   Show this help
+  shmakk --help                   Show this help
 
-Control (run from inside an aiterm session):
-  aiterm --status                 Show whether this terminal is inside aiterm
-  aiterm --stats                  Show session/task stats (journal, audit, active skill)
-  aiterm --compact                Compact context by clearing conversation + task journal
-  aiterm --load-skill <name>      Load a Claude/Codex-style skill into aiterm workspace state
-  aiterm --list-skills            List registered local skills
-  aiterm --skill-status           Show active skill and registry status
-  aiterm --unload-skill <name>    Remove skill from registry/local cache
-  aiterm --install-skill <url>    Download skill markdown from URL, validate, and load
-  aiterm --resume-status          Show task journal summary for resume continuity
-  aiterm --exit                   Cleanly exit the parent aiterm
-  aiterm --restart                Restart the inner shell (preserves window)
-  aiterm --reset                  Clear the AI conversation history (keep session)
-  aiterm --profile-set <name>     Switch profile and restart (tiny|balanced|deep|builder|large-app)
+Control (run from inside an shmakk session):
+  shmakk --status                 Show whether this terminal is inside shmakk
+  shmakk --stats                  Show session/task stats (journal, audit, active skill)
+  shmakk --compact                Compact context by clearing conversation + task journal
+  shmakk --load-skill <name>      Load a Claude/Codex-style skill into shmakk workspace state
+  shmakk --list-skills            List registered local skills
+  shmakk --skill-status           Show active skill and registry status
+  shmakk --unload-skill <name>    Remove skill from registry/local cache
+  shmakk --install-skill <url>    Download skill markdown from URL, validate, and load
+  shmakk --resume-status          Show task journal summary for resume continuity
+  shmakk --exit                   Cleanly exit the parent shmakk
+  shmakk --restart                Restart the inner shell (preserves window)
+  shmakk --reset                  Clear the AI conversation history (keep session)
+  shmakk --profile-set <name>     Switch profile and restart (tiny|balanced|deep|builder|large-app)
+  shmakk --colors <true|false>    Enable or disable ANSI colors + code highlighting
 
 Optional:
   --no-ai                         Disable AI entirely (pure passthrough)
@@ -89,6 +92,7 @@ Optional:
   --yes-files                     Auto-accept write_file, edit_file, and make_dir in auto mode
   --workspace <path>              Override workspace root
   --profile <name>                Startup profile: tiny|balanced|deep|builder|large-app
+  --colors <true|false>           Toggle colored logs and code-block highlighting
   --debug                         Verbose logging to stderr
   --print-config                  Print resolved configuration and exit
 
@@ -96,9 +100,16 @@ Environment:
   AITERM_BASE_URL                 OpenAI-compatible base URL
   AITERM_API_KEY                  API key
   AITERM_MODEL                    Default model
+  AITERM_SECONDARY_BASE_URL       Optional secondary provider base URL
+  AITERM_SECONDARY_API_KEY        Optional secondary provider API key
+  AITERM_SECONDARY_MODEL          Optional secondary provider default model
+  AITERM_SECONDARY_HEADERS        Optional secondary provider headers (k=v,k=v)
   AITERM_CORRECTION_MODEL         Model used for command correction
   AITERM_AGENT_MODEL              Model used for tasks
   AITERM_CHAT_MODEL               Model used for chat
+  AITERM_CORRECTION_PROVIDER      Route correction lane: primary|secondary
+  AITERM_AGENT_PROVIDER           Route agent lane: primary|secondary
+  AITERM_CHAT_PROVIDER            Route chat lane: primary|secondary
   AITERM_HEADERS                  Comma-separated extra headers (k=v,k=v)
 `;
 

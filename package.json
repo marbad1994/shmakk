@@ -1,18 +1,25 @@
 {
-  "name": "aiterm",
-  "version": "0.1.0",
-  "description": "AI-supervised PTY terminal wrapper",
+  "name": "shmakk",
+  "version": "1.0.0",
+  "description": "AI-supervised terminal wrapper — command correction, tool-driven tasks, safety controls",
   "license": "MIT",
-  "private": true,
   "keywords": [
     "terminal",
     "ai",
     "pty",
-    "developer-tools"
+    "developer-tools",
+    "cli"
   ],
   "bin": {
-    "aiterm": "bin/aiterm.js"
+    "shmakk": "bin/aiterm.js"
   },
+  "files": [
+    "bin/",
+    "src/",
+    "README.md",
+    "LICENSE",
+    ".env.example"
+  ],
   "main": "src/index.js",
   "type": "commonjs",
   "scripts": {
@@ -23,11 +30,11 @@
     "mock-llm": "node test/mock-llm.js",
     "global:setup": "node src/global-setup.js",
     "global:link": "npm link && npm run global:setup",
-    "global:unlink": "npm unlink -g aiterm",
+    "global:unlink": "npm unlink -g shmakk",
     "global:install": "npm install -g . && npm run global:setup",
-    "global:reinstall": "npm uninstall -g aiterm && npm install -g . && npm run global:setup",
-    "setup": "npm install && npm run check && npm run test"
-    ,"global:doctor": "node src/global-doctor.js"
+    "global:reinstall": "npm uninstall -g shmakk && npm install -g . && npm run global:setup",
+    "setup": "npm install && npm run check && npm run test",
+    "global:doctor": "node src/global-doctor.js"
   },
   "engines": {
     "node": ">=18"

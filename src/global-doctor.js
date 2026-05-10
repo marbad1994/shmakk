@@ -7,25 +7,25 @@ function run(cmd) {
 
 const prefix = run('npm config get prefix');
 const root = run('npm root -g');
-const whichAiterm = run('which aiterm || true');
+const whichShmakk = run('which shmakk || true');
 const pathValue = process.env.PATH || '';
 
 console.log('Global doctor');
 console.log('-------------');
 console.log('npm prefix :', prefix);
 console.log('npm root   :', root);
-console.log('which aiterm:', whichAiterm || '(not found)');
+console.log('which shmakk:', whichShmakk || '(not found)');
 
-if (!whichAiterm) {
-  console.log('\n`aiterm` is not on PATH.');
+if (!whichShmakk) {
+  console.log('\n`shmakk` is not on PATH.');
   console.log('Run: npm run global:setup');
   console.log('Then open a new terminal and run:');
-  console.log('  aiterm --help');
+  console.log('  shmakk --help');
 }
 
-if (whichAiterm) {
+if (whichShmakk) {
   console.log('\nLooks good. Try:');
-  console.log('  aiterm --help');
+  console.log('  shmakk --help');
 }
 
 if (!pathValue.includes('/bin')) {
