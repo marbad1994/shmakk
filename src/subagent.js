@@ -2,8 +2,6 @@
 // main agent loop to scope work, identify risks, and outline a plan.
 // Extracted from agent.js.
 
-const { modelFor } = require('./llm');
-
 function shouldUseAutoSubagents(input, roots) {
   if (String(process.env.SHMAKK_AUTO_SUBAGENTS || '1') === '0') return false;
   const minLen = Math.max(40, Number(process.env.SHMAKK_AUTO_SUBAGENTS_MIN_INPUT_LEN) || 140);
@@ -25,7 +23,7 @@ async function runAutoSubagents({ client, input, roots, signal }) {
   for (let i = 0; i < focuses.length; i++) {
     try {
       const r = await client.chat.completions.create({
-        model: modelFor('agent'),
+        model: process.env.SHMAKK_MODEL || 'gpt-4o-mini',
         temperature: 0,
         stream: false,
         tool_choice: 'none',

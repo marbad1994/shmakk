@@ -114,15 +114,6 @@ Environment:
   SHMAKK_BASE_URL                 OpenAI-compatible base URL
   SHMAKK_API_KEY                  API key
   SHMAKK_MODEL                    Default model
-  SHMAKK_SECONDARY_BASE_URL       Optional secondary provider base URL
-  SHMAKK_SECONDARY_API_KEY        Optional secondary provider API key
-  SHMAKK_SECONDARY_MODEL          Optional secondary provider default model
-  SHMAKK_SECONDARY_HEADERS        Optional secondary provider headers (k=v,k=v)
-  SHMAKK_AGENT_MODEL              Model used for tasks
-  SHMAKK_CHAT_MODEL               Model used for chat
-  SHMAKK_CORRECTION_PROVIDER      Route correction lane: primary|secondary
-  SHMAKK_AGENT_PROVIDER           Route agent lane: primary|secondary
-  SHMAKK_CHAT_PROVIDER            Route chat lane: primary|secondary
   SHMAKK_HEADERS                  Comma-separated extra headers (k=v,k=v)
 `;
 

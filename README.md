@@ -77,10 +77,6 @@ shmakk --profile-set deep
 | `SHMAKK_BASE_URL` | OpenAI-compatible base URL |
 | `SHMAKK_API_KEY` | API key |
 | `SHMAKK_MODEL` | Default model |
-| `SHMAKK_AGENT_MODEL` | Model for task execution |
-| `SHMAKK_CHAT_MODEL` | Model for chat |
-| `SHMAKK_SECONDARY_BASE_URL` | Secondary provider (optional) |
-| `SHMAKK_SECONDARY_API_KEY` | Secondary API key (optional) |
 | `SHMAKK_HEADERS` | Extra headers (k=v,k=v) |
 
 ## Useful commands

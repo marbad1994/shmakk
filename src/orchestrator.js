@@ -3,7 +3,6 @@
 // delegates each session to ./session.js.
 
 const { runOneSession } = require('./session');
-const { isConfigured } = require('./llm');
 const { normalizeProfile } = require('./profiles');
 const { profileSignalPath } = require('./control');
 
