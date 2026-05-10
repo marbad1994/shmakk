@@ -173,7 +173,8 @@ const test = (name, fn) => tests.push({ name, fn });
 
 // ── agent fallback tools ───────────────────────────────────────────────────
 {
-  const { classifyTool, parseFallbackActions, parseDdgLite } = require('../src/agent');
+  const { classifyTool } = require('../src/tools');
+  const { parseFallbackActions, parseDdgLite } = require('../src/web');
 
   test('agent: parses JSON fallback actions', () => {
     const actions = parseFallbackActions('```json\n{"aiterm_actions":[{"tool":"make_dir","args":{"path":"notes"}},{"tool":"run","args":{"cmd":"ls"}}]}\n```');
@@ -216,7 +217,7 @@ const test = (name, fn) => tests.push({ name, fn });
 
 // ── auto-subagent gating ────────────────────────────────────────────────────
 {
-  const { shouldUseAutoSubagents } = require('../src/agent');
+  const { shouldUseAutoSubagents } = require('../src/subagent');
 
   test('auto-subagent gate: broad long input triggers by default', () => {
     const prev = process.env.AITERM_AUTO_SUBAGENTS;
