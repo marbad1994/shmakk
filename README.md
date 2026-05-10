@@ -271,6 +271,28 @@ If you want to hard reset task continuity:
 aiterm --reset
 ```
 
+## Auto sub-agents (conservative planner pass)
+
+aiterm can run a small automatic read-only planner pass before the main tool loop for broad/complex requests.
+
+Behavior:
+
+- runs only when task complexity heuristics are met (or multiple roots are active)
+- uses read-only planning prompts (no tool calls from sub-agents)
+- injects merged findings as hints only; main agent still verifies via tools before edits
+- prints a runtime marker when activated:
+
+```text
+[aiterm] auto-subagents: planning pass
+```
+
+Environment toggles:
+
+- `AITERM_AUTO_SUBAGENTS` (default `1`) – set to `0` to disable
+- `AITERM_AUTO_SUBAGENTS_MIN_INPUT_LEN` (default `140`) – min task length trigger
+- `AITERM_AUTO_SUBAGENTS_MAX_ROOTS` (default `2`) – multi-root trigger threshold
+- `AITERM_AUTO_SUBAGENTS_COUNT` (default `2`, range `1-3`) – number of planner subcalls
+
 ## Useful commands
 
 - `aiterm --help`

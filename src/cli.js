@@ -63,7 +63,7 @@ const HELP = `aiterm - AI-supervised terminal wrapper
 Usage:
   aiterm                          Launch in auto mode
   aiterm --review                 Launch in review mode (confirm every AI action)
-  aiterm --yes-files              Auto-accept AI file and directory creation
+  aiterm --yes-files              Auto-accept AI file writes, edits, and directory creation
   aiterm --update-command-glossary
                                   Scan PATH and build local command glossary
   aiterm --help                   Show this help
@@ -86,7 +86,7 @@ Control (run from inside an aiterm session):
 Optional:
   --no-ai                         Disable AI entirely (pure passthrough)
   --no-correction                 Disable command correction
-  --yes-files                     Auto-accept write_file and make_dir in auto mode
+  --yes-files                     Auto-accept write_file, edit_file, and make_dir in auto mode
   --workspace <path>              Override workspace root
   --profile <name>                Startup profile: tiny|balanced|deep|builder|large-app
   --debug                         Verbose logging to stderr

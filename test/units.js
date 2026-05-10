@@ -214,6 +214,29 @@ const test = (name, fn) => tests.push({ name, fn });
   });
 }
 
+// ── auto-subagent gating ────────────────────────────────────────────────────
+{
+  const { shouldUseAutoSubagents } = require('../src/agent');
+
+  test('auto-subagent gate: broad long input triggers by default', () => {
+    const prev = process.env.AITERM_AUTO_SUBAGENTS;
+    delete process.env.AITERM_AUTO_SUBAGENTS;
+    const input = 'Please analyze this large project-wide architecture refactor across multiple modules and compare risks, implementation strategy, rollout plan, verification matrix, and dependency impact before any edits.';
+    assert.strictEqual(shouldUseAutoSubagents(input, ['/repo']), true);
+    if (prev === undefined) delete process.env.AITERM_AUTO_SUBAGENTS;
+    else process.env.AITERM_AUTO_SUBAGENTS = prev;
+  });
+
+  test('auto-subagent gate: env disable forces false', () => {
+    const prev = process.env.AITERM_AUTO_SUBAGENTS;
+    process.env.AITERM_AUTO_SUBAGENTS = '0';
+    const input = 'Please analyze this large project-wide architecture refactor across multiple modules and compare risks and implementation strategy.';
+    assert.strictEqual(shouldUseAutoSubagents(input, ['/repo']), false);
+    if (prev === undefined) delete process.env.AITERM_AUTO_SUBAGENTS;
+    else process.env.AITERM_AUTO_SUBAGENTS = prev;
+  });
+}
+
 // ── CLI args ───────────────────────────────────────────────────────────────
 {
   const { parseArgs, HELP } = require('../src/cli');

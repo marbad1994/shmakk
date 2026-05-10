@@ -118,6 +118,7 @@ function dim(s) { return `\x1b[2m${s}\x1b[0m`; }
 // the list is used as the base for relative resolution.
 function within(roots, p) {
   if (!roots || !roots.length) return null;
+  if (typeof p !== 'string' || !p.trim()) return null;
   const base = path.resolve(roots[0]);
   const abs = path.isAbsolute(p) ? path.resolve(p) : path.resolve(base, p);
   for (const r of roots) {
@@ -572,6 +573,43 @@ function parseXmlFallbackActions(content) {
   return actions;
 }
 
+function shouldUseAutoSubagents(input, roots) {
+  if (String(process.env.AITERM_AUTO_SUBAGENTS || '1') === '0') return false;
+  const minLen = Math.max(40, Number(process.env.AITERM_AUTO_SUBAGENTS_MIN_INPUT_LEN) || 140);
+  const maxRoots = Math.max(1, Number(process.env.AITERM_AUTO_SUBAGENTS_MAX_ROOTS) || 2);
+  const s = String(input || '');
+  const broadSignals = /(large|across|multiple|refactor|architecture|investigate|analyz|codebase|project-wide|compare)/i.test(s);
+  return (s.length >= minLen && broadSignals) || (Array.isArray(roots) && roots.length >= maxRoots && s.length >= Math.floor(minLen * 0.7));
+}
+
+async function runAutoSubagents({ client, input, roots, signal }) {
+  const n = Math.max(1, Math.min(3, Number(process.env.AITERM_AUTO_SUBAGENTS_COUNT) || 2));
+  const focuses = [
+    'Scope and likely target files/modules',
+    'Risks, edge cases, and verification strategy',
+    'Concrete step-by-step implementation plan with minimal reads',
+  ].slice(0, n);
+
+  const out = [];
+  for (let i = 0; i < focuses.length; i++) {
+    try {
+      const r = await client.chat.completions.create({
+        model: modelFor('agent'),
+        temperature: 0,
+        stream: false,
+        tool_choice: 'none',
+        messages: [
+          { role: 'system', content: `You are subagent ${i + 1}. Read-only planning only. No tool calls. Be concise.` },
+          { role: 'user', content: `Workspace roots: ${roots.join(', ')}\nTask: ${input}\nFocus: ${focuses[i]}\nReturn bullet points only.` },
+        ],
+      }, { signal });
+      const text = String(r.choices?.[0]?.message?.content || '').trim();
+      if (text) out.push(`Subagent ${i + 1} (${focuses[i]}):\n${text}`);
+    } catch {}
+  }
+  return out.join('\n\n');
+}
+
 async function runAgent({ input, roots, glossary, confirmTool, write, signal, history = [], profile = 'balanced' }) {
   // roots: array of allowed workspace roots (first is the primary cwd).
   // history: prior conversation turns (assistant/user/tool). System prompt
@@ -877,6 +915,19 @@ ${activeSkillText ? `\n\n${activeSkillText}` : ''}
     { role: 'user', content: input + resumeContext },
   ];
 
+  if (shouldUseAutoSubagents(input, roots)) {
+    try {
+      write(dim('[aiterm] auto-subagents: planning pass') + '\n');
+      const subFindings = await runAutoSubagents({ client, input, roots, signal });
+      if (subFindings) {
+        messages.splice(1, 0, {
+          role: 'system',
+          content: `Auto-subagent findings (read-only planning):\n${subFindings}\nUse these findings as hints only; still verify via tools before edits.`,
+        });
+      }
+    } catch {}
+  }
+
   // Prevent repeated expensive reads/searches within a single task run.
   const toolResultCache = new Map();
   const cacheableTools = new Set(['read_file', 'list_dir', 'web_search', 'fetch_url']);
@@ -1095,4 +1146,13 @@ function summarizeToolResult(name, r) {
   return '';
 }
 
-module.exports = { runAgent, classifyTool, describeTool, parseFallbackActions, parseDdgLite, loadTaskJournal, clearTaskJournal };
+module.exports = {
+  runAgent,
+  classifyTool,
+  describeTool,
+  parseFallbackActions,
+  parseDdgLite,
+  loadTaskJournal,
+  clearTaskJournal,
+  shouldUseAutoSubagents,
+};

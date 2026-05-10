@@ -22,7 +22,9 @@ function isAbortError(e) {
 function makeToolConfirm(opts, ask, out, getAbort) {
   return async ({ name, args, safety, description }) => {
     audit.append({ kind: 'tool-proposed', name, args, safety, mode: opts.review ? 'review' : 'auto' });
-    const fileCreateAllowed = opts.yesFiles && (name === 'write_file' || name === 'make_dir') && safety !== 'unsafe';
+    const fileCreateAllowed = opts.yesFiles
+      && (name === 'write_file' || name === 'edit_file' || name === 'make_dir')
+      && safety !== 'unsafe';
     const wouldAuto = safety === 'safe' || fileCreateAllowed;
     if (!opts.review && wouldAuto) {
       audit.append({ kind: 'tool-allowed', name, args, via: fileCreateAllowed ? 'yes-files' : 'auto-safe' });
