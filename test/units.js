@@ -266,12 +266,50 @@ test('modules: all entry modules load', () => {
 });
 
 // ── runner ─────────────────────────────────────────────────────────────────
+const isTTY = process.stdout.isTTY;
+
+const c = {
+  reset:   isTTY ? '\x1b[0m'    : '',
+  green:   isTTY ? '\x1b[32m'   : '',
+  red:     isTTY ? '\x1b[31m'   : '',
+  bold:    isTTY ? '\x1b[1m'    : '',
+  dim:     isTTY ? '\x1b[2m'    : '',
+  cyan:    isTTY ? '\x1b[36m'   : '',
+  yellow:  isTTY ? '\x1b[33m'   : '',
+};
+
+function status(symbol, style, label) {
+  return `${style}${symbol}${c.reset} ${c.bold}${label}${c.reset}`;
+}
+
+function highlightDiffLines(text) {
+  return text.split('\n').map(line => {
+    if (/^\+/.test(line)) return `${c.green}${line}${c.reset}`;
+    if (/^-/.test(line))  return `${c.red}${line}${c.reset}`;
+    if (/\b(true|false|null|undefined|[0-9]+)\b/i.test(line)) {
+      return line.replace(/\b(true|false|null|undefined|[0-9]+)\b/gi, `${c.bold}${c.cyan}$1${c.reset}`);
+    }
+    return line;
+  }).join('\n');
+}
+
 (async () => {
   let pass = 0, fail = 0;
   for (const { name, fn } of tests) {
-    try { await fn(); console.log(`  ok  ${name}`); pass++; }
-    catch (e) { console.log(`  FAIL ${name}\n      ${e.stack || e.message}`); fail++; }
+    try {
+      await fn();
+      console.log(`  ${status('✓', c.green, name)}`);
+      pass++;
+    } catch (e) {
+      const msg = String(e.message).trimEnd();
+      console.log(`  ${status('✗', c.red, name)}`);
+      const highlighted = highlightDiffLines(msg);
+      const indented = highlighted.replace(/\n/g, `\n${c.dim}      ${c.reset}`);
+      console.log(`${c.dim}      ${indented}${c.reset}`);
+      fail++;
+    }
   }
-  console.log(`\n${pass} passed, ${fail} failed`);
+  const totalColor = fail ? c.red : c.green;
+  console.log(`\n  ${totalColor}${pass} passed${c.reset}, ${c.yellow}${fail} failed${c.reset}`);
   process.exit(fail ? 1 : 0);
 })();
