@@ -1,4 +1,12 @@
-const { makeClient, modelFor, isConfigured } = require('./llm');
+// Deterministic command correction with frequency-weighted distance matching.
+// No LLM, no API calls, sub-millisecond.
+//
+// Only fires when a shell command exits with non-zero.
+// First token matched against glossary commands; subsequent tokens matched
+// against the corrected command's subcommands. Ties broken by usage frequency
+// from the user's shell history.
+
+const { loadFreqMap } = require('./history-parser');
 
 function levenshtein(a, b) {
   if (a === b) return 0;
@@ -17,85 +25,8 @@ function levenshtein(a, b) {
   return dp[n];
 }
 
-function pickCandidates(input, glossary, k = 8) {
-  if (!glossary) return [];
-  const head = (input.trim().split(/\s+/)[0] || '').toLowerCase();
-  if (!head) return [];
-  const names = Object.keys(glossary.commands);
-  const scored = names.map((n) => [n, levenshtein(head, n.toLowerCase())]);
-  scored.sort((a, b) => a[1] - b[1]);
-  return scored.slice(0, k).map(([n]) => n);
-}
-
-// Decide between "typo of a shell command" and "natural language".
-// Read the WHOLE input, not just the first word. Default to null when
-// uncertain — the user prefers being routed to the task agent over a
-// wrong "correction" of an English sentence.
-const SYSTEM = `Classify a failed shell input. Reply with ONE JSON object, nothing else.
-Schema: {"fix": "<corrected command>" or null, "safe": true|false}
-
-Return null when ANY of these are true:
-- the input has more than 5 whitespace-separated tokens
-- the input contains "?", or pronouns/articles ("I", "you", "me", "my", "the", "this", "that", "these", "those")
-- the input reads like a question, request, or sentence ("can you...", "why does...", "fix the...", "look at...")
-- you are not highly confident a small edit yields a real shell command
-
-Return a fix only when the input is a short shell command with a clear typo
-(misspelled executable, subcommand, flag, or argument).
-
-safe=false for: sudo/su/doas, rm -r/-f, chmod -R, chown -R, mkfs, dd, |sh, |bash,
-global package install (-g/--global, pip install, cargo install, brew install,
-apt install, pacman -S), setxkbmap, gsettings set, xrandr, chsh.
-otherwise safe=true.`;
-
-const FEW_SHOT = [
-  { role: 'user', content: 'input: nom itnsall\ncandidates: npm, nvim, node' },
-  { role: 'assistant', content: '{"fix":"npm install","safe":true}' },
-  { role: 'user', content: 'input: gti statsu\ncandidates: git, gtk, ghci' },
-  { role: 'assistant', content: '{"fix":"git status","safe":true}' },
-  { role: 'user', content: 'input: docker ps --formt json\ncandidates: docker' },
-  { role: 'assistant', content: '{"fix":"docker ps --format json","safe":true}' },
-  { role: 'user', content: 'input: rm rf node_modules\ncandidates: rm, rmdir' },
-  { role: 'assistant', content: '{"fix":"rm -rf node_modules","safe":false}' },
-  // Natural-language cases — must return null:
-  { role: 'user', content: 'input: can you look through these files and tell me what to do\ncandidates: cat, can, case' },
-  { role: 'assistant', content: '{"fix":null}' },
-  { role: 'user', content: 'input: why does my app not run on linux\ncandidates: who, while, which' },
-  { role: 'assistant', content: '{"fix":null}' },
-  { role: 'user', content: 'input: fix the import error in main.dart\ncandidates: file, find, fc' },
-  { role: 'assistant', content: '{"fix":null}' },
-  { role: 'user', content: 'input: how do I install fish\ncandidates: how, host, hexdump' },
-  { role: 'assistant', content: '{"fix":null}' },
-];
-
-function extractJson(text) {
-  if (!text) return null;
-  try { return JSON.parse(text); } catch {}
-  const m = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (m) { try { return JSON.parse(m[1]); } catch {} }
-  const start = text.indexOf('{');
-  if (start === -1) return null;
-  let depth = 0, inStr = false, esc = false;
-  for (let i = start; i < text.length; i++) {
-    const ch = text[i];
-    if (esc) { esc = false; continue; }
-    if (ch === '\\') { esc = true; continue; }
-    if (ch === '"') { inStr = !inStr; continue; }
-    if (inStr) continue;
-    if (ch === '{') depth++;
-    else if (ch === '}') {
-      depth--;
-      if (depth === 0) {
-        try { return JSON.parse(text.slice(start, i + 1)); } catch { return null; }
-      }
-    }
-  }
-  return null;
-}
-
-// Local pre-filter: catch obvious natural language before paying for an LLM
-// call. If this returns true, we bypass the correction model entirely and
-// route to the task agent.
+// Natural-language pre-filter. If the input reads like a sentence or question,
+// skip correction entirely and route to the task agent.
 const NL_WORDS = new RegExp(
   '\\b(' +
   'I|me|my|you|your|the|this|that|these|those|a|an|is|are|was|were|do|does|did|' +
@@ -116,40 +47,111 @@ function looksLikeNaturalLanguage(input) {
   return false;
 }
 
-async function correct({ input, glossary, signal }) {
-  if (!isConfigured('correction')) {
-    return { category: 'not_a_correction', proposed: null, safety: 'uncertain', reason: 'LLM not configured' };
-  }
-  // Free, local, instant: skip correction for clearly-natural-language input.
+// Score candidates: lower distance = better, higher frequency = better.
+// Returns the best match or null if none are close enough.
+// Threshold scales with word length to avoid false positives on short tokens.
+function bestMatch(word, candidates, freqMap) {
+  if (!candidates || !candidates.length) return null;
+  if (candidates.includes(word)) return word; // exact match
+
+  const wlen = word.length;
+  // Max distance scales with word length to catch transpositions on short
+  // words (e.g. gti→git dist 2) while avoiding false matches on 1-char tokens.
+  //   wlen=1 → maxDist=1, wlen=3 → maxDist=2, wlen=5+ → maxDist=3
+  const maxDist = Math.max(1, Math.min(3, Math.floor(wlen / 2) + 1));
+
+  const scored = candidates.map((c) => ({
+    name: c,
+    dist: levenshtein(word.toLowerCase(), c.toLowerCase()),
+    freq: freqMap[c] || 0,
+  }));
+
+  // Filter: only keep within distance threshold
+  const withinThreshold = scored.filter((s) => s.dist <= maxDist && s.dist > 0);
+  if (!withinThreshold.length) return null;
+
+  // Sort: distance ASC, then frequency DESC, then alphabetically for stability
+  withinThreshold.sort((a, b) => {
+    if (a.dist !== b.dist) return a.dist - b.dist;
+    if (b.freq !== a.freq) return b.freq - a.freq;
+    return a.name.localeCompare(b.name);
+  });
+
+  return withinThreshold[0].name;
+}
+
+// Should a token be left as-is? (flags, paths, shell expansions, etc.)
+function isStaticToken(tok) {
+  return tok === '.'
+    || tok === '..'
+    || tok.startsWith('-')
+    || tok.startsWith('$')
+    || tok.startsWith('/')
+    || tok.startsWith('~')
+    || tok.startsWith('--');
+}
+
+async function correct({ input, glossary, signal: _unused }) {
+  // Pre-filter natural language
   if (looksLikeNaturalLanguage(input)) {
     return { category: 'not_a_correction', proposed: null, safety: 'uncertain', reason: 'looks like natural language' };
   }
-  const candidates = pickCandidates(input, glossary).slice(0, 6);
-  // Compact payload — no stderr, no cwd, no snippets. The candidates plus
-  // the few-shot are enough for typo fixing.
-  const userMsg = `input: ${input}\ncandidates: ${candidates.join(', ') || '(none)'}`;
 
-  const client = makeClient('correction');
-  const resp = await client.chat.completions.create({
-    model: modelFor('correction'),
-    temperature: 0,
-    max_tokens: 60,
-    messages: [
-      { role: 'system', content: SYSTEM },
-      ...FEW_SHOT,
-      { role: 'user', content: userMsg },
-    ],
-  }, { signal });
-  const txt = resp.choices?.[0]?.message?.content || '';
-  const parsed = extractJson(txt) || {};
-
-  if (parsed.fix == null) {
-    return { category: 'not_a_correction', proposed: null, safety: 'uncertain', reason: '' };
+  // No glossary? Can't correct anything.
+  if (!glossary || !glossary.commands) {
+    return { category: 'not_a_correction', proposed: null, safety: 'uncertain', reason: 'no glossary available' };
   }
+
+  const freqMap = loadFreqMap();
+  const tokens = input.trim().split(/\s+/);
+  if (!tokens.length) {
+    return { category: 'not_a_correction', proposed: null, safety: 'uncertain', reason: 'empty input' };
+  }
+
+  // ── Token 0: correct the command name ──
+  const cmd = tokens[0];
+  const allCommandNames = Object.keys(glossary.commands);
+  const correctedCmd = bestMatch(cmd, allCommandNames, freqMap);
+
+  // No close match for the command — pass through to task agent
+  if (!correctedCmd) {
+    return { category: 'not_a_correction', proposed: null, safety: 'uncertain', reason: 'no close command match' };
+  }
+
+  const fixedTokens = [correctedCmd];
+  const cmdEntry = glossary.commands[correctedCmd];
+  const subcommands = cmdEntry?.subcommands || [];
+
+  // ── Tokens 1+: correct subcommands and known arguments ──
+  for (let i = 1; i < tokens.length; i++) {
+    const tok = tokens[i];
+    if (isStaticToken(tok)) {
+      fixedTokens.push(tok);
+      continue;
+    }
+    // Already a known subcommand? Keep it.
+    if (subcommands.includes(tok)) {
+      fixedTokens.push(tok);
+      continue;
+    }
+    // Try to match against subcommands
+    const bestSub = bestMatch(tok, subcommands, freqMap);
+    if (bestSub) {
+      fixedTokens.push(bestSub);
+    } else {
+      fixedTokens.push(tok); // keep original
+    }
+  }
+
+  const proposed = fixedTokens.join(' ');
+  if (proposed === input.trim()) {
+    return { category: 'not_a_correction', proposed: null, safety: 'uncertain', reason: 'no correction needed' };
+  }
+
   return {
     category: 'command_correction',
-    proposed: String(parsed.fix),
-    safety: parsed.safe === false ? 'unsafe' : 'safe',
+    proposed,
+    safety: 'safe',
     reason: '',
   };
 }

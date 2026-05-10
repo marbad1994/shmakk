@@ -112,6 +112,11 @@ async function runOneSession(opts, registerSession) {
   let bufferStart = 0;
   let flushTimer = null;
 
+  // When a correction is applied, store the original failed command so that
+  // if the corrected command succeeds the agent still runs to handle the
+  // user's broader intent rather than dropping back to the prompt.
+  let correctionOrigin = null;
+
   function flushPending() {
     if (pending.length) { out(pending.toString('utf8')); pending = Buffer.alloc(0); }
     bufferMode = false;
@@ -179,76 +184,99 @@ async function runOneSession(opts, registerSession) {
   });
 
   session.ev.on('exit', async (code) => {
-    const cmd = lastCommand;
+    const lastCmd = lastCommand;
     const wasBuffered = bufferMode;
     lastCommand = null;
     if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
 
-    if (code === 0) { flushPending(); return; }
-    if (opts.noAi || !isConfigured()) { flushPending(); return; }
+    // Determine the command to feed forward. Normally this is the failed
+    // command, but when a correction was applied and succeeded we use the
+    // user's original input so the agent handles their broader intent.
+    let cmd = lastCmd;
+    if (code === 0) {
+      if (correctionOrigin && !opts.noAi) {
+        cmd = correctionOrigin;
+        correctionOrigin = null;
+      } else {
+        flushPending();
+        return;
+      }
+    } else if (opts.noAi) {
+      flushPending();
+      return;
+    }
 
     audit.append({ kind: 'failed-command', cmd, exit: code, cwd });
 
-    await withAI(async (ctrl) => {
-      let decision;
+    // ── Correction runs standalone (no LLM needed) ──
+    let decision;
+    if (opts.noCorrection) {
+      decision = { category: 'not_a_correction', proposed: null, safety: 'uncertain', reason: 'correction disabled' };
+    } else {
       try {
-        decision = opts.noCorrection
-          ? { category: 'not_a_correction', proposed: null, safety: 'uncertain', reason: 'correction disabled' }
-          : await correct({ input: cmd, glossary, signal: ctrl.signal });
+        decision = await correct({ input: cmd, glossary });
       } catch (e) {
-        if (isAbortError(e)) { discardPending(); out('\r\n\x1b[33m[shmakk] interrupted\x1b[0m\r\n'); return; }
-        if (opts.debug) out(`\r\n\x1b[33m[shmakk] correction error: ${e.message} — falling back to task\x1b[0m\r\n`);
+        if (opts.debug) out(`\r\n\x1b[33m[shmakk] correction error: ${e.message}\x1b[0m\r\n`);
         decision = { category: 'not_a_correction', proposed: null, safety: 'uncertain', reason: `correction failed: ${e.message}` };
       }
-      audit.append({ kind: 'correction-decision', cmd, decision });
+    }
+    audit.append({ kind: 'correction-decision', cmd, decision });
 
-      // ─── Command correction branch ───
-      if (decision.category === 'command_correction' && decision.proposed) {
-        const safe = decision.safety === 'safe';
-        if (opts.review) {
-          flushPending();
-          out(decisionBanner({ input: cmd, decision, mode: 'review' }));
-          const go = await ask('Run?', safe, {
-            onCancel: () => ctrl.abort(),
-            onWhy: () => out([
-              '',
-              '\x1b[36mWhy this command correction?\x1b[0m',
-              `- Original command failed: ${cmd}`,
-              `- Proposed correction: ${decision.proposed}`,
-              `- Safety classification: ${decision.safety}`,
-              `- Model reason: ${decision.reason || 'No additional reason provided.'}`,
-              '',
-            ].join('\r\n')),
-          });
-          if (go) { audit.append({ kind: 'correction-run', proposed: decision.proposed }); session.childWrite(decision.proposed + '\r'); }
-          return;
-        }
-        // auto mode
-        if (safe && wasBuffered) {
-          discardPending();
-          audit.append({ kind: 'correction-run', proposed: decision.proposed, silent: true });
-          session.childWrite(decision.proposed + '\r');
-          return;
-        }
+    // ─── Command correction branch ───
+    if (decision.category === 'command_correction' && decision.proposed) {
+      const safe = decision.safety === 'safe';
+      if (opts.review) {
         flushPending();
-        out(decisionBanner({ input: cmd, decision, mode: 'auto' }));
-        const go = await ask('Run?', false, {
-          onCancel: () => ctrl.abort(),
+        out(decisionBanner({ input: cmd, decision, mode: 'review' }));
+        const go = await ask('Run?', safe, {
+          onCancel: () => {},
           onWhy: () => out([
             '',
             '\x1b[36mWhy this command correction?\x1b[0m',
             `- Original command failed: ${cmd}`,
             `- Proposed correction: ${decision.proposed}`,
             `- Safety classification: ${decision.safety}`,
-            `- Model reason: ${decision.reason || 'No additional reason provided.'}`,
+            `- Reason: ${decision.reason || 'deterministic match'}`,
             '',
           ].join('\r\n')),
         });
-        if (go) { audit.append({ kind: 'correction-run', proposed: decision.proposed }); session.childWrite(decision.proposed + '\r'); }
+        if (go) { correctionOrigin = cmd; audit.append({ kind: 'correction-run', proposed: decision.proposed }); session.childWrite(decision.proposed + '\r'); }
         return;
       }
+      // auto mode: safe + was buffered → silent correction
+      if (safe && wasBuffered) {
+        discardPending();
+        correctionOrigin = cmd;
+        audit.append({ kind: 'correction-run', proposed: decision.proposed, silent: true });
+        session.childWrite(decision.proposed + '\r');
+        return;
+      }
+      flushPending();
+      out(decisionBanner({ input: cmd, decision, mode: 'auto' }));
+      const go = await ask('Run?', false, {
+        onCancel: () => {},
+        onWhy: () => out([
+          '',
+          '\x1b[36mWhy this command correction?\x1b[0m',
+          `- Original command failed: ${cmd}`,
+          `- Proposed correction: ${decision.proposed}`,
+          `- Safety classification: ${decision.safety}`,
+          `- Reason: ${decision.reason || 'deterministic match'}`,
+          '',
+        ].join('\r\n')),
+      });
+      if (go) { correctionOrigin = cmd; audit.append({ kind: 'correction-run', proposed: decision.proposed }); session.childWrite(decision.proposed + '\r'); }
+      return;
+    }
 
-      // ─── Task branch (chat falls out of this) ───
+    // ─── Task branch (needs LLM) ───
+    if (!isConfigured()) {
+      flushPending();
+      out('\r\n\x1b[33m[shmakk] LLM not configured — no AI task available\x1b[0m\r\n');
+      return;
+    }
+
+    await withAI(async (ctrl) => {
       if (opts.review || !wasBuffered) {
         flushPending();
         out(decisionBanner({ input: cmd, decision, mode: opts.review ? 'review' : 'auto' }));

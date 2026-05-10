@@ -45,7 +45,7 @@ shmakk
 
 You're now in an AI-supervised terminal. Type commands as normal. shmakk will:
 
-- **Correct mistakes** — typo in `gti status`? shmakk suggests `git status`
+- **Correct mistakes** — typo in `gti status`? shmakk suggests `git status`. If the correction succeeds, shmakk follows up with the agent using your *original* intent, not just the fixed command.
 - **Execute tasks** — ask "set up a new React project" and shmakk handles the steps
 - **Keep you safe** — confirms risky commands before running them
 
@@ -77,7 +77,6 @@ shmakk --profile-set deep
 | `SHMAKK_BASE_URL` | OpenAI-compatible base URL |
 | `SHMAKK_API_KEY` | API key |
 | `SHMAKK_MODEL` | Default model |
-| `SHMAKK_CORRECTION_MODEL` | Model for command correction |
 | `SHMAKK_AGENT_MODEL` | Model for task execution |
 | `SHMAKK_CHAT_MODEL` | Model for chat |
 | `SHMAKK_SECONDARY_BASE_URL` | Secondary provider (optional) |
@@ -110,7 +109,7 @@ shmakk --profile-set deep
 
 ## How it works
 
-shmakk wraps your shell in a PTY (pseudo-terminal). Every command you type is optionally checked by an AI model for correction. You can also give task instructions in natural language — shmakk uses tools to read files, write code, list directories, and run commands, all constrained to your workspace.
+shmakk wraps your shell in a PTY (pseudo-terminal). Every command that fails is checked against a deterministic correction engine (no LLM, no API call). If a correction matches and the fixed command succeeds, shmakk feeds the agent your **original input** (not the fixed command) so the agent can address your full intent — not just the typo. You can also give task instructions in natural language — shmakk uses tools to read files, write code, list directories, and run commands, all constrained to your workspace.
 
 ## License
 

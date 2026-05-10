@@ -10,6 +10,7 @@ function parseArgs(argv) {
     noCorrection: false,
     printConfig: false,
     status: false,
+    buildHistory: null,
     stats: false,
     compact: false,
     loadSkill: null,
@@ -53,6 +54,14 @@ function parseArgs(argv) {
       case '--reset': opts.reset = true; break;
       case '--profile': opts.profile = argv[++i] || null; break;
       case '--profile-set': opts.profileSet = argv[++i] || null; break;
+      case '--build-history':
+        opts.buildHistory = [];
+        // Collect remaining args as file paths until next flag
+        while (i + 1 < argv.length && !argv[i + 1].startsWith('--')) {
+          opts.buildHistory.push(argv[++i]);
+        }
+        if (!opts.buildHistory.length) opts.buildHistory = null; // flag with no files = auto-detect
+        break;
       case '--colors': opts.colors = argv[++i] || null; break;
       default: opts.unknown.push(a);
     }
@@ -69,6 +78,11 @@ Usage:
   shmakk --update-command-glossary
                                   Scan PATH and build local command glossary
   shmakk --help                   Show this help
+  shmakk --build-history [files...]
+                                  Parse shell history files and build command
+                                  frequency map for better corrections.
+                                  Auto-detects bash/zsh/fish history if no
+                                  files given.
 
 Control (run from inside an shmakk session):
   shmakk --status                 Show whether this terminal is inside shmakk
@@ -104,7 +118,6 @@ Environment:
   SHMAKK_SECONDARY_API_KEY        Optional secondary provider API key
   SHMAKK_SECONDARY_MODEL          Optional secondary provider default model
   SHMAKK_SECONDARY_HEADERS        Optional secondary provider headers (k=v,k=v)
-  SHMAKK_CORRECTION_MODEL         Model used for command correction
   SHMAKK_AGENT_MODEL              Model used for tasks
   SHMAKK_CHAT_MODEL               Model used for chat
   SHMAKK_CORRECTION_PROVIDER      Route correction lane: primary|secondary

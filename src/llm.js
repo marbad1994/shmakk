@@ -16,7 +16,6 @@ function parseHeaders(s) {
 
 function roleSuffix(role) {
   const r = String(role || '').toLowerCase();
-  if (r === 'correction') return 'CORRECTION';
   if (r === 'agent') return 'AGENT';
   if (r === 'chat') return 'CHAT';
   return '';
@@ -61,7 +60,6 @@ function modelFor(role) {
   const provider = providerNameForRole(role);
   const cfg = envForProvider(provider);
   const m = {
-    correction: process.env.SHMAKK_CORRECTION_MODEL,
     agent: process.env.SHMAKK_AGENT_MODEL,
     chat: process.env.SHMAKK_CHAT_MODEL,
   }[role];

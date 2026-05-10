@@ -32,7 +32,6 @@ async function main() {
       secondaryBaseUrl: process.env.SHMAKK_SECONDARY_BASE_URL || null,
       model: process.env.SHMAKK_MODEL || null,
       secondaryModel: process.env.SHMAKK_SECONDARY_MODEL || null,
-      correctionModel: process.env.SHMAKK_CORRECTION_MODEL || null,
       agentModel: process.env.SHMAKK_AGENT_MODEL || null,
       chatModel: process.env.SHMAKK_CHAT_MODEL || null,
       correctionProvider: process.env.SHMAKK_CORRECTION_PROVIDER || 'primary',
@@ -48,6 +47,26 @@ async function main() {
   if (opts.updateGlossary) {
     const { updateGlossary } = require('./glossary');
     await updateGlossary({ debug: opts.debug });
+    process.exit(0);
+  }
+
+  if (opts.buildHistory !== null) {
+    const hist = require('./history-parser');
+    const files = opts.buildHistory && opts.buildHistory.length
+      ? opts.buildHistory
+      : hist.autoDetectHistoryFiles();
+    if (!files.length) {
+      process.stderr.write('[shmakk] no history files found. Specify paths: shmakk --build-history ~/.bash_history ...\n');
+      process.exit(1);
+    }
+    process.stdout.write(`[shmakk] parsing ${files.length} history file(s)...\n`);
+    for (const f of files) process.stdout.write(`  ${f}\n`);
+    const freqMap = hist.buildFreqMap(files);
+    const count = Object.keys(freqMap).length;
+    const total = Object.values(freqMap).reduce((a, b) => a + b, 0);
+    const saved = hist.saveFreqMap(freqMap);
+    process.stdout.write(`[shmakk] built frequency map: ${count} unique commands, ${total} total uses\n`);
+    process.stdout.write(`[shmakk] saved to: ${saved}\n`);
     process.exit(0);
   }
 
