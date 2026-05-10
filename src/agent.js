@@ -9,6 +9,7 @@ const { makeClient, modelFor, isConfigured } = require('./llm');
 const { classifyRunCommand, isSecretPath } = require('./safety');
 const { buildOrRefreshIndex, relevantSubgraph } = require('./workspace-index');
 const { renderActiveSkillForPrompt } = require('./skills');
+const promptCache = require('./prompt-cache');
 
 const MAX_FILE_BYTES = 64 * 1024;
 const MAX_FETCH_BYTES = 128 * 1024;
@@ -603,6 +604,14 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
   }
 
   persistJournal('running');
+  const runtimeProfile = contextProfile(profile);
+  const promptCacheEnabled = String(process.env.AITERM_PROMPT_CACHE || '1') !== '0';
+  const maxDiscoveryCallsPerRound = Math.max(
+    1,
+    Number(process.env.AITERM_MAX_DISCOVERY_CALLS_PER_ROUND)
+      || runtimeProfile.maxDiscoveryCallsPerRound
+      || 2,
+  );
   let indexHint = '';
   try {
     const idx = buildOrRefreshIndex(roots[0]);
@@ -857,13 +866,6 @@ ${indexHint}
 ${activeSkillText ? `\n\n${activeSkillText}` : ''}
 `;
 
-  const runtimeProfile = contextProfile(profile);
-  const maxDiscoveryCallsPerRound = Math.max(
-    1,
-    Number(process.env.AITERM_MAX_DISCOVERY_CALLS_PER_ROUND)
-      || runtimeProfile.maxDiscoveryCallsPerRound
-      || 2,
-  );
   const boundedHistory = trimForContext(history, runtimeProfile.historyEntries);
   const resumeContext = priorJournal && priorJournal.status === 'running'
     ? `\n\nResume context from previous interrupted run:\n- previous_input: ${String(priorJournal.input || '').slice(0, 300)}\n- touched_files: ${(priorJournal.touchedFiles || []).slice(-20).join(', ') || '(none)'}\n- note: continue from latest completed work, avoid redoing already-touched steps unless necessary.`
@@ -887,6 +889,19 @@ ${activeSkillText ? `\n\n${activeSkillText}` : ''}
     if (signal && signal.aborted) return messages.slice(1);
 
     // Stream the response so the user sees text as it generates.
+    const cacheKey = promptCacheEnabled ? promptCache.makeKey({ model: modelFor('agent'), messages, toolChoice: 'auto' }) : null;
+    if (promptCacheEnabled && cacheKey) {
+      const hit = promptCache.get(roots[0], cacheKey);
+      if (hit && hit.content) {
+        write(dim('[aiterm] prompt cache hit') + '\n');
+        write(hit.content);
+        if (!hit.content.endsWith('\n')) write('\n');
+        messages.push({ role: 'assistant', content: hit.content });
+        clearTaskJournal(roots[0]);
+        return messages.slice(1);
+      }
+    }
+
     const stop = startSpinner(write, i === 0 ? 'thinking' : 'continuing');
     let stream;
     try {
@@ -972,6 +987,9 @@ ${activeSkillText ? `\n\n${activeSkillText}` : ''}
         write(content);
         if (!content.endsWith('\n')) write('\n');
         producedAnything = true;
+        if (promptCacheEnabled && cacheKey) {
+          promptCache.put(roots[0], cacheKey, { content });
+        }
       }
       if (!producedAnything) {
         write(dim('[aiterm] model returned no response — try `aiterm --reset` or rephrase.') + '\n');
