@@ -1,21 +1,21 @@
-// Control commands run from *inside* an aiterm session (the orchestrator
-// puts its own PID in AITERM_PID for the child shell's environment).
+// Control commands run from *inside* an shmakk session (the orchestrator
+// puts its own PID in SHMAKK_PID for the child shell's environment).
 
 function getParentPid() {
-  const pid = parseInt(process.env.AITERM_PID || '0', 10);
+  const pid = parseInt(process.env.SHMAKK_PID || '0', 10);
   return pid > 0 ? pid : 0;
 }
 
 function profileSignalPath(pid) {
-  return `/tmp/aiterm-profile-${pid}.txt`;
+  return `/tmp/shmakk-profile-${pid}.txt`;
 }
 
 function taskJournalPath(cwd = process.cwd()) {
-  return require('path').join(cwd, '.aiterm', 'state', 'task-journal.json');
+  return require('path').join(cwd, '.shmakk', 'state', 'task-journal.json');
 }
 
 function activeSkillMetaPath(cwd = process.cwd()) {
-  return require('path').join(cwd, '.aiterm', 'state', 'active-skill.json');
+  return require('path').join(cwd, '.shmakk', 'state', 'active-skill.json');
 }
 
 function isAlive(pid) {
@@ -26,25 +26,25 @@ function isAlive(pid) {
 function status() {
   const pid = getParentPid();
   if (!pid) {
-    process.stdout.write('aiterm: not running (this terminal is not inside aiterm)\n');
+    process.stdout.write('shmakk: not running (this terminal is not inside shmakk)\n');
     return 1;
   }
   if (!isAlive(pid)) {
-    process.stdout.write(`aiterm: stale AITERM_PID=${pid} (parent not alive)\n`);
+    process.stdout.write(`shmakk: stale SHMAKK_PID=${pid} (parent not alive)\n`);
     return 2;
   }
-  process.stdout.write(`aiterm: running, parent pid ${pid}\n`);
+  process.stdout.write(`shmakk: running, parent pid ${pid}\n`);
   return 0;
 }
 
 function exitParent() {
   const pid = getParentPid();
   if (!pid || !isAlive(pid)) {
-    process.stderr.write('aiterm --exit: not inside an aiterm session\n');
+    process.stderr.write('shmakk --exit: not inside an shmakk session\n');
     return 1;
   }
   try { process.kill(pid, 'SIGTERM'); } catch (e) {
-    process.stderr.write(`aiterm --exit: ${e.message}\n`); return 1;
+    process.stderr.write(`shmakk --exit: ${e.message}\n`); return 1;
   }
   return 0;
 }
@@ -52,11 +52,11 @@ function exitParent() {
 function restartParent() {
   const pid = getParentPid();
   if (!pid || !isAlive(pid)) {
-    process.stderr.write('aiterm --restart: not inside an aiterm session\n');
+    process.stderr.write('shmakk --restart: not inside an shmakk session\n');
     return 1;
   }
   try { process.kill(pid, 'SIGUSR1'); } catch (e) {
-    process.stderr.write(`aiterm --restart: ${e.message}\n`); return 1;
+    process.stderr.write(`shmakk --restart: ${e.message}\n`); return 1;
   }
   return 0;
 }
@@ -64,11 +64,11 @@ function restartParent() {
 function resetConversation() {
   const pid = getParentPid();
   if (!pid || !isAlive(pid)) {
-    process.stderr.write('aiterm --reset: not inside an aiterm session\n');
+    process.stderr.write('shmakk --reset: not inside an shmakk session\n');
     return 1;
   }
   try { process.kill(pid, 'SIGUSR2'); } catch (e) {
-    process.stderr.write(`aiterm --reset: ${e.message}\n`); return 1;
+    process.stderr.write(`shmakk --reset: ${e.message}\n`); return 1;
   }
   return 0;
 }
@@ -76,19 +76,19 @@ function resetConversation() {
 function setProfileAndRestart(profileName) {
   const pid = getParentPid();
   if (!pid || !isAlive(pid)) {
-    process.stderr.write('aiterm --profile-set: not inside an aiterm session\n');
+    process.stderr.write('shmakk --profile-set: not inside an shmakk session\n');
     return 1;
   }
   const name = String(profileName || '').trim().toLowerCase();
   if (!name) {
-    process.stderr.write('aiterm --profile-set: missing profile name\n');
+    process.stderr.write('shmakk --profile-set: missing profile name\n');
     return 1;
   }
   try {
     require('fs').writeFileSync(profileSignalPath(pid), name + '\n', 'utf8');
     process.kill(pid, 'SIGUSR1');
   } catch (e) {
-    process.stderr.write(`aiterm --profile-set: ${e.message}\n`);
+    process.stderr.write(`shmakk --profile-set: ${e.message}\n`);
     return 1;
   }
   return 0;
@@ -99,11 +99,11 @@ function resumeStatus() {
   try {
     const fs = require('fs');
     if (!fs.existsSync(p)) {
-      process.stdout.write('aiterm: no resume journal found\n');
+      process.stdout.write('shmakk: no resume journal found\n');
       return 0;
     }
     const j = JSON.parse(fs.readFileSync(p, 'utf8'));
-    process.stdout.write('aiterm resume status\n');
+    process.stdout.write('shmakk resume status\n');
     process.stdout.write('--------------------\n');
     process.stdout.write(`status: ${j.status || 'unknown'}\n`);
     process.stdout.write(`profile: ${j.profile || 'unknown'}\n`);
@@ -112,7 +112,7 @@ function resumeStatus() {
     process.stdout.write(`touched_files: ${Array.isArray(j.touchedFiles) ? j.touchedFiles.length : 0}\n`);
     return 0;
   } catch (e) {
-    process.stderr.write(`aiterm --resume-status: ${e.message}\n`);
+    process.stderr.write(`shmakk --resume-status: ${e.message}\n`);
     return 1;
   }
 }
@@ -121,20 +121,20 @@ function compactContext() {
   const pid = getParentPid();
   if (pid && isAlive(pid)) {
     try { process.kill(pid, 'SIGUSR2'); } catch (e) {
-      process.stderr.write(`aiterm --compact: ${e.message}\n`);
+      process.stderr.write(`shmakk --compact: ${e.message}\n`);
       return 1;
     }
-    process.stdout.write('aiterm: compact requested (conversation + task journal cleared)\n');
+    process.stdout.write('shmakk: compact requested (conversation + task journal cleared)\n');
     return 0;
   }
 
   try {
     const fs = require('fs');
     fs.rmSync(taskJournalPath(), { force: true });
-    process.stdout.write('aiterm: compacted local task journal (no active session)\n');
+    process.stdout.write('shmakk: compacted local task journal (no active session)\n');
     return 0;
   } catch (e) {
-    process.stderr.write(`aiterm --compact: ${e.message}\n`);
+    process.stderr.write(`shmakk --compact: ${e.message}\n`);
     return 1;
   }
 }
@@ -161,7 +161,7 @@ function stats() {
     if (fs.existsSync(p)) auditLines = fs.readFileSync(p, 'utf8').split(/\r?\n/).filter(Boolean).length;
   } catch {}
 
-  process.stdout.write('aiterm stats\n');
+  process.stdout.write('shmakk stats\n');
   process.stdout.write('-----------\n');
   process.stdout.write(`session_running: ${running ? 'yes' : 'no'}\n`);
   process.stdout.write(`session_pid: ${running ? pid : 'n/a'}\n`);
@@ -180,11 +180,11 @@ function loadSkill(name) {
   const { loadSkillToWorkspace } = require('./skills');
   const res = loadSkillToWorkspace(name, process.cwd());
   if (!res.ok) {
-    process.stderr.write(`aiterm --load-skill: ${res.error}\n`);
+    process.stderr.write(`shmakk --load-skill: ${res.error}\n`);
     if (res.searched) process.stderr.write(`searched:\n- ${res.searched.join('\n- ')}\n`);
     return 1;
   }
-  process.stdout.write(`aiterm: loaded skill '${res.name}'\n`);
+  process.stdout.write(`shmakk: loaded skill '${res.name}'\n`);
   process.stdout.write(`source: ${res.source}\n`);
   process.stdout.write(`local: ${res.localPath}\n`);
   return 0;
@@ -194,10 +194,10 @@ function listSkills() {
   const { listSkills: ls } = require('./skills');
   const all = ls(process.cwd());
   if (!all.length) {
-    process.stdout.write('aiterm: no skills loaded in registry\n');
+    process.stdout.write('shmakk: no skills loaded in registry\n');
     return 0;
   }
-  process.stdout.write('aiterm skills\n');
+  process.stdout.write('shmakk skills\n');
   process.stdout.write('------------\n');
   for (const s of all) {
     process.stdout.write(`- ${s.name}${s.version ? ` v${s.version}` : ''}${s.active ? ' [active]' : ''}\n`);
@@ -208,7 +208,7 @@ function listSkills() {
 function skillStatus() {
   const { skillStatus: ss } = require('./skills');
   const st = ss(process.cwd());
-  process.stdout.write('aiterm skill status\n');
+  process.stdout.write('shmakk skill status\n');
   process.stdout.write('------------------\n');
   process.stdout.write(`total: ${st.total}\n`);
   if (!st.active) {
@@ -227,10 +227,10 @@ function unloadSkill(name) {
   const { unloadSkill: us } = require('./skills');
   const res = us(name, process.cwd());
   if (!res.ok) {
-    process.stderr.write(`aiterm --unload-skill: ${res.error}\n`);
+    process.stderr.write(`shmakk --unload-skill: ${res.error}\n`);
     return 1;
   }
-  process.stdout.write(`aiterm: unloaded skill '${res.name}'\n`);
+  process.stdout.write(`shmakk: unloaded skill '${res.name}'\n`);
   return 0;
 }
 
@@ -238,10 +238,10 @@ async function installSkill(url) {
   const { installSkillFromUrl } = require('./skills');
   const res = await installSkillFromUrl(url, process.cwd());
   if (!res.ok) {
-    process.stderr.write(`aiterm --install-skill: ${res.error}\n`);
+    process.stderr.write(`shmakk --install-skill: ${res.error}\n`);
     return 1;
   }
-  process.stdout.write(`aiterm: installed + loaded skill '${res.name}'\n`);
+  process.stdout.write(`shmakk: installed + loaded skill '${res.name}'\n`);
   process.stdout.write(`source: ${res.source}\n`);
   process.stdout.write(`local: ${res.localPath}\n`);
   return 0;

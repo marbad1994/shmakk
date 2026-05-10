@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Minimal OpenAI-compatible /v1/chat/completions server for end-to-end testing
-// of aiterm without spending tokens. Pattern-matches a few canned cases from
+// of shmakk without spending tokens. Pattern-matches a few canned cases from
 // the spec (§16 acceptance tests) and returns appropriate JSON for the
 // correction model, plain text for chat, and tool-free replies for tasks.
 //
@@ -8,10 +8,10 @@
 //       (default port 8787)
 //
 // Then in another shell:
-//   set -x AITERM_BASE_URL "http://127.0.0.1:8787/v1"
-//   set -x AITERM_API_KEY "x"
-//   set -x AITERM_MODEL "mock"
-//   aiterm --review
+//   set -x SHMAKK_BASE_URL "http://127.0.0.1:8787/v1"
+//   set -x SHMAKK_API_KEY "x"
+//   set -x SHMAKK_MODEL "mock"
+//   shmakk --review
 
 const http = require('http');
 
@@ -52,7 +52,7 @@ function readBody(req) {
 function classify(messages) {
   const sys = (messages.find((m) => m.role === 'system') || {}).content || '';
   if (/correct mistyped shell commands/i.test(sys)) return 'correction';
-  if (/inside aiterm working in/i.test(sys)) return 'task';
+  if (/inside shmakk working in/i.test(sys)) return 'task';
   return 'chat';
 }
 
@@ -120,5 +120,5 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(port, '127.0.0.1', () => {
   console.log(`mock LLM listening on http://127.0.0.1:${port}/v1`);
-  console.log(`AITERM_BASE_URL=http://127.0.0.1:${port}/v1 AITERM_API_KEY=x AITERM_MODEL=mock aiterm --review`);
+  console.log(`SHMAKK_BASE_URL=http://127.0.0.1:${port}/v1 SHMAKK_API_KEY=x SHMAKK_MODEL=mock shmakk --review`);
 });

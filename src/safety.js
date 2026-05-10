@@ -69,7 +69,7 @@ function workspaceWarning(workspace) {
   const r = path.resolve(workspace);
   const home = os.homedir();
   if (r === '/' || r === '/etc' || r === home) {
-    return `workspace is ${r} — that's broad. Consider \`aiterm --workspace <project-dir>\` to keep AI scope smaller.`;
+    return `workspace is ${r} — that's broad. Consider \`shmakk --workspace <project-dir>\` to keep AI scope smaller.`;
   }
   return null;
 }

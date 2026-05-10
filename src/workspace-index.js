@@ -90,7 +90,7 @@ function walkFiles(root, dir = root, out = []) {
 }
 
 function indexFilePath(root) {
-  return path.join(root, '.aiterm', 'state', 'index.json');
+  return path.join(root, '.shmakk', 'state', 'index.json');
 }
 
 function loadIndex(root) {

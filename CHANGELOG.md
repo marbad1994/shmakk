@@ -6,10 +6,10 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 - Runtime profiles: `tiny`, `balanced`, `deep`
-- Live profile switching with restart: `aiterm --profile-set <name>`
+- Live profile switching with restart: `shmakk --profile-set <name>`
 - Context budgeting and loop-stall protection
 - Defensive handling for fallback tool-call formats
-- Lightweight incremental workspace index (`.aiterm/state/index.json`)
+- Lightweight incremental workspace index (`.shmakk/state/index.json`)
 - Safety prompt `?` option for explanation before confirmation
 - Initial project documentation (`README.md`, `CONTRIBUTING.md`)
 

@@ -11,7 +11,7 @@ function buildSystemPrompt({
   maxDiscoveryCallsPerRound,
   runtimeProfile,
 }) {
-  return `You are an expert AI coding assistant running inside aiterm.
+  return `You are an expert AI coding assistant running inside shmakk.
 
 You have access to the user's workspace at:
 ${roots[0]}${roots.length > 1 ? `
@@ -50,7 +50,7 @@ Tool Call Format:
 - If native tool calls are available, use native tool calls only.
 - If native tool calls are not available, output only this exact JSON shape and no prose:
 
-{"aiterm_actions":[{"tool":"tool_name","args":{...}}]}
+{"shmakk_actions":[{"tool":"tool_name","args":{...}}]}
 
 - Do not use XML tool calls.
 - Do not mix JSON tool calls with explanatory text.
@@ -218,21 +218,21 @@ Provide a concise final summary with:
 Examples:
 
 Correct fallback JSON tool call:
-{"aiterm_actions":[{"tool":"list_dir","args":{"path":"src"}}]}
+{"shmakk_actions":[{"tool":"list_dir","args":{"path":"src"}}]}
 
 Correct fallback JSON tool call:
-{"aiterm_actions":[{"tool":"read_file","args":{"path":"package.json"}}]}
+{"shmakk_actions":[{"tool":"read_file","args":{"path":"package.json"}}]}
 
 Correct fallback JSON tool call:
-{"aiterm_actions":[{"tool":"run","args":{"cmd":"npm test"}}]}
+{"shmakk_actions":[{"tool":"run","args":{"cmd":"npm test"}}]}
 
 Incorrect:
 I will check the src directory:
-{"aiterm_actions":[{"tool":"list_dir","args":{"path":"src"}}]}
+{"shmakk_actions":[{"tool":"list_dir","args":{"path":"src"}}]}
 
 Incorrect:
 \`\`\`json
-{"aiterm_actions":[{"tool":"list_dir","args":{"path":"src"}}]}
+{"shmakk_actions":[{"tool":"list_dir","args":{"path":"src"}}]}
 \`\`\`
 
 Incorrect:
@@ -252,7 +252,7 @@ Final rule:
 Never output XML, markdown, or prose when calling a tool.
 Use native tool calls if available.
 Otherwise output only:
-{"aiterm_actions":[{"tool":"tool_name","args":{...}}]}
+{"shmakk_actions":[{"tool":"tool_name","args":{...}}]}
 ${indexHint}
 ${activeSkillText ? `\n\n${activeSkillText}` : ''}
 `;

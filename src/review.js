@@ -59,7 +59,7 @@ function makePrompter(pty, write) {
 function decisionBanner({ input, decision, mode }) {
   const lines = [];
   lines.push('');
-  lines.push('\x1b[36m── aiterm ──\x1b[0m');
+  lines.push('\x1b[36m── shmakk ──\x1b[0m');
   lines.push(`  input:    ${input}`);
   lines.push(`  category: ${decision.category}`);
   if (decision.proposed) lines.push(`  proposed: ${decision.proposed}`);

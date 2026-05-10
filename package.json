@@ -11,7 +11,7 @@
     "cli"
   ],
   "bin": {
-    "shmakk": "bin/aiterm.js"
+    "shmakk": "bin/shmakk.js"
   },
   "files": [
     "bin/",
@@ -23,8 +23,8 @@
   "main": "src/index.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node bin/aiterm.js",
-    "dev": "node bin/aiterm.js --debug",
+    "start": "node bin/shmakk.js",
+    "dev": "node bin/shmakk.js --debug",
     "test": "node test/units.js",
     "check": "node -e \"require('./src/index'); require('./src/agent'); require('./src/orchestrator'); console.log('check-ok')\"",
     "mock-llm": "node test/mock-llm.js",

@@ -25,7 +25,7 @@ function roleSuffix(role) {
 function providerNameForRole(role) {
   const suf = roleSuffix(role);
   if (!suf) return 'primary';
-  const lane = process.env[`AITERM_${suf}_PROVIDER`];
+  const lane = process.env[`SHMAKK_${suf}_PROVIDER`];
   if (!lane) return 'primary';
   return String(lane).toLowerCase() === 'secondary' ? 'secondary' : 'primary';
 }
@@ -33,10 +33,10 @@ function providerNameForRole(role) {
 function envForProvider(provider) {
   const secondary = String(provider || '').toLowerCase() === 'secondary';
   return {
-    baseURL: secondary ? process.env.AITERM_SECONDARY_BASE_URL : process.env.AITERM_BASE_URL,
-    apiKey: secondary ? process.env.AITERM_SECONDARY_API_KEY : process.env.AITERM_API_KEY,
-    headers: secondary ? process.env.AITERM_SECONDARY_HEADERS : process.env.AITERM_HEADERS,
-    model: secondary ? process.env.AITERM_SECONDARY_MODEL : process.env.AITERM_MODEL,
+    baseURL: secondary ? process.env.SHMAKK_SECONDARY_BASE_URL : process.env.SHMAKK_BASE_URL,
+    apiKey: secondary ? process.env.SHMAKK_SECONDARY_API_KEY : process.env.SHMAKK_API_KEY,
+    headers: secondary ? process.env.SHMAKK_SECONDARY_HEADERS : process.env.SHMAKK_HEADERS,
+    model: secondary ? process.env.SHMAKK_SECONDARY_MODEL : process.env.SHMAKK_MODEL,
   };
 }
 
@@ -61,9 +61,9 @@ function modelFor(role) {
   const provider = providerNameForRole(role);
   const cfg = envForProvider(provider);
   const m = {
-    correction: process.env.AITERM_CORRECTION_MODEL,
-    agent: process.env.AITERM_AGENT_MODEL,
-    chat: process.env.AITERM_CHAT_MODEL,
+    correction: process.env.SHMAKK_CORRECTION_MODEL,
+    agent: process.env.SHMAKK_AGENT_MODEL,
+    chat: process.env.SHMAKK_CHAT_MODEL,
   }[role];
   return m || cfg.model || 'gpt-4o-mini';
 }

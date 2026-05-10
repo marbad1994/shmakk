@@ -1,5 +1,5 @@
 // Session state machine extracted from orchestrator.js.
-// Manages one aiterm session: PTY lifecycle, workspace tracking, output
+// Manages one shmakk session: PTY lifecycle, workspace tracking, output
 // buffering, command correction, and agent invocation.
 
 const { startSession } = require('./pty');
@@ -50,7 +50,7 @@ function makeToolConfirm(opts, ask, out, getAbort) {
       return true;
     }
     out([
-      '\x1b[36m── aiterm tool ──\x1b[0m',
+      '\x1b[36m── shmakk tool ──\x1b[0m',
       `  action:    ${description}`,
       `  safety:    ${safety}`,
       `  auto-mode: ${wouldAuto ? 'would auto-run' : 'would ask confirmation'}`,
@@ -93,11 +93,11 @@ async function runOneSession(opts, registerSession) {
   }
 
   const wsWarn = workspaceWarning(cwd);
-  if (wsWarn) out(`\x1b[33m[aiterm] ${wsWarn}\x1b[0m\r\n`);
+  if (wsWarn) out(`\x1b[33m[shmakk] ${wsWarn}\x1b[0m\r\n`);
   if (!isConfigured()) {
-    out('\x1b[33m[aiterm] note: AITERM_BASE_URL not set — running as plain PTY (no AI).\x1b[0m\r\n');
+    out('\x1b[33m[shmakk] note: SHMAKK_BASE_URL not set — running as plain PTY (no AI).\x1b[0m\r\n');
   } else if (!glossary) {
-    out('\x1b[33m[aiterm] tip: run `aiterm --update-command-glossary` for better corrections.\x1b[0m\r\n');
+    out('\x1b[33m[shmakk] tip: run `shmakk --update-command-glossary` for better corrections.\x1b[0m\r\n');
   }
   audit.append({ kind: 'session-start', workspace: cwd, pinnedWorkspace, review: !!opts.review, pid: process.pid });
 
@@ -155,7 +155,7 @@ async function runOneSession(opts, registerSession) {
   function resetHistory() {
     history = [];
     try { clearTaskJournal(currentRoots()[0]); } catch {}
-    out('\r\n\x1b[33m[aiterm] conversation + task journal cleared\x1b[0m\r\n');
+    out('\r\n\x1b[33m[shmakk] conversation + task journal cleared\x1b[0m\r\n');
   }
   registerSession(session, resetHistory);
 
@@ -196,8 +196,8 @@ async function runOneSession(opts, registerSession) {
           ? { category: 'not_a_correction', proposed: null, safety: 'uncertain', reason: 'correction disabled' }
           : await correct({ input: cmd, glossary, signal: ctrl.signal });
       } catch (e) {
-        if (isAbortError(e)) { discardPending(); out('\r\n\x1b[33m[aiterm] interrupted\x1b[0m\r\n'); return; }
-        if (opts.debug) out(`\r\n\x1b[33m[aiterm] correction error: ${e.message} — falling back to task\x1b[0m\r\n`);
+        if (isAbortError(e)) { discardPending(); out('\r\n\x1b[33m[shmakk] interrupted\x1b[0m\r\n'); return; }
+        if (opts.debug) out(`\r\n\x1b[33m[shmakk] correction error: ${e.message} — falling back to task\x1b[0m\r\n`);
         decision = { category: 'not_a_correction', proposed: null, safety: 'uncertain', reason: `correction failed: ${e.message}` };
       }
       audit.append({ kind: 'correction-decision', cmd, decision });
@@ -270,7 +270,7 @@ async function runOneSession(opts, registerSession) {
       } else {
         discardPending();
       }
-      out('\x1b[36m[aiterm task] (Ctrl-C to interrupt)\x1b[0m\r\n');
+      out('\x1b[36m[shmakk task] (Ctrl-C to interrupt)\x1b[0m\r\n');
       try {
         const updated = await runAgent({
           input: cmd, roots: currentRoots(), glossary,
@@ -286,8 +286,8 @@ async function runOneSession(opts, registerSession) {
         // returned cleanly to the terminal without needing to press Enter.
         session.childWrite('\r');
       } catch (e) {
-        if (isAbortError(e)) out('\r\n\x1b[33m[aiterm] interrupted\x1b[0m\r\n');
-        else out(`\r\n[aiterm] task error: ${e.message}\r\n`);
+        if (isAbortError(e)) out('\r\n\x1b[33m[shmakk] interrupted\x1b[0m\r\n');
+        else out(`\r\n[shmakk] task error: ${e.message}\r\n`);
       }
     });
   });

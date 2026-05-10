@@ -103,7 +103,7 @@ async function webSearch(query, maxResults, signal) {
   const limit = Math.max(1, Math.min(10, Number(maxResults) || 5));
   const liteUrl = `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(q)}`;
   const htmlUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`;
-  const headers = { 'user-agent': 'Mozilla/5.0 (compatible; aiterm/0.1; +https://duckduckgo.com)' };
+  const headers = { 'user-agent': 'Mozilla/5.0 (compatible; shmakk/0.1; +https://duckduckgo.com)' };
 
   async function searchOne(url) {
     const resp = await fetchWithTimeout(url, { signal, headers });
@@ -132,7 +132,7 @@ async function fetchUrl(url, signal) {
   try {
     const resp = await fetchWithTimeout(parsed.href, {
       signal,
-      headers: { 'user-agent': 'aiterm/0.1' },
+      headers: { 'user-agent': 'shmakk/0.1' },
     });
     const text = await resp.text();
     return {
@@ -169,7 +169,7 @@ function parseFallbackActions(content) {
     try { obj = JSON.parse(text.slice(start, end + 1)); } catch { return []; }
   }
 
-  const rawActions = Array.isArray(obj?.aiterm_actions) ? obj.aiterm_actions : [];
+  const rawActions = Array.isArray(obj?.shmakk_actions) ? obj.shmakk_actions : [];
   const allowed = new Set(['read_file', 'list_dir', 'web_search', 'fetch_url',
     'write_file', 'edit_file', 'make_dir', 'delete_file', 'run']);
   const actions = [];

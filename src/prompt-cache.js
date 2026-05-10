@@ -2,11 +2,11 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const DEFAULT_TTL_MS = Math.max(60_000, Number(process.env.AITERM_PROMPT_CACHE_TTL_MS) || 6 * 60 * 60 * 1000);
-const DEFAULT_MAX_ENTRIES = Math.max(20, Number(process.env.AITERM_PROMPT_CACHE_MAX_ENTRIES) || 200);
+const DEFAULT_TTL_MS = Math.max(60_000, Number(process.env.SHMAKK_PROMPT_CACHE_TTL_MS) || 6 * 60 * 60 * 1000);
+const DEFAULT_MAX_ENTRIES = Math.max(20, Number(process.env.SHMAKK_PROMPT_CACHE_MAX_ENTRIES) || 200);
 
 function cachePath(root) {
-  return path.join(root, '.aiterm', 'state', 'prompt-cache.json');
+  return path.join(root, '.shmakk', 'state', 'prompt-cache.json');
 }
 
 function hashObj(obj) {

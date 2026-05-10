@@ -17,16 +17,16 @@ function startSession({ debug = false } = {}) {
   const { cols, rows } = getSize();
 
   if (debug) {
-    process.stderr.write(`[aiterm] shell=${shell.path} args=${cfg.args.join(' ')}\n`);
+    process.stderr.write(`[shmakk] shell=${shell.path} args=${cfg.args.join(' ')}\n`);
   }
 
   const child = pty.spawn(shell.path, cfg.args, {
     name: process.env.TERM || 'xterm-256color',
     cols, rows,
     cwd: process.cwd(),
-    // AITERM_PID lets `aiterm --status/--exit/--restart` find us from
+    // SHMAKK_PID lets `shmakk --status/--exit/--restart` find us from
     // inside the inner shell.
-    env: { ...process.env, AITERM: '1', AITERM_PID: String(process.pid), ...cfg.env },
+    env: { ...process.env, SHMAKK: '1', SHMAKK_PID: String(process.pid), ...cfg.env },
   });
 
   const ev = new EventEmitter();

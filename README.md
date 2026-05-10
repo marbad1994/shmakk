@@ -26,9 +26,9 @@ shmakk --help
 ### 1. Set up an AI provider
 
 ```bash
-export AITERM_BASE_URL="https://your-provider.example/v1"
-export AITERM_API_KEY="your-api-key"
-export AITERM_MODEL="gpt-4o-mini"
+export SHMAKK_BASE_URL="https://your-provider.example/v1"
+export SHMAKK_API_KEY="your-api-key"
+export SHMAKK_MODEL="gpt-4o-mini"
 ```
 
 Or copy the template and fill it in:
@@ -74,15 +74,15 @@ shmakk --profile-set deep
 
 | Variable | Description |
 |----------|-------------|
-| `AITERM_BASE_URL` | OpenAI-compatible base URL |
-| `AITERM_API_KEY` | API key |
-| `AITERM_MODEL` | Default model |
-| `AITERM_CORRECTION_MODEL` | Model for command correction |
-| `AITERM_AGENT_MODEL` | Model for task execution |
-| `AITERM_CHAT_MODEL` | Model for chat |
-| `AITERM_SECONDARY_BASE_URL` | Secondary provider (optional) |
-| `AITERM_SECONDARY_API_KEY` | Secondary API key (optional) |
-| `AITERM_HEADERS` | Extra headers (k=v,k=v) |
+| `SHMAKK_BASE_URL` | OpenAI-compatible base URL |
+| `SHMAKK_API_KEY` | API key |
+| `SHMAKK_MODEL` | Default model |
+| `SHMAKK_CORRECTION_MODEL` | Model for command correction |
+| `SHMAKK_AGENT_MODEL` | Model for task execution |
+| `SHMAKK_CHAT_MODEL` | Model for chat |
+| `SHMAKK_SECONDARY_BASE_URL` | Secondary provider (optional) |
+| `SHMAKK_SECONDARY_API_KEY` | Secondary API key (optional) |
+| `SHMAKK_HEADERS` | Extra headers (k=v,k=v) |
 
 ## Useful commands
 

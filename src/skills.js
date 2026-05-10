@@ -25,11 +25,11 @@ function candidatePaths(name, cwd = process.cwd()) {
 }
 
 function stateDir(cwd = process.cwd()) {
-  return path.join(cwd, '.aiterm', 'state');
+  return path.join(cwd, '.shmakk', 'state');
 }
 
 function skillsDir(cwd = process.cwd()) {
-  return path.join(cwd, '.aiterm', 'skills');
+  return path.join(cwd, '.shmakk', 'skills');
 }
 
 function registryPath(cwd = process.cwd()) {
@@ -263,7 +263,7 @@ async function installSkillFromUrl(url, cwd = process.cwd()) {
         }
         // tree directory: discover SKILL.md first, then first markdown fallback
         const api = `https://api.github.com/repos/${owner}/${repo}/contents/${relPath}?ref=${encodeURIComponent(ref)}`;
-        const resp = await fetch(api, { headers: { 'user-agent': 'aiterm-skill-installer/1.0' } });
+        const resp = await fetch(api, { headers: { 'user-agent': 'shmakk-skill-installer/1.0' } });
         if (!resp.ok) return inputUrl;
         const arr = await resp.json();
         if (!Array.isArray(arr)) return inputUrl;
@@ -284,7 +284,7 @@ async function installSkillFromUrl(url, cwd = process.cwd()) {
   let text = '';
   try {
     const resp = await fetch(finalUrl.href, {
-      headers: { 'user-agent': 'aiterm-skill-installer/1.0' },
+      headers: { 'user-agent': 'shmakk-skill-installer/1.0' },
     });
     if (!resp.ok) return { ok: false, error: `download failed: HTTP ${resp.status}` };
     text = await resp.text();

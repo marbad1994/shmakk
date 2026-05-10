@@ -329,7 +329,7 @@ function parseFallbackActions(content) {
     try { obj = JSON.parse(text.slice(start, end + 1)); } catch { return []; }
   }
 
-  const rawActions = Array.isArray(obj?.aiterm_actions) ? obj.aiterm_actions : [];
+  const rawActions = Array.isArray(obj?.shmakk_actions) ? obj.shmakk_actions : [];
   const allowed = new Set(TOOLS.map((t) => t.function.name));
   const actions = [];
   for (const a of rawActions) {

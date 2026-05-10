@@ -17,7 +17,7 @@ const HELP_KEEP_BYTES = 4 * 1024;
 
 function defaultGlossaryPath() {
   const base = process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share');
-  return path.join(base, 'aiterm', 'command-glossary.json');
+  return path.join(base, 'shmakk', 'command-glossary.json');
 }
 
 // ── PATH enumeration ───────────────────────────────────────────────────────
@@ -214,14 +214,14 @@ async function buildGlossary({ onProgress } = {}) {
 async function updateGlossary() {
   const out = defaultGlossaryPath();
   fs.mkdirSync(path.dirname(out), { recursive: true });
-  process.stderr.write('[aiterm] scanning PATH and completion files (no programs are executed)...\n');
+  process.stderr.write('[shmakk] scanning PATH and completion files (no programs are executed)...\n');
   const data = await buildGlossary({
-    onProgress: (d, t) => process.stderr.write(`[aiterm] ${d}/${t} binaries\r`),
+    onProgress: (d, t) => process.stderr.write(`[shmakk] ${d}/${t} binaries\r`),
   });
   fs.writeFileSync(out, JSON.stringify(data, null, 2));
   const n = Object.keys(data.commands).length;
   const withFlags = Object.values(data.commands).filter((e) => e.flags.length).length;
-  process.stderr.write(`\n[aiterm] wrote ${n} commands (${withFlags} with completion data) → ${out}\n`);
+  process.stderr.write(`\n[shmakk] wrote ${n} commands (${withFlags} with completion data) → ${out}\n`);
   return out;
 }
 

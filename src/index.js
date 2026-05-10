@@ -7,7 +7,7 @@ async function main() {
   if (opts.colors !== null) {
     const v = String(opts.colors).toLowerCase();
     if (v !== 'true' && v !== 'false') {
-      process.stderr.write('[aiterm] invalid --colors. Use: true|false\n');
+      process.stderr.write('[shmakk] invalid --colors. Use: true|false\n');
       process.exit(2);
     }
     opts.colors = v === 'true';
@@ -19,7 +19,7 @@ async function main() {
   }
 
   if (opts.printConfig) {
-    const profile = resolveProfile(opts.profile || process.env.AITERM_PROFILE);
+    const profile = resolveProfile(opts.profile || process.env.SHMAKK_PROFILE);
     const cfg = {
       review: opts.review,
       yesFiles: opts.yesFiles,
@@ -28,16 +28,16 @@ async function main() {
       workspace: opts.workspace || process.cwd(),
       shell: process.env.SHELL,
       term: process.env.TERM,
-      baseUrl: process.env.AITERM_BASE_URL || null,
-      secondaryBaseUrl: process.env.AITERM_SECONDARY_BASE_URL || null,
-      model: process.env.AITERM_MODEL || null,
-      secondaryModel: process.env.AITERM_SECONDARY_MODEL || null,
-      correctionModel: process.env.AITERM_CORRECTION_MODEL || null,
-      agentModel: process.env.AITERM_AGENT_MODEL || null,
-      chatModel: process.env.AITERM_CHAT_MODEL || null,
-      correctionProvider: process.env.AITERM_CORRECTION_PROVIDER || 'primary',
-      agentProvider: process.env.AITERM_AGENT_PROVIDER || 'primary',
-      chatProvider: process.env.AITERM_CHAT_PROVIDER || 'primary',
+      baseUrl: process.env.SHMAKK_BASE_URL || null,
+      secondaryBaseUrl: process.env.SHMAKK_SECONDARY_BASE_URL || null,
+      model: process.env.SHMAKK_MODEL || null,
+      secondaryModel: process.env.SHMAKK_SECONDARY_MODEL || null,
+      correctionModel: process.env.SHMAKK_CORRECTION_MODEL || null,
+      agentModel: process.env.SHMAKK_AGENT_MODEL || null,
+      chatModel: process.env.SHMAKK_CHAT_MODEL || null,
+      correctionProvider: process.env.SHMAKK_CORRECTION_PROVIDER || 'primary',
+      agentProvider: process.env.SHMAKK_AGENT_PROVIDER || 'primary',
+      chatProvider: process.env.SHMAKK_CHAT_PROVIDER || 'primary',
       profile: profile.name,
       colors: opts.colors,
     };
@@ -69,12 +69,12 @@ async function main() {
   }
 
   if (opts.profile && !normalizeProfile(opts.profile)) {
-    process.stderr.write('[aiterm] invalid --profile. Use: tiny|balanced|deep|builder|large-app\n');
+    process.stderr.write('[shmakk] invalid --profile. Use: tiny|balanced|deep|builder|large-app\n');
     process.exit(2);
   }
 
   if (opts.unknown.length) {
-    process.stderr.write(`[aiterm] unknown args: ${opts.unknown.join(' ')}\n`);
+    process.stderr.write(`[shmakk] unknown args: ${opts.unknown.join(' ')}\n`);
     process.stderr.write(HELP);
     process.exit(2);
   }
@@ -85,6 +85,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  process.stderr.write(`[aiterm] fatal: ${err && err.stack || err}\n`);
+  process.stderr.write(`[shmakk] fatal: ${err && err.stack || err}\n`);
   process.exit(1);
 });

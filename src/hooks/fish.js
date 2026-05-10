@@ -2,11 +2,11 @@
 // fish supports `-C COMMAND` to run init code after config.fish.
 
 const INIT = `
-function __aiterm_pre --on-event fish_preexec
+function __shmakk_pre --on-event fish_preexec
     set -l c (printf '%s' "$argv" | base64 -w0 2>/dev/null; or printf '%s' "$argv" | base64)
     printf '\\e]6973;B;%s\\a' "$c"
 end
-function __aiterm_post --on-event fish_postexec
+function __shmakk_post --on-event fish_postexec
     set -l ec $status
     set -l p (printf '%s' "$PWD" | base64 -w0 2>/dev/null; or printf '%s' "$PWD" | base64)
     printf '\\e]6973;C;%s\\a' $ec

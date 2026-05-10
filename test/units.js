@@ -77,7 +77,7 @@ const test = (name, fn) => tests.push({ name, fn });
     const c = configureForShell('bash');
     const rc = c.args[c.args.indexOf('--rcfile') + 1];
     const txt = fs.readFileSync(rc, 'utf8');
-    for (const re of [/\.bashrc/, /trap '__aiterm_preexec' DEBUG/, /PROMPT_COMMAND=/]) {
+    for (const re of [/\.bashrc/, /trap '__shmakk_preexec' DEBUG/, /PROMPT_COMMAND=/]) {
       assert.match(txt, re);
     }
     c.cleanup();
@@ -86,7 +86,7 @@ const test = (name, fn) => tests.push({ name, fn });
   test('hooks/zsh: ZDOTDIR script preserves real config', () => {
     const c = configureForShell('zsh');
     const txt = fs.readFileSync(`${c.env.ZDOTDIR}/.zshrc`, 'utf8');
-    for (const re of [/AITERM_REAL_ZDOTDIR/, /preexec_functions/, /precmd_functions/]) {
+    for (const re of [/SHMAKK_REAL_ZDOTDIR/, /preexec_functions/, /precmd_functions/]) {
       assert.match(txt, re);
     }
     c.cleanup();
@@ -177,7 +177,7 @@ const test = (name, fn) => tests.push({ name, fn });
   const { parseFallbackActions, parseDdgLite } = require('../src/web');
 
   test('agent: parses JSON fallback actions', () => {
-    const actions = parseFallbackActions('```json\n{"aiterm_actions":[{"tool":"make_dir","args":{"path":"notes"}},{"tool":"run","args":{"cmd":"ls"}}]}\n```');
+    const actions = parseFallbackActions('```json\n{"shmakk_actions":[{"tool":"make_dir","args":{"path":"notes"}},{"tool":"run","args":{"cmd":"ls"}}]}\n```');
     assert.deepStrictEqual(actions, [
       { name: 'make_dir', args: { path: 'notes' } },
       { name: 'run', args: { cmd: 'ls' } },
@@ -185,7 +185,7 @@ const test = (name, fn) => tests.push({ name, fn });
   });
 
   test('agent: ignores invalid fallback actions', () => {
-    const actions = parseFallbackActions('{"aiterm_actions":[{"tool":"unknown","args":{}},{"tool":"write_file","args":{"path":"a.txt","content":"x"}}]}');
+    const actions = parseFallbackActions('{"shmakk_actions":[{"tool":"unknown","args":{}},{"tool":"write_file","args":{"path":"a.txt","content":"x"}}]}');
     assert.deepStrictEqual(actions, [
       { name: 'write_file', args: { path: 'a.txt', content: 'x' } },
     ]);
@@ -220,21 +220,21 @@ const test = (name, fn) => tests.push({ name, fn });
   const { shouldUseAutoSubagents } = require('../src/subagent');
 
   test('auto-subagent gate: broad long input triggers by default', () => {
-    const prev = process.env.AITERM_AUTO_SUBAGENTS;
-    delete process.env.AITERM_AUTO_SUBAGENTS;
+    const prev = process.env.SHMAKK_AUTO_SUBAGENTS;
+    delete process.env.SHMAKK_AUTO_SUBAGENTS;
     const input = 'Please analyze this large project-wide architecture refactor across multiple modules and compare risks, implementation strategy, rollout plan, verification matrix, and dependency impact before any edits.';
     assert.strictEqual(shouldUseAutoSubagents(input, ['/repo']), true);
-    if (prev === undefined) delete process.env.AITERM_AUTO_SUBAGENTS;
-    else process.env.AITERM_AUTO_SUBAGENTS = prev;
+    if (prev === undefined) delete process.env.SHMAKK_AUTO_SUBAGENTS;
+    else process.env.SHMAKK_AUTO_SUBAGENTS = prev;
   });
 
   test('auto-subagent gate: env disable forces false', () => {
-    const prev = process.env.AITERM_AUTO_SUBAGENTS;
-    process.env.AITERM_AUTO_SUBAGENTS = '0';
+    const prev = process.env.SHMAKK_AUTO_SUBAGENTS;
+    process.env.SHMAKK_AUTO_SUBAGENTS = '0';
     const input = 'Please analyze this large project-wide architecture refactor across multiple modules and compare risks and implementation strategy.';
     assert.strictEqual(shouldUseAutoSubagents(input, ['/repo']), false);
-    if (prev === undefined) delete process.env.AITERM_AUTO_SUBAGENTS;
-    else process.env.AITERM_AUTO_SUBAGENTS = prev;
+    if (prev === undefined) delete process.env.SHMAKK_AUTO_SUBAGENTS;
+    else process.env.SHMAKK_AUTO_SUBAGENTS = prev;
   });
 }
 

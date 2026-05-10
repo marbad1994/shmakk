@@ -1,4 +1,4 @@
-// aiterm orchestrator entry point.
+// shmakk orchestrator entry point.
 // Manages signal-driven lifecycle (restart, exit, profile changes) and
 // delegates each session to ./session.js.
 
@@ -16,7 +16,7 @@ function stripAnsi(s) {
 }
 
 async function start(opts) {
-  let runtimeProfile = normalizeProfile(opts.profile || process.env.AITERM_PROFILE) || 'balanced';
+  let runtimeProfile = normalizeProfile(opts.profile || process.env.SHMAKK_PROFILE) || 'balanced';
   let lastExit = 0;
   let restartRequested = false;
   let exitRequested = false;
@@ -48,7 +48,7 @@ async function start(opts) {
     if (exitRequested) break;
     if (restartRequested) {
       restartRequested = false;
-      process.stdout.write('\r\n\x1b[36m[aiterm] restarting...\x1b[0m\r\n');
+      process.stdout.write('\r\n\x1b[36m[shmakk] restarting...\x1b[0m\r\n');
       continue;
     }
     break;

@@ -4,7 +4,7 @@ const path = require('path');
 
 function logPath() {
   const base = process.env.XDG_STATE_HOME || path.join(os.homedir(), '.local', 'state');
-  return path.join(base, 'aiterm', 'audit.log');
+  return path.join(base, 'shmakk', 'audit.log');
 }
 
 function append(entry) {

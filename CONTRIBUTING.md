@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for contributing to `aiterm`.
+Thanks for contributing to `shmakk`.
 
 ## Prerequisites
 - Node.js 18+
@@ -37,7 +37,7 @@ npm run global:link
 Then use:
 
 ```bash
-aiterm --help
+shmakk --help
 ```
 
 Undo link:

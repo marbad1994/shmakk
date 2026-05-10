@@ -97,20 +97,20 @@ Optional:
   --print-config                  Print resolved configuration and exit
 
 Environment:
-  AITERM_BASE_URL                 OpenAI-compatible base URL
-  AITERM_API_KEY                  API key
-  AITERM_MODEL                    Default model
-  AITERM_SECONDARY_BASE_URL       Optional secondary provider base URL
-  AITERM_SECONDARY_API_KEY        Optional secondary provider API key
-  AITERM_SECONDARY_MODEL          Optional secondary provider default model
-  AITERM_SECONDARY_HEADERS        Optional secondary provider headers (k=v,k=v)
-  AITERM_CORRECTION_MODEL         Model used for command correction
-  AITERM_AGENT_MODEL              Model used for tasks
-  AITERM_CHAT_MODEL               Model used for chat
-  AITERM_CORRECTION_PROVIDER      Route correction lane: primary|secondary
-  AITERM_AGENT_PROVIDER           Route agent lane: primary|secondary
-  AITERM_CHAT_PROVIDER            Route chat lane: primary|secondary
-  AITERM_HEADERS                  Comma-separated extra headers (k=v,k=v)
+  SHMAKK_BASE_URL                 OpenAI-compatible base URL
+  SHMAKK_API_KEY                  API key
+  SHMAKK_MODEL                    Default model
+  SHMAKK_SECONDARY_BASE_URL       Optional secondary provider base URL
+  SHMAKK_SECONDARY_API_KEY        Optional secondary provider API key
+  SHMAKK_SECONDARY_MODEL          Optional secondary provider default model
+  SHMAKK_SECONDARY_HEADERS        Optional secondary provider headers (k=v,k=v)
+  SHMAKK_CORRECTION_MODEL         Model used for command correction
+  SHMAKK_AGENT_MODEL              Model used for tasks
+  SHMAKK_CHAT_MODEL               Model used for chat
+  SHMAKK_CORRECTION_PROVIDER      Route correction lane: primary|secondary
+  SHMAKK_AGENT_PROVIDER           Route agent lane: primary|secondary
+  SHMAKK_CHAT_PROVIDER            Route chat lane: primary|secondary
+  SHMAKK_HEADERS                  Comma-separated extra headers (k=v,k=v)
 `;
 
 module.exports = { parseArgs, HELP };
