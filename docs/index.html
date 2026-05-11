@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>shmakk demo</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Righteous&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #1a1b1e;
+  font-family: 'JetBrains Mono', 'Fira Mono', monospace;
+  color: #d4d4d4;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 40px 16px 60px;
+}
+
+.hero {
+  text-align: center;
+  margin-bottom: 36px;
+  max-width: 700px;
+}
+.hero h1 {
+  font-family: 'Righteous', sans-serif;
+  font-size: clamp(42px, 7vw, 72px);
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  margin-bottom: 10px;
+  background: linear-gradient(135deg, #4af073 0%, #4da6ff 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.hero h1 em { font-style: normal; }
+.hero .sub {
+  font-size: 13px;
+  color: #555;
+  margin-bottom: 6px;
+  line-height: 1.7;
+}
+.hero .honest {
+  font-size: 11px;
+  color: #3a3a3a;
+  margin-bottom: 20px;
+  font-style: italic;
+}
+.install {
+  display: inline-block;
+  background: #111;
+  border: 1px solid #2a2a2a;
+  border-radius: 4px;
+  padding: 8px 18px;
+  font-size: 13px;
+  color: #4af073;
+  margin-bottom: 28px;
+}
+.install span { color: #555; }
+
+/* tabs */
+.tabs {
+  display: flex;
+  border-bottom: 1px solid #2a2d35;
+  width: 100%;
+  max-width: 820px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tabs::-webkit-scrollbar { display: none; }
+.tab {
+  background: none; border: none;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px; color: #555;
+  padding: 9px 18px; cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  white-space: nowrap; letter-spacing: 0.04em;
+  transition: color .2s;
+}
+.tab:hover { color: #aaa; }
+.tab.active { color: #4af073; border-bottom-color: #4af073; }
+
+/* window */
+.window {
+  width: 100%; max-width: 820px;
+  background: #0f1117;
+  border: 1px solid #2a2d35;
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  overflow: hidden;
+}
+.titlebar {
+  background: #181b22;
+  padding: 7px 14px;
+  display: flex; align-items: center; gap: 7px;
+  border-bottom: 1px solid #2a2d35;
+}
+.dot { width: 11px; height: 11px; border-radius: 50%; }
+.dot-r { background: #ff5f57; }
+.dot-y { background: #febc2e; }
+.dot-g { background: #28c840; }
+.win-title { margin-left: 8px; font-size: 11px; color: #444; }
+
+.term {
+  padding: 14px 18px 32px;
+  font-size: 13px; line-height: 1.65;
+  min-height: 340px; position: relative;
+}
+
+.panel { display: none; }
+.panel.active { display: block; }
+
+/* terminal colors matching real output */
+.hostname  { color: #4af073; }
+.path      { color: #5c9cf5; }
+.exitcode  { color: #ff6b6b; }
+.muted     { color: #555; }
+.white     { color: #fff; }
+.user-input  { color: #4af073; }
+.cmd-first  { color: #e0e0e0; }
+
+.task-label  { color: #888; }
+.thinking    { color: #888; }
+.ai-out      { color: #d4d4d4; }
+.tool-arrow  { color: #4af073; }
+.tool-name   { color: #d4d4d4; }
+.tool-result { color: #888; }
+.shmakk-section { color: #4af073; }
+.tool-key    { color: #d4d4d4; }
+.warn-val    { color: #ffb830; }
+.confirm     { color: #d4d4d4; }
+.corr-old    { color: #ff6b6b; text-decoration: line-through; }
+.corr-arrow  { color: #888; }
+.corr-new    { color: #4af073; }
+.code        { color: #4af073; }
+.dim2        { color: #3d3d3d; }
+
+.ln { opacity: 0; transition: opacity 0.12s; }
+.ln.show { opacity: 1; }
+
+.cur {
+  display: inline-block; width: 8px; height: 14px;
+  background: #d4d4d4; vertical-align: text-bottom;
+  animation: blink 1.1s step-end infinite; margin-left: 1px;
+}
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+.replay {
+  position: absolute; bottom: 12px; right: 14px;
+  background: none; border: 1px solid #2a2d35;
+  color: #444; font-family: 'JetBrains Mono', monospace;
+  font-size: 11px; padding: 5px 12px; border-radius: 3px;
+  cursor: pointer; transition: color .2s, border-color .2s;
+}
+.replay:hover { color: #4af073; border-color: #4af073; }
+
+/* feature grid */
+.section-label {
+  width: 100%; max-width: 820px;
+  font-size: 10px; letter-spacing: 0.12em;
+  text-transform: uppercase; color: #333;
+  margin: 36px 0 12px;
+}
+
+.features {
+  max-width: 820px; width: 100%;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1px;
+  background: #1e2330;
+  border: 1px solid #1e2330;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.feat {
+  background: #0f1117;
+  padding: 18px 16px;
+}
+.feat h3 { font-size: 12px; color: #fff; margin-bottom: 6px; }
+.feat p  { font-size: 11px; color: #555; line-height: 1.7; }
+.feat code {
+  color: #4af073; font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+}
+
+/* cta */
+.cta { margin-top: 36px; text-align: center; }
+.cta a {
+  display: inline-block;
+  background: #4af073; color: #000;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px; font-weight: 700;
+  padding: 11px 26px; border-radius: 4px;
+  text-decoration: none; margin: 0 6px;
+  transition: opacity .2s;
+}
+.cta a:hover { opacity: 0.88; }
+.cta a.ghost {
+  background: none; border: 1px solid #2a2d35; color: #888;
+}
+.cta a.ghost:hover { color: #4af073; border-color: #4af073; }
+.cta-note { font-size: 11px; color: #333; margin-top: 14px; }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <h1>shm<em>akk</em></h1>
+  <p class="sub">AI-supervised terminal. No GUI. No bloat. Just your shell, smarter.</p>
+  <p class="honest">takes advantage of errors so you don't have to think about them</p>
+  <div class="install">npm install -g <span>git+https://github.com/marbad1994/shmakk.git</span></div>
+</div>
+
+<div class="tabs">
+  <button class="tab active" onclick="go('chat')">chat</button>
+  <button class="tab" onclick="go('project')">project builder</button>
+  <button class="tab" onclick="go('typo')">typo correction</button>
+  <button class="tab" onclick="go('skills')">skills</button>
+  <button class="tab" onclick="go('profiles')">profiles</button>
+</div>
+
+<div class="window">
+  <div class="titlebar">
+    <div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div>
+    <span class="win-title">shmakk : MainThread</span>
+  </div>
+  <div class="term">
+
+    <!-- CHAT -->
+    <div class="panel active" id="panel-chat">
+      <div class="ln" data-d="0"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/D/r/s/demo-deepseek</span><span class="muted">&gt;</span> <span class="white">shmakk</span></div>
+      <div class="ln" data-d="300"><span class="muted">session started. type commands or questions naturally.</span></div>
+      <div class="ln" data-d="500">&nbsp;</div>
+      <div class="ln" data-d="600"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/D/r/s/demo-deepseek</span><span class="muted">&gt;</span> <span class="user-input"><span class="cmd-first">Hey</span> can we chat?</span></div>
+      <div class="ln" data-d="900"><span class="task-label">[shmakk task] (Ctrl-C to interrupt)</span></div>
+      <div class="ln" data-d="1200"><span class="thinking">⊥ thinking...</span></div>
+      <div class="ln" data-d="2000"><span class="ai-out">Sure, we can chat! What's on your mind? Need help with</span></div>
+      <div class="ln" data-d="2100"><span class="ai-out">something in your project, or just want to bounce around some ideas?</span></div>
+      <div class="ln" data-d="2500">&nbsp;</div>
+      <div class="ln" data-d="2600"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/D/r/s/demo-deepseek</span><span class="muted">&gt;</span> <span class="user-input"><span class="cmd-first">whats</span> the fastest way to reverse a string in python</span></div>
+      <div class="ln" data-d="2900"><span class="task-label">[shmakk task] (Ctrl-C to interrupt)</span></div>
+      <div class="ln" data-d="3200"><span class="thinking">⊥ thinking...</span></div>
+      <div class="ln" data-d="3900"><span class="ai-out">Slice with step -1:</span></div>
+      <div class="ln" data-d="4000">&nbsp;</div>
+      <div class="ln" data-d="4100"><span class="code">    s[::-1]</span></div>
+      <div class="ln" data-d="4200">&nbsp;</div>
+      <div class="ln" data-d="4300"><span class="ai-out">Fastest and most Pythonic. Works on any sequence.</span></div>
+      <div class="ln" data-d="4600">&nbsp;</div>
+      <div class="ln" data-d="4700"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/D/r/s/demo-deepseek</span><span class="muted">&gt;</span> <span class="cur"></span></div>
+    </div>
+
+    <!-- PROJECT -->
+    <div class="panel" id="panel-project">
+      <div class="ln" data-d="0"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/D/r/s/demo-deepseek</span><span class="muted"> (main)&gt;</span> <span class="user-input"><span class="cmd-first">set</span> up a react and flask project with a login page using oauth, follow best practice and set it up with docker compose and add redis and mongodb</span></div>
+      <div class="ln" data-d="400"><span class="task-label">[shmakk task] (Ctrl-C to interrupt)</span></div>
+      <div class="ln" data-d="700"><span class="thinking">⊥ thinking...</span></div>
+      <div class="ln" data-d="1400">&nbsp;</div>
+      <div class="ln" data-d="1500"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/D/r/s/demo-deepseek</span> <span class="exitcode">[127]</span><span class="muted">&gt;</span></div>
+      <div class="ln" data-d="1700"><span class="tool-arrow">→</span> <span class="tool-name">list_dir(.)</span></div>
+      <div class="ln" data-d="1900"><span class="tool-result">  1 entries</span></div>
+      <div class="ln" data-d="2100"><span class="tool-arrow">→</span> <span class="tool-name">make_dir(backend)</span></div>
+      <div class="ln" data-d="2300"><span class="tool-result">  created</span></div>
+      <div class="ln" data-d="2500"><span class="tool-arrow">→</span> <span class="tool-name">make_dir(frontend/src/components)</span></div>
+      <div class="ln" data-d="2700"><span class="tool-result">  created</span></div>
+      <div class="ln" data-d="2900"><span class="tool-arrow">→</span> <span class="tool-name">make_dir(nginx)</span></div>
+      <div class="ln" data-d="3100"><span class="tool-result">  created</span></div>
+      <div class="ln" data-d="3300"><span class="tool-arrow">→</span> <span class="tool-name">write_file(backend/requirements.txt)</span></div>
+      <div class="ln" data-d="3500"><span class="shmakk-section">— shmakk tool —</span></div>
+      <div class="ln" data-d="3650"><span class="tool-key">  action:    </span><span class="ai-out">write_file backend/requirements.txt (147 bytes)</span></div>
+      <div class="ln" data-d="3800"><span class="tool-key">  safety:    </span><span class="warn-val">uncertain</span></div>
+      <div class="ln" data-d="3950"><span class="tool-key">  auto-mode: </span><span class="ai-out">would ask confirmation</span></div>
+      <div class="ln" data-d="4150"><span class="confirm">Run? [y/N/?] </span><span class="shmakk-section">y</span></div>
+      <div class="ln" data-d="4600"><span class="tool-result">  written.</span></div>
+      <div class="ln" data-d="4800"><span class="tool-arrow">→</span> <span class="tool-name">write_file(backend/app.py)</span></div>
+      <div class="ln" data-d="5000"><span class="tool-result">  written.</span></div>
+      <div class="ln" data-d="5200"><span class="muted">  [subagent] spawning docker-agent for compose + services config</span></div>
+      <div class="ln" data-d="5500"><span class="tool-arrow">→</span> <span class="tool-name">write_file(docker-compose.yml)</span></div>
+      <div class="ln" data-d="5700"><span class="tool-result">  written.</span></div>
+      <div class="ln" data-d="5900">&nbsp;</div>
+      <div class="ln" data-d="6000"><span class="ai-out">Done. React + Flask + OAuth + Redis + MongoDB + Nginx scaffolded.</span></div>
+      <div class="ln" data-d="6100"><span class="ai-out">Run with: <span class="code">docker compose up --build</span></span></div>
+      <div class="ln" data-d="6400">&nbsp;</div>
+      <div class="ln" data-d="6500"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/D/r/s/demo-deepseek</span><span class="muted">&gt;</span> <span class="cur"></span></div>
+    </div>
+
+    <!-- TYPO -->
+    <div class="panel" id="panel-typo">
+      <div class="ln" data-d="0"><span class="muted"># shmakk uses your machine's command history + probability</span></div>
+      <div class="ln" data-d="100"><span class="muted"># to correct typos. no LLM call. instant.</span></div>
+      <div class="ln" data-d="200">&nbsp;</div>
+      <div class="ln" data-d="300"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/D/r/s/demo-deepseek</span><span class="muted">&gt;</span> <span class="user-input"><span class="cmd-first">gti</span> commit -m "fix login bug"</span></div>
+      <div class="ln" data-d="600"><span class="task-label">[shmakk task] (Ctrl-C to interrupt)</span></div>
+      <div class="ln" data-d="850"><span class="muted">correcting: </span><span class="corr-old">gti</span><span class="corr-arrow"> → </span><span class="corr-new">git</span><span class="muted">  (your history, p=0.99)</span></div>
+      <div class="ln" data-d="1100"><span class="muted">running:    </span><span class="white">git commit -m "fix login bug"</span></div>
+      <div class="ln" data-d="1600">&nbsp;</div>
+      <div class="ln" data-d="1700"><span class="ai-out">[main 7d3a91f] fix login bug</span></div>
+      <div class="ln" data-d="1800"><span class="ai-out"> 2 files changed, 18 insertions(+), 4 deletions(-)</span></div>
+      <div class="ln" data-d="2200">&nbsp;</div>
+      <div class="ln" data-d="2300"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/D/r/s/demo-deepseek</span><span class="muted">&gt;</span> <span class="user-input"><span class="cmd-first">docekr-compose</span> up</span></div>
+      <div class="ln" data-d="2600"><span class="task-label">[shmakk task] (Ctrl-C to interrupt)</span></div>
+      <div class="ln" data-d="2850"><span class="muted">correcting: </span><span class="corr-old">docekr-compose</span><span class="corr-arrow"> → </span><span class="corr-new">docker-compose</span><span class="muted">  (your history, p=0.97)</span></div>
+      <div class="ln" data-d="3100"><span class="muted">running:    </span><span class="white">docker-compose up</span></div>
+      <div class="ln" data-d="3600">&nbsp;</div>
+      <div class="ln" data-d="3700"><span class="ai-out">Starting demo-deepseek_redis_1    ... done</span></div>
+      <div class="ln" data-d="3800"><span class="ai-out">Starting demo-deepseek_mongo_1    ... done</span></div>
+      <div class="ln" data-d="3900"><span class="ai-out">Starting demo-deepseek_backend_1  ... done</span></div>
+      <div class="ln" data-d="4200">&nbsp;</div>
+      <div class="ln" data-d="4300"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/D/r/s/demo-deepseek</span><span class="muted">&gt;</span> <span class="cur"></span></div>
+    </div>
+
+    <!-- SKILLS -->
+    <div class="panel" id="panel-skills">
+      <div class="ln" data-d="0"><span class="muted"># install a skill from any URL — shmakk handles the rest</span></div>
+      <div class="ln" data-d="100">&nbsp;</div>
+      <div class="ln" data-d="200"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~</span><span class="muted">&gt;</span> <span class="user-input"><span class="cmd-first">shmakk</span> --install-skill https://example.com/skills/rust-expert.md</span></div>
+      <div class="ln" data-d="600"><span class="task-label">[shmakk task] (Ctrl-C to interrupt)</span></div>
+      <div class="ln" data-d="900"><span class="thinking">⊥ fetching skill...</span></div>
+      <div class="ln" data-d="1500"><span class="tool-result">  fetched: rust-expert.md (2.1 KB)</span></div>
+      <div class="ln" data-d="1700"><span class="tool-result">  installed to: ~/.shmakk/skills/rust-expert</span></div>
+      <div class="ln" data-d="1900"><span class="ai-out">Skill 'rust-expert' ready. It will be loaded automatically</span></div>
+      <div class="ln" data-d="2000"><span class="ai-out">when relevant context is detected.</span></div>
+      <div class="ln" data-d="2400">&nbsp;</div>
+      <div class="ln" data-d="2500"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~</span><span class="muted">&gt;</span> <span class="user-input"><span class="cmd-first">shmakk</span> --list-skills</span></div>
+      <div class="ln" data-d="2900"><span class="tool-result">  rust-expert       loaded from https://example.com/skills/rust-expert.md</span></div>
+      <div class="ln" data-d="3050"><span class="tool-result">  docker-compose    loaded from https://example.com/skills/docker.md</span></div>
+      <div class="ln" data-d="3200"><span class="tool-result">  git-flow          loaded from https://example.com/skills/git-flow.md</span></div>
+      <div class="ln" data-d="3500">&nbsp;</div>
+      <div class="ln" data-d="3600"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~</span><span class="muted">&gt;</span> <span class="user-input"><span class="cmd-first">shmakk</span> --load-skill rust-expert</span></div>
+      <div class="ln" data-d="4000"><span class="ai-out">rust-expert skill active for this session.</span></div>
+      <div class="ln" data-d="4300">&nbsp;</div>
+      <div class="ln" data-d="4400"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~</span><span class="muted">&gt;</span> <span class="cur"></span></div>
+    </div>
+
+    <!-- PROFILES -->
+    <div class="panel" id="panel-profiles">
+      <div class="ln" data-d="0"><span class="muted"># runtime profiles, live switching, context budgeting</span></div>
+      <div class="ln" data-d="100">&nbsp;</div>
+      <div class="ln" data-d="200"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/D/r/s/demo-deepseek</span><span class="muted">&gt;</span> <span class="user-input"><span class="cmd-first">shmakk</span> --profile builder</span></div>
+      <div class="ln" data-d="600"><span class="ai-out">profile: builder  (large context, file-write optimised)</span></div>
+      <div class="ln" data-d="900">&nbsp;</div>
+      <div class="ln" data-d="1000"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/D/r/s/demo-deepseek</span><span class="muted">&gt;</span> <span class="user-input"><span class="cmd-first">shmakk</span> --profile-set tiny</span></div>
+      <div class="ln" data-d="1400"><span class="ai-out">switching to profile: tiny  (minimal context, fastest responses)</span></div>
+      <div class="ln" data-d="1700"><span class="muted">restarting inner shell…</span></div>
+      <div class="ln" data-d="2100"><span class="ai-out">ready.</span></div>
+      <div class="ln" data-d="2400">&nbsp;</div>
+      <div class="ln" data-d="2500"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/D/r/s/demo-deepseek</span><span class="muted">&gt;</span> <span class="user-input"><span class="cmd-first">shmakk</span> --compact</span></div>
+      <div class="ln" data-d="2900"><span class="muted">context budget: 18 400 / 32 000 tokens used</span></div>
+      <div class="ln" data-d="3100"><span class="ai-out">conversation history cleared. context reset.</span></div>
+      <div class="ln" data-d="3400">&nbsp;</div>
+      <div class="ln" data-d="3500"><span class="muted"># available profiles</span></div>
+      <div class="ln" data-d="3600"><span class="tool-result">  tiny        minimal context, fastest responses</span></div>
+      <div class="ln" data-d="3700"><span class="tool-result">  balanced    default — good for daily work</span></div>
+      <div class="ln" data-d="3800"><span class="tool-result">  deep        larger investigations, multi-step tasks</span></div>
+      <div class="ln" data-d="3900"><span class="tool-result">  builder     editing and building large projects</span></div>
+      <div class="ln" data-d="4100">&nbsp;</div>
+      <div class="ln" data-d="4200"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/D/r/s/demo-deepseek</span><span class="muted">&gt;</span> <span class="cur"></span></div>
+    </div>
+
+    <button class="replay" onclick="replay()">↺ replay</button>
+  </div>
+</div>
+
+<!-- FEATURES -->
+<div class="section-label">what it does</div>
+<div class="features">
+  <div class="feat">
+    <h3>Typo correction</h3>
+    <p>Deterministic, no API call. Uses your machine's command history and probability to fix typos the way <em>you</em> type, not some generic model.</p>
+  </div>
+  <div class="feat">
+    <h3>Chat in shell</h3>
+    <p>Just write. Ask questions, get answers, run suggested commands — all without leaving the terminal. Session history is preserved until you <code>--compact</code>.</p>
+  </div>
+  <div class="feat">
+    <h3>Project scaffolding</h3>
+    <p>Describe what you want in plain English. shmakk plans, creates dirs, writes files, asks before anything risky. Subagents spawned automatically for parallel work.</p>
+  </div>
+  <div class="feat">
+    <h3>Skills</h3>
+    <p>Extend behaviour with any URL: <code>shmakk --install-skill &lt;url&gt;</code>. Loaded per-session or automatically when relevant context is detected.</p>
+  </div>
+  <div class="feat">
+    <h3>Runtime profiles</h3>
+    <p><code>tiny</code> · <code>balanced</code> · <code>deep</code> · <code>builder</code>. Switch live with <code>--profile-set</code>. Context budgeting and loop-stall protection built in.</p>
+  </div>
+  <div class="feat">
+    <h3>Dual workspace</h3>
+    <p>Add a second directory from anywhere on disk. shmakk reads and edits across both simultaneously. Workspace root is enforced — nothing escapes it.</p>
+  </div>
+  <div class="feat">
+    <h3>Safety</h3>
+    <p>Risky commands always confirm before running. Secrets (<code>.env</code>, tokens, keys) are never sent to the AI. Defensive handling for fallback tool-call formats.</p>
+  </div>
+  <div class="feat">
+    <h3>Web search</h3>
+    <p>Ask anything. shmakk searches and gives you a direct answer in the terminal. No tab switching, no ads, no SEO garbage.</p>
+  </div>
+</div>
+
+<div class="cta">
+  <a href="https://github.com/marbad1994/shmakk">⭐ Star on GitHub</a>
+  <a class="ghost" href="https://github.com/marbad1994/shmakk#readme">Read the docs</a>
+  <p class="cta-note">works with any OpenAI-compatible API — bring your own key</p>
+</div>
+
+<script>
+let current = 'chat';
+let timers = [];
+const order = ['chat','project','typo','skills','profiles'];
+
+function go(name) {
+  timers.forEach(clearTimeout); timers = [];
+  document.querySelectorAll('.tab').forEach((b,i) => b.classList.toggle('active', order[i] === name));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  const panel = document.getElementById('panel-' + name);
+  panel.classList.add('active');
+  panel.querySelectorAll('.ln').forEach(l => l.classList.remove('show'));
+  current = name;
+  animate(panel);
+}
+
+function animate(panel) {
+  panel.querySelectorAll('.ln').forEach(el => {
+    const d = parseInt(el.dataset.d || 0);
+    timers.push(setTimeout(() => el.classList.add('show'), d));
+  });
+}
+
+function replay() { go(current); }
+animate(document.getElementById('panel-chat'));
+</script>
+</body>
+</html>
