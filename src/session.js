@@ -12,6 +12,20 @@ const { workspaceWarning } = require('./safety');
 const audit = require('./audit');
 const { setMaxListeners } = require('events');
 
+// Lazy-loaded voice service — only required when --voice is active
+let voiceService = null;
+function getVoiceService() {
+  if (!voiceService) voiceService = require('./services/voice');
+  return voiceService;
+}
+
+// Lazy-loaded TTS service — only required when --tts is active
+let ttsService = null;
+function getTTSService() {
+  if (!ttsService) ttsService = require('./services/tts');
+  return ttsService;
+}
+
 const ALT_SCREEN_RE = /\x1b\[\?(?:1049|47|1047)h/;
 const FLUSH_AFTER_MS = 300;
 const FLUSH_AFTER_BYTES = 8 * 1024;
@@ -75,7 +89,7 @@ function makeToolConfirm(opts, ask, out, getAbort) {
 }
 
 async function runOneSession(opts, registerSession) {
-  const session = startSession({ debug: opts.debug });
+  const session = startSession({ debug: opts.debug, voiceEnabled: !!opts.voice });
   const colorsEnabled = opts.colors !== false;
   const out = (s) => session.stdoutWrite(colorsEnabled ? s : stripAnsi(s));
   const ask = makePrompter(session, out);
@@ -163,6 +177,99 @@ async function runOneSession(opts, registerSession) {
     out('\r\n\x1b[33m[shmakk] conversation + task journal cleared\x1b[0m\r\n');
   }
   registerSession(session, resetHistory);
+
+  // ── Continuous voice loop (--sts always-on) ──
+  // When --sts is active, runs a background loop: listen → transcribe → inject.
+  // No hotkey needed — just speak and pause.
+  if (opts.sts) {
+    const vs = getVoiceService();
+    if (!vs.isAvailable()) {
+      out('\r\n\x1b[33m[shmakk] no audio recorder found. Install sox.\x1b[0m\r\n');
+    } else {
+      let voiceLoopActive = true;
+      let voiceBusy = false;
+
+      const voiceLoop = async () => {
+        while (voiceLoopActive) {
+          if (voiceBusy) { await new Promise(r => setTimeout(r, 100)); continue; }
+          voiceBusy = true;
+          try {
+            const text = await vs.recordAndTranscribe({
+              language: opts.voiceLanguage || process.env.SHMAKK_VOICE_LANGUAGE || 'english',
+              maxDurationSec: parseInt(opts.voiceMaxDuration || process.env.SHMAKK_VOICE_MAX_SEC || '30', 10),
+            });
+            if (text && voiceLoopActive) {
+              session.childWrite(text + '\r');
+            }
+          } catch (err) {
+            if (opts.debug) process.stderr.write(`[shmakk voice] ${err.message}\n`);
+            // Brief pause on error before retrying
+            await new Promise(r => setTimeout(r, 1000));
+          } finally {
+            voiceBusy = false;
+          }
+        }
+      };
+
+      // Start the loop detached
+      voiceLoop().catch(() => {});
+
+      // Stop loop on session exit
+      session.waitExit().then(() => { voiceLoopActive = false; });
+    }
+  }
+
+  // ── Voice input handler (Ctrl+O hotkey) ──
+  // Only active when --voice/--stt is passed without --sts.
+  let voiceInProgress = false;
+  if (opts.voice && !opts.sts) {
+    const voiceWarned = { mic: false };
+    session.ev.on('voice', async () => {
+      if (voiceInProgress) return;
+      voiceInProgress = true;
+      try {
+        const vs = getVoiceService();
+        if (!voiceWarned.mic) {
+          if (!vs.isAvailable()) {
+            out('\r\n\x1b[33m[shmakk voice] no microphone found. Install sox/arecord.\x1b[0m\r\n');
+            voiceInProgress = false;
+            return;
+          }
+          voiceWarned.mic = true;
+        }
+        // Show recording indicator — stays visible until transcription starts
+        out('\r\n\x1b[36m🎤 [shmakk] Listening... (speak now, stops on silence)\x1b[0m');
+        // Use a handler on the stdin stack so Ctrl-C aborts recording
+        let recordingDone = false;
+        const release = session.captureStdin((data) => {
+          for (let i = 0; i < data.length; i++) {
+            if (data[i] === 0x03 || data[i] === 0x0f) { recordingDone = true; release(); return; }
+          }
+          session.childWrite(data);
+        });
+        const text = await vs.recordAndTranscribe({
+          maxDurationSec: parseInt(opts.voiceMaxDuration || process.env.SHMAKK_VOICE_MAX_SEC || '10', 10),
+          language: opts.voiceLanguage || process.env.SHMAKK_VOICE_LANGUAGE,
+          onStart: () => {},
+          onStop: () => {
+            recordingDone = true;
+            try { release(); } catch {}
+          },
+        });
+        if (text) {
+          // transcript already echoed to stderr by voice service
+          session.childWrite(text);
+        } else {
+          out('\r\x1b[33m[shmakk] no speech detected\x1b[0m\r\n');
+        }
+      } catch (err) {
+        out(`\r\x1b[31m[shmakk voice] ${err.message}\x1b[0m\r\n`);
+        if (opts.debug) out(`\r\x1b[33m${err.stack}\x1b[0m\r\n`);
+      } finally {
+        voiceInProgress = false;
+      }
+    });
+  }
 
   session.ev.on('command', (c) => {
     lastCommand = c;
@@ -310,6 +417,25 @@ async function runOneSession(opts, registerSession) {
           colors: colorsEnabled,
         });
         history = trimHistory(updated || history);
+
+        // TTS: speak the agent's response aloud if --tts is active
+        if (opts.tts && updated && updated.length) {
+          const lastAssistant = [...updated].reverse().find((m) => m.role === 'assistant');
+          if (lastAssistant?.content) {
+            const text = typeof lastAssistant.content === 'string'
+              ? lastAssistant.content
+              : lastAssistant.content.map((c) => c.text || '').join(' ');
+            if (text) {
+              const ttsVoice = opts.ttsVoice || process.env.SHMAKK_TTS_VOICE || 'af_heart';
+              const tts = getTTSService();
+              tts.speak(text, { voice: ttsVoice }).catch((err) => {
+                // Fire-and-forget; ignore playback errors
+                if (opts.debug) process.stderr.write(`[shmakk] tts: ${err.message}\n`);
+              });
+            }
+          }
+        }
+
         // Force the interactive shell to redraw its prompt so the user is
         // returned cleanly to the terminal without needing to press Enter.
         session.childWrite('\r');

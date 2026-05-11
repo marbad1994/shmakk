@@ -1,8 +1,21 @@
 const { parseArgs, HELP } = require('./cli');
 const { normalizeProfile, resolveProfile } = require('./profiles');
+const { applyEndpoint } = require('./endpoints');
+const { spawn } = require('child_process');
+const path = require('path');
+const fs = require('fs');
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
+
+  // Apply named endpoint preset from .shmakk/endpoints.json before
+  // any other module reads SHMAKK_* environment variables.
+  if (opts.endpoint) {
+    const cwd = opts.workspace || process.cwd();
+    if (!applyEndpoint(opts.endpoint, cwd)) {
+      process.stderr.write(`[shmakk] endpoint "${opts.endpoint}" not found in ${path.join(cwd, '.shmakk', 'endpoints.json')}\n`);
+    }
+  }
 
   if (opts.colors !== null) {
     const v = String(opts.colors).toLowerCase();
@@ -30,8 +43,12 @@ async function main() {
       term: process.env.TERM,
       baseUrl: process.env.SHMAKK_BASE_URL || null,
       model: process.env.SHMAKK_MODEL || null,
+      endpoint: opts.endpoint || null,
       profile: profile.name,
       colors: opts.colors,
+      stt: opts.stt,
+      tts: opts.tts,
+      sts: opts.sts,
     };
     process.stdout.write(JSON.stringify(cfg, null, 2) + '\n');
     process.exit(0);
@@ -89,6 +106,32 @@ async function main() {
     process.stderr.write(`[shmakk] unknown args: ${opts.unknown.join(' ')}\n`);
     process.stderr.write(HELP);
     process.exit(2);
+  }
+
+  // Lazy-init STT/TTS models if flags are set (model downloads happen on first use)
+  if (opts.stt || opts.tts || opts.sts) {
+    const initTasks = [];
+    if (opts.stt || opts.sts) {
+      const { _ensureModel } = require('./services/stt');
+      initTasks.push(
+        _ensureModel().then(() => process.stdout.write('[shmakk] STT ready (Whisper ONNX)\n')),
+      );
+    }
+    if (opts.tts || opts.sts) {
+      const tts = require('./services/tts');
+      const voice = opts.ttsVoice || process.env.SHMAKK_TTS_VOICE || 'af_heart';
+      initTasks.push(
+        tts.listVoices().then(() => process.stdout.write(`[shmakk] TTS ready (Kokoro ONNX, voice=${voice})\n`)),
+      );
+    }
+    // Don't block startup — models download in background
+    Promise.allSettled(initTasks).then((results) => {
+      for (const r of results) {
+        if (r.status === 'rejected') {
+          process.stderr.write(`[shmakk] voice init: ${r.reason?.message || r.reason}\n`);
+        }
+      }
+    });
   }
 
   const { start } = require('./orchestrator');

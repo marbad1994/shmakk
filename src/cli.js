@@ -24,6 +24,15 @@ function parseArgs(argv) {
     profile: null,
     profileSet: null,
     colors: null,
+    endpoint: null,
+    voice: false,
+    stt: false,
+    tts: false,
+    sts: false,
+    voiceModel: null,
+    voiceLanguage: null,
+    voiceMaxDuration: null,
+    ttsVoice: null,
     unknown: [],
   };
 
@@ -62,7 +71,16 @@ function parseArgs(argv) {
         }
         if (!opts.buildHistory.length) opts.buildHistory = null; // flag with no files = auto-detect
         break;
+      case '--stt': opts.stt = true; opts.voice = true; break;
+      case '--tts': opts.tts = true; break;
+      case '--sts': opts.sts = true; opts.stt = true; opts.tts = true; opts.voice = true; break;
+      case '--voice': opts.voice = true; break;
+      case '--voice-model': opts.voiceModel = argv[++i] || null; break;
+      case '--voice-language': opts.voiceLanguage = argv[++i] || null; break;
+      case '--voice-max-sec': opts.voiceMaxDuration = parseInt(argv[++i], 10) || null; break;
+      case '--tts-voice': opts.ttsVoice = argv[++i] || null; break;
       case '--colors': opts.colors = argv[++i] || null; break;
+      case '--endpoint': opts.endpoint = argv[++i] || null; break;
       default: opts.unknown.push(a);
     }
   }
@@ -106,9 +124,35 @@ Optional:
   --yes-files                     Auto-accept write_file, edit_file, and make_dir in auto mode
   --workspace <path>              Override workspace root
   --profile <name>                Startup profile: tiny|balanced|deep|builder|large-app
+  --endpoint <name>               Use endpoint preset from .shmakk/endpoints.json
   --colors <true|false>           Toggle colored logs and code-block highlighting
   --debug                         Verbose logging to stderr
   --print-config                  Print resolved configuration and exit
+
+Speech-to-Text (microphone):
+  --stt                           Enable voice input via local Whisper ONNX
+  --voice                         Same as --stt
+  --voice-model <name>            Whisper model (default: Xenova/whisper-tiny)
+  --voice-language <code>         Language hint (e.g., en, es, fr)
+  --voice-max-sec <sec>           Max recording duration (default: 10)
+
+  With --stt, shmakk uses Whisper ONNX in-process via @huggingface/transformers.
+  No Python, no server, no API key required. Model auto-downloads on first use.
+
+Text-to-Speech (agent voice output):
+  --tts                           Speak agent responses aloud via Kokoro ONNX
+  --sts                           Speech-to-Speech (both --stt + --tts)
+  --tts-voice <name>              TTS voice (default: af_heart)
+
+  TTS uses kokoro-js (Kokoro-82M ONNX). Model auto-downloads on first use (~165MB).
+  Requires: aplay, paplay, or afplay for audio playback.
+
+Voice environment:
+  SHMAKK_HF_CACHE                 HuggingFace cache directory override
+  SHMAKK_TTS_VOICE                Default TTS voice (default: af_heart)
+  SHMAKK_TTS_DTYPE                Kokoro dtype: fp32, fp16, q8, q4, q4f16 (default: q8)
+  SHMAKK_VOICE_LANGUAGE           Language hint for STT (e.g., en, es, fr)
+  SHMAKK_VOICE_MAX_SEC            Max recording seconds (default: 10)
 
 Environment:
   SHMAKK_BASE_URL                 OpenAI-compatible base URL

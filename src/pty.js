@@ -11,7 +11,9 @@ function getSize() {
   };
 }
 
-function startSession({ debug = false } = {}) {
+const VOICE_HOTKEY = 0x0f; // Ctrl+O — triggers voice recording
+
+function startSession({ debug = false, voiceEnabled = false } = {}) {
   const shell = detectShell();
   const cfg = configureForShell(shell.name);
   const { cols, rows } = getSize();
@@ -47,6 +49,16 @@ function startSession({ debug = false } = {}) {
   const onStdin = (data) => {
     const h = topHandler();
     if (h) return h(data);
+
+    // Voice hotkey detection — only when voice is enabled
+    if (voiceEnabled) {
+      const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      if (buf.length === 1 && buf[0] === VOICE_HOTKEY) {
+        ev.emit('voice');
+        return;
+      }
+    }
+
     const cleaned = filterStdin(Buffer.isBuffer(data) ? data : Buffer.from(data));
     if (cleaned.length) child.write(cleaned);
   };

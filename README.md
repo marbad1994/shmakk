@@ -2,7 +2,9 @@
 
 AI-supervised terminal wrapper — command correction, tool-driven task execution, safety confirmations, and profile-based runtime modes.
 
-Your terminal, supercharged by AI.
+Your terminal, supercharged by AI. Optionally: talk to it.
+
+**[Live demo →](https://marbad1994.github.io/shmakk/)**
 
 ## Requirements
 
@@ -48,6 +50,27 @@ You're now in an AI-supervised terminal. Type commands as normal. shmakk will:
 - **Correct mistakes** — typo in `gti status`? shmakk suggests `git status`. If the correction succeeds, shmakk follows up with the agent using your *original* intent, not just the fixed command.
 - **Execute tasks** — ask "set up a new React project" and shmakk handles the steps
 - **Keep you safe** — confirms risky commands before running them
+
+## Voice (optional)
+
+speak naturally — shmakk listens, transcribes, responds, and reads its answer aloud. No push-to-talk.
+
+```bash
+# Install system dependency
+sudo pacman -S sox        # Arch/EndeavourOS
+sudo apt install sox      # Debian/Ubuntu
+brew install sox          # macOS
+
+# Install voice deps and run preflight check
+npm run setup:voice
+
+# Launch in speech-to-speech mode
+shmakk --sts
+```
+
+Say **"stop"** or **"quiet"** to interrupt TTS mid-sentence.
+
+→ Full voice documentation: [docs/voice.md](docs/voice.md)
 
 ## Profiles
 
@@ -96,6 +119,9 @@ shmakk --profile-set deep
 | `shmakk --yes-files` | Auto-accept file writes |
 | `shmakk --no-correction` | Disable command correction |
 | `shmakk --colors true\|false` | Toggle colored output |
+| `shmakk --sts` | Speech-to-speech mode |
+| `shmakk --stt` | Mic input, text responses |
+| `shmakk --tts` | Text input, spoken responses |
 
 ## Safety
 

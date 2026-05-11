@@ -1,0 +1,15 @@
+{
+    "makkorch": {
+        "host": "http://localhost:8787/v1",
+        "headears": "x-router-profile=balanced,x-router-speed=5,x-router-local-preference=true,x-router-allowPaid=true",
+        "model": "auto-cline",
+        "apiKey": "doesnt-matter"
+
+    },
+    "deepseek-pro": {
+        "host": "https://api.deepseek.com/v1",
+        "headers": "",
+        "model": "deepseek-v4-pro",
+        "apiKey": "MY API KEY"
+    }
+}

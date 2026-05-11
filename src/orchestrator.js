@@ -54,6 +54,7 @@ async function start(opts) {
   }
   process.removeListener('SIGTERM', onSigTerm);
   process.removeListener('SIGUSR1', onSigUsr1);
+
   return lastExit;
 }
 
