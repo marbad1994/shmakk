@@ -29,10 +29,14 @@ function parseArgs(argv) {
     stt: false,
     tts: false,
     sts: false,
-    voiceModel: null,
     voiceLanguage: null,
     voiceMaxDuration: null,
+    voiceSilenceSec: null,
+    voiceSilenceThreshold: null,
+    voiceSilenceStartSec: null,
+    voicePadStartSec: null,
     ttsVoice: null,
+    completion: null,
     unknown: [],
   };
 
@@ -74,11 +78,15 @@ function parseArgs(argv) {
       case '--stt': opts.stt = true; opts.voice = true; break;
       case '--tts': opts.tts = true; break;
       case '--sts': opts.sts = true; opts.stt = true; opts.tts = true; opts.voice = true; break;
-      case '--voice': opts.voice = true; break;
-      case '--voice-model': opts.voiceModel = argv[++i] || null; break;
+      case '--voice': opts.stt = true; opts.voice = true; break;
       case '--voice-language': opts.voiceLanguage = argv[++i] || null; break;
       case '--voice-max-sec': opts.voiceMaxDuration = parseInt(argv[++i], 10) || null; break;
+      case '--voice-silence-sec': opts.voiceSilenceSec = argv[++i] || null; break;
+      case '--voice-silence-threshold': opts.voiceSilenceThreshold = argv[++i] || null; break;
+      case '--voice-silence-start-sec': opts.voiceSilenceStartSec = argv[++i] || null; break;
+      case '--voice-pad-start-sec': opts.voicePadStartSec = argv[++i] || null; break;
       case '--tts-voice': opts.ttsVoice = argv[++i] || null; break;
+      case '--completion': opts.completion = argv[++i] || null; break;
       case '--colors': opts.colors = argv[++i] || null; break;
       case '--endpoint': opts.endpoint = argv[++i] || null; break;
       default: opts.unknown.push(a);
@@ -129,30 +137,35 @@ Optional:
   --debug                         Verbose logging to stderr
   --print-config                  Print resolved configuration and exit
 
-Speech-to-Text (microphone):
-  --stt                           Enable voice input via local Whisper ONNX
-  --voice                         Same as --stt
-  --voice-model <name>            Whisper model (default: Xenova/whisper-tiny)
+Speech-to-Text / Text-to-Speech (VAD-based, no hotkeys):
+  --sts                           Speech-to-Speech: always-on mic + TTS responses
+  --stt                           Speech-to-Text: mic → text input (no TTS)
+  --tts                           Text-to-Speech: text input → spoken responses
   --voice-language <code>         Language hint (e.g., en, es, fr)
-  --voice-max-sec <sec>           Max recording duration (default: 10)
+  --voice-max-sec <sec>           Max recording duration (default: 30)
+  --voice-silence-sec <sec>       VAD silence before stopping (default: 1.0)
+  --voice-silence-threshold <%>   VAD amplitude threshold (default: 1%)
+  --voice-silence-start-sec <sec> Seconds of sound before starting (default: 0.5)
+  --voice-pad-start-sec <sec>     Padding added to start of recording (default: 0.3)
+  --tts-voice <name>              Override rotated voice schedule (default: af_heart)
+  --completion <bash|zsh|fish>    Output shell tab-completion script
 
-  With --stt, shmakk uses Whisper ONNX in-process via @huggingface/transformers.
-  No Python, no server, no API key required. Model auto-downloads on first use.
+  Voice uses Whisper-base ONNX in-process. No Python, no server, no API key.
+  Model auto-downloads on first use.
 
-Text-to-Speech (agent voice output):
-  --tts                           Speak agent responses aloud via Kokoro ONNX
-  --sts                           Speech-to-Speech (both --stt + --tts)
-  --tts-voice <name>              TTS voice (default: af_heart)
-
-  TTS uses kokoro-js (Kokoro-82M ONNX). Model auto-downloads on first use (~165MB).
+  TTS uses kokoro-js (Kokoro-82M ONNX, ~334MB fp16). Model auto-downloads on first use.
   Requires: aplay, paplay, or afplay for audio playback.
+  All 28 Kokoro voices rotate automatically on a daily schedule.
 
 Voice environment:
   SHMAKK_HF_CACHE                 HuggingFace cache directory override
-  SHMAKK_TTS_VOICE                Default TTS voice (default: af_heart)
-  SHMAKK_TTS_DTYPE                Kokoro dtype: fp32, fp16, q8, q4, q4f16 (default: q8)
+  SHMAKK_TTS_VOICE                Pin a specific TTS voice (default: auto-rotated)
+  SHMAKK_TTS_DTYPE                Kokoro dtype: fp32, fp16, q8, q4, q4f16 (default: fp16)
   SHMAKK_VOICE_LANGUAGE           Language hint for STT (e.g., en, es, fr)
-  SHMAKK_VOICE_MAX_SEC            Max recording seconds (default: 10)
+  SHMAKK_VOICE_MAX_SEC            Max recording seconds (default: 30)
+  SHMAKK_VOICE_SILENCE_SEC        VAD silence threshold seconds (default: 1.0)
+  SHMAKK_VOICE_SILENCE_THRESHOLD  VAD amplitude threshold (default: 1%)
+  SHMAKK_VOICE_PAD_START_SEC      Padding added to start of recording (default: 0.3)
 
 Environment:
   SHMAKK_BASE_URL                 OpenAI-compatible base URL

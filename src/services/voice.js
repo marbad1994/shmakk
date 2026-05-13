@@ -9,16 +9,21 @@ const { spawn, execSync } = require('child_process');
 
 const AUDIO_DIR = path.join(os.tmpdir(), 'shmakk-voice');
 const MAX_RECORD_SEC = 30;
-const SILENCE_SEC = parseFloat(process.env.SHMAKK_VOICE_SILENCE_SEC || '1.0');
-const SILENCE_THRESHOLD = process.env.SHMAKK_VOICE_SILENCE_THRESHOLD || '1%';
-const SILENCE_START_SEC = parseFloat(process.env.SHMAKK_VOICE_SILENCE_START_SEC || '0.5');
+const SILENCE_SEC = parseFloat(process.env.SHMAKK_VOICE_SILENCE_SEC || '1.8');
+const SILENCE_THRESHOLD = process.env.SHMAKK_VOICE_SILENCE_THRESHOLD || '2%';
+const SILENCE_START_SEC = parseFloat(process.env.SHMAKK_VOICE_SILENCE_START_SEC || '0.15');
 const PAD_START_SEC = parseFloat(process.env.SHMAKK_VOICE_PAD_START_SEC || '0.3');
+// Post-recording RMS gate (0..1, on int16 normalized). Below this is treated
+// as noise/silence and never sent to Whisper. Tunable for noisy rooms.
+const MIN_RMS = parseFloat(process.env.SHMAKK_VOICE_MIN_RMS || '0.003');
+// Minimum captured speech duration in seconds (anything shorter is noise).
+const MIN_SPEECH_SEC = parseFloat(process.env.SHMAKK_VOICE_MIN_SPEECH_SEC || '0.5');
 
 // Track active TTS playback process so we can kill it on interrupt
 let _ttsProc = null;
 let _ttsKilled = false;
-exports._setTtsProc = (proc) => { _ttsProc = proc; _ttsKilled = false; };
-exports._isTtsKilled = () => _ttsKilled;
+function _setTtsProc(proc) { _ttsProc = proc; _ttsKilled = false; }
+function _isTtsKilled() { return _ttsKilled; }
 
 function _killTts() {
   if (_ttsProc) {
@@ -26,6 +31,21 @@ function _killTts() {
     _ttsProc = null;
   }
   _ttsKilled = true;
+  // Also cancel sentence streaming (avoids wasted generation)
+  try {
+    const tts = require('./tts');
+    tts.stopSpeaking();
+  } catch {}
+}
+
+// Track active recorder process so we can kill it on Ctrl+C
+let _recorderProc = null;
+
+function _killRecorder() {
+  if (_recorderProc) {
+    try { _recorderProc.kill('SIGTERM'); } catch {}
+    _recorderProc = null;
+  }
 }
 
 function ensureAudioDir() {
@@ -37,39 +57,48 @@ function ensureAudioDir() {
  * Sox is preferred because it supports VAD silence detection.
  * Returns { cmd, args, ext, label } or null if none found.
  */
+// Cached recorder detection — only runs once per process lifetime
+let _cachedRecorder = undefined;
 function detectRecorder() {
-  // 1. rec (sox frontend) — preferred
+  if (_cachedRecorder !== undefined) return _cachedRecorder;
+
+  // Use a single `which` call with all candidates for instant detection
+  let whichOut = '';
   try {
-    const out = execSync('which rec 2>/dev/null', {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000,
+    whichOut = execSync('which rec sox ffmpeg arecord 2>/dev/null', {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 1000,
     });
-    if (out.trim()) return { cmd: out.trim(), ext: '.wav', label: 'rec (Sox)', vad: true, useSoxInput: false };
   } catch {}
+
+  const found = new Set(
+    whichOut.split('\n').map(s => s.trim()).filter(Boolean)
+  );
+
+  // 1. rec (sox frontend) — preferred
+  if (found.has('rec') || [...found].some(p => p.endsWith('/rec'))) {
+    _cachedRecorder = { cmd: 'rec', ext: '.wav', label: 'rec (Sox)', vad: true, useSoxInput: false };
+    return _cachedRecorder;
+  }
 
   // 2. sox with explicit pulse input
-  try {
-    const out = execSync('which sox 2>/dev/null', {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000,
-    });
-    if (out.trim()) return { cmd: out.trim(), ext: '.wav', label: 'sox (Sox)', vad: true, useSoxInput: true };
-  } catch {}
+  if (found.has('sox') || [...found].some(p => p.endsWith('/sox'))) {
+    _cachedRecorder = { cmd: 'sox', ext: '.wav', label: 'sox (Sox)', vad: true, useSoxInput: true };
+    return _cachedRecorder;
+  }
 
-  // 2. ffmpeg — no VAD, fixed duration fallback
-  try {
-    const out = execSync('which ffmpeg 2>/dev/null', {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000,
-    });
-    if (out.trim()) return { cmd: 'ffmpeg', ext: '.wav', label: 'ffmpeg', vad: false };
-  } catch {}
+  // 3. ffmpeg — no VAD, fixed duration fallback
+  if (found.has('ffmpeg') || [...found].some(p => p.endsWith('/ffmpeg'))) {
+    _cachedRecorder = { cmd: 'ffmpeg', ext: '.wav', label: 'ffmpeg', vad: false };
+    return _cachedRecorder;
+  }
 
-  // 3. arecord — no VAD, fixed duration fallback
-  try {
-    const out = execSync('which arecord 2>/dev/null', {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000,
-    });
-    if (out.trim()) return { cmd: 'arecord', ext: '.wav', label: 'arecord (ALSA)', vad: false };
-  } catch {}
+  // 4. arecord — no VAD, fixed duration fallback
+  if (found.has('arecord') || [...found].some(p => p.endsWith('/arecord'))) {
+    _cachedRecorder = { cmd: 'arecord', ext: '.wav', label: 'arecord (ALSA)', vad: false };
+    return _cachedRecorder;
+  }
 
+  _cachedRecorder = null;
   return null;
 }
 
@@ -120,16 +149,20 @@ function recordAudio(recorder, outFile, { maxDurationSec = MAX_RECORD_SEC } = {}
       return reject(new Error('Unknown recorder'));
     }
 
+    // Track for external kill (Ctrl+C)
+    _recorderProc = proc;
+
     const timeout = setTimeout(() => { try { proc.kill('SIGTERM'); } catch {} },
       (maxDurationSec + 5) * 1000);
 
     proc.on('exit', (code) => {
       clearTimeout(timeout);
-      // sox exits 0 normally; ffmpeg exits 255 on SIGTERM
-      if (code === 0 || code === null || code === 255 || code === 141) resolve();
+      if (_recorderProc === proc) _recorderProc = null;
+      // sox exits 0 normally; ffmpeg exits 255 on SIGTERM; 143 = killed by SIGTERM
+      if (code === 0 || code === null || code === 255 || code === 143 || code === 141) resolve();
       else reject(new Error(`recorder exited ${code}`));
     });
-    proc.on('error', (err) => { clearTimeout(timeout); reject(err); });
+    proc.on('error', (err) => { clearTimeout(timeout); if (_recorderProc === proc) _recorderProc = null; reject(err); });
   });
 }
 
@@ -147,7 +180,33 @@ async function transcribeAudio(audioPath, opts = {}) {
  */
 const STOP_WORDS = new Set(['stop', 'quiet', 'shut up', 'silence', 'enough', 'cancel']);
 
-async function recordAndTranscribe({ language, maxDurationSec, onStart, onStop } = {}) {
+// Whisper hallucination patterns — common output on silence/non-speech.
+// Normalize aggressively: lowercase, strip punctuation/whitespace, then match.
+const HALLUCINATION_PATTERNS = [
+  /^you[.!?]*$/i,
+  /^(bye|goodbye)\s*(you)?[.!?]*$/i,
+  /^thank\s*you[.!?]*$/i,
+  /^(thanks\s*for\s*watching|please\s*subscribe|subscribe)[.!?]*$/i,
+  /^(the|a|an|um|uh|uhh|hmm|mhm|bye|goodbye|stop|quiet|go|okay|ok|yeah|yes|no)[.!?]*$/i,
+  /^(i'?m\s+)?(sorry|fine)[.!?]*$/i,
+  /^[.,;:!?]+$/,
+  /^[\s.,;:!?]*$/,
+  // very short utterances that are 90%+ punctuation/symbols
+  /^[\W_]{1,3}\w{0,2}[\W_]*$/,
+];
+
+function filterHallucination(text) {
+  if (!text) return text;
+  const cleaned = text.trim().replace(/[.,!?;:]+$/, '').trim();
+  for (const re of HALLUCINATION_PATTERNS) {
+    if (re.test(cleaned)) return '';
+  }
+  // Single character or just non-alphanumeric
+  if (cleaned.length <= 2 && !/[a-z0-9]/i.test(cleaned)) return '';
+  return text;
+}
+
+async function recordAndTranscribe({ language, maxDurationSec, onStart, onStop, suppressKillTts = false } = {}) {
   ensureAudioDir();
   const recorder = detectRecorder();
   if (!recorder) {
@@ -156,8 +215,9 @@ async function recordAndTranscribe({ language, maxDurationSec, onStart, onStop }
     );
   }
 
-  // Kill TTS so the AI stops talking when user starts speaking
-  _killTts();
+  // Kill TTS so the AI stops talking when user starts speaking.
+  // Suppressed in the interrupt-listener path where TTS is intentionally running.
+  if (!suppressKillTts) _killTts();
 
   const outFile = path.join(AUDIO_DIR, `voice-${Date.now()}.wav`);
   if (onStart) onStart();
@@ -169,19 +229,70 @@ async function recordAndTranscribe({ language, maxDurationSec, onStart, onStop }
   }
   if (onStop) onStop();
 
+  // Energy gate: if the captured audio is too quiet or too short, drop it
+  // without invoking Whisper. Whisper invents text from near-silence
+  // ("Bye you.", "Thank you for watching."), so we must filter at the
+  // audio level, not just the text level.
+  try {
+    const { rms, durationSec } = audioStats(outFile);
+    if (rms < MIN_RMS || durationSec < MIN_SPEECH_SEC) {
+      if (rms > 0.0001) { // only log if there was actual audio — skip pure silence
+        process.stderr.write(
+          `\r\x1b[90m[voice] skip (too quiet): rms=${rms.toFixed(4)} dur=${durationSec.toFixed(2)}s — tune with SHMAKK_VOICE_MIN_RMS\x1b[0m\n`,
+        );
+      }
+      cleanupFile(outFile);
+      return '';
+    }
+    if (process.env.SHMAKK_VOICE_DEBUG) {
+      process.stderr.write(
+        `\r\x1b[90m[voice] accept: rms=${rms.toFixed(4)} dur=${durationSec.toFixed(2)}s\x1b[0m\n`,
+      );
+    }
+  } catch {}
+
   try {
     const text = await transcribeAudio(outFile, { language: language || 'english' });
+    // Filter common Whisper hallucinations (standalone "You", "Thank you", etc.)
+    const filtered = filterHallucination(text);
     // Check for stop words — kill TTS and discard
-    if (text && STOP_WORDS.has(text.toLowerCase().trim().replace(/[.!?]$/, ''))) {
+    if (filtered && STOP_WORDS.has(filtered.toLowerCase().trim().replace(/[.!?]$/, ''))) {
       _killTts();
       process.stderr.write(`\r\x1b[33m🤫 stopped\x1b[0m\n`);
       return '';
     }
     // Write transcript to stderr so it shows in terminal but isn't injected as input
-    if (text) process.stderr.write(`\r\x1b[36m🎤 ${text}\x1b[0m\n`);
-    return text;
+    if (filtered) process.stderr.write(`\r\x1b[36m🎤 ${filtered}\x1b[0m\n`);
+    return filtered;
   } finally {
     cleanupFile(outFile);
+  }
+}
+
+/**
+ * Compute audio stats from a captured WAV — used to drop near-silent
+ * recordings before they reach Whisper (which hallucinates on silence).
+ * Returns { rms, durationSec } where rms is in [0,1] over int16-normalized samples.
+ */
+function audioStats(wavPath) {
+  try {
+    const { WaveFile } = require('wavefile');
+    const wav = new WaveFile(fs.readFileSync(wavPath));
+    const sampleRate = wav.fmt.sampleRate || 16000;
+    // toBuffer/getSamples handles bit-depth normalization
+    const samples = wav.getSamples(true, Int16Array); // mono, int16
+    if (!samples || !samples.length) return { rms: 0, durationSec: 0 };
+    let sumSq = 0;
+    for (let i = 0; i < samples.length; i++) {
+      const v = samples[i] / 32768;
+      sumSq += v * v;
+    }
+    return {
+      rms: Math.sqrt(sumSq / samples.length),
+      durationSec: samples.length / sampleRate,
+    };
+  } catch {
+    return { rms: 1, durationSec: 999 }; // fail open — let Whisper try
   }
 }
 
@@ -243,4 +354,12 @@ module.exports = {
   isAvailable,
   detectRecorder,
   MAX_RECORD_SEC,
+  _killTts,
+  _killRecorder,
+  _setTtsProc,
+  _isTtsKilled,
+  /** Preload STT model in background so first transcription is instant. */
+  preloadSTT() {
+    try { require('./stt')._ensureModel(); } catch {}
+  },
 };

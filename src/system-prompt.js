@@ -10,6 +10,7 @@ function buildSystemPrompt({
   activeSkillText,
   maxDiscoveryCallsPerRound,
   runtimeProfile,
+  voiceMode = false,
 }) {
   return `You are an expert AI coding assistant running inside shmakk.
 
@@ -255,6 +256,7 @@ Otherwise output only:
 {"shmakk_actions":[{"tool":"tool_name","args":{...}}]}
 ${indexHint}
 ${activeSkillText ? `\n\n${activeSkillText}` : ''}
+${voiceMode ? `\n\nVOICE MODE: The user is speaking to you. Keep every reply under 2 sentences. No bullet points, no markdown, no code blocks unless explicitly asked. Speak like a human, not a document.` : ''}
 `;
 }
 

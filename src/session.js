@@ -5,6 +5,7 @@
 const { startSession } = require('./pty');
 const { correct } = require('./correction');
 const { runAgent, clearTaskJournal } = require('./agent');
+const { clearIndex } = require('./workspace-index');
 const { loadGlossary } = require('./glossary');
 const { isConfigured } = require('./llm');
 const { makePrompter, decisionBanner } = require('./review');
@@ -33,6 +34,17 @@ const FLUSH_AFTER_BYTES = 8 * 1024;
 // Cap on conversation history kept between agent runs (entries past this
 // limit are dropped from the front, preserving the most recent context).
 const HISTORY_MAX_ENTRIES = 30;
+
+// Kitty terminal sends \x1b[99;5u instead of \x03 for Ctrl+C.
+// Returns the byte index of the first Ctrl+C (either form), or -1.
+const KITTY_CTRL_C = Buffer.from([0x1b, 0x5b, 0x39, 0x39, 0x3b, 0x35, 0x75]); // \x1b[99;5u
+function findCtrlC(data) {
+  for (let i = 0; i < data.length; i++) {
+    if (data[i] === 0x03) return i;
+    if (data[i] === 0x1b && data.slice(i, i + KITTY_CTRL_C.length).equals(KITTY_CTRL_C)) return i;
+  }
+  return -1;
+}
 
 function isAbortError(e) {
   return e && (e.name === 'AbortError' || /aborted/i.test(String(e.message || '')));
@@ -115,6 +127,22 @@ async function runOneSession(opts, registerSession) {
   }
   audit.append({ kind: 'session-start', workspace: cwd, pinnedWorkspace, review: !!opts.review, pid: process.pid });
 
+  // ── Global Ctrl+C handler (persistent bottom-of-stack) ──
+  // Ctrl+C = shut up. Kills TTS, recorder, and voice loop immediately.
+  // Ctrl+D exits the shell as normal (we never intercept it).
+  session.captureStdin((data) => {
+    if (opts.tts || opts.stt || opts.sts) {
+      const cut = findCtrlC(data);
+      if (cut !== -1) {
+        try { fullVoiceTeardown(); } catch {}
+        if (cut > 0) session.childWrite(data.slice(0, cut));
+        session.childWrite('\r');
+        return;
+      }
+    }
+    session.childWrite(data);
+  });
+
   // Conversation history — persists across agent invocations within one
   // session so follow-up questions like "now check the imports" make sense.
   let history = [];
@@ -145,22 +173,22 @@ async function runOneSession(opts, registerSession) {
   // ── Ctrl-C-aware AI work wrapper ──
   // Installs a stdin tap that watches for 0x03 → aborts the controller.
   // Other bytes pass through to the shell so the user can keep typing.
+  // In STS mode, Ctrl+C also tears down TTS, recording, and the voice
+  // loop — otherwise the user is trapped because this handler sits on
+  // top of the global one and would normally eat the keypress.
   async function withAI(fn) {
     const ctrl = new AbortController();
-    // A single task can legitimately attach many short-lived abort listeners
-    // across provider SDK calls and tool helpers.
     setMaxListeners(0, ctrl.signal);
     const release = session.captureStdin((data) => {
-      let cut = -1;
-      for (let i = 0; i < data.length; i++) {
-        if (data[i] === 0x03) { cut = i; break; }
-      }
+      const cut = findCtrlC(data);
       if (cut === -1) {
         session.childWrite(data);
         return;
       }
-      // pass any pre-^C bytes; abort; drop the rest
       if (cut > 0) session.childWrite(data.slice(0, cut));
+      if (opts.sts || opts.tts || opts.stt) {
+        try { fullVoiceTeardown(); } catch {}
+      }
       ctrl.abort(new Error('interrupted'));
     });
     try {
@@ -170,28 +198,146 @@ async function runOneSession(opts, registerSession) {
     }
   }
 
+  // Single-press emergency stop for all voice machinery. Called by both
+  // the global Ctrl+C handler and the withAI handler so the user can
+  // escape no matter which one is on top of the stdin stack.
+  function fullVoiceTeardown() {
+    try {
+      if (opts.tts || opts.sts) {
+        const tts = getTTSService();
+        const vs = getVoiceService();
+        vs._killTts();
+        tts.stopSpeaking();
+      }
+      if (opts.stt || opts.sts) {
+        getVoiceService()._killRecorder();
+      }
+      if (session._stsFlags) {
+        session._stsFlags.setTtsSpeaking(false);
+        if (session._stsFlags.stopLoop) session._stsFlags.stopLoop();
+      }
+    } catch {}
+  }
+
   session.ev.on('cwd', (p) => { if (p) cwd = p; });
   function resetHistory() {
     history = [];
     try { clearTaskJournal(currentRoots()[0]); } catch {}
-    out('\r\n\x1b[33m[shmakk] conversation + task journal cleared\x1b[0m\r\n');
+    try { clearIndex(currentRoots()[0]); } catch {}
+    out('\r\n\x1b[33m[shmakk] conversation + task journal + workspace index cleared\x1b[0m\r\n');
   }
   registerSession(session, resetHistory);
+
+  // ── Voice-as-agent-task helper ──
+  // Routes transcribed speech straight to the LLM agent and (optionally)
+  // speaks the response. Bypasses the shell entirely, so transcripts never
+  // get executed as commands or run through the correction engine.
+  let voiceTaskRunning = false;
+  async function runVoiceAsTask(text) {
+    if (!text || voiceTaskRunning) return;
+    if (!isConfigured()) {
+      out('\r\n\x1b[33m[shmakk] LLM not configured — voice input ignored\x1b[0m\r\n');
+      return;
+    }
+    voiceTaskRunning = true;
+    try {
+      await withAI(async (ctrl) => {
+        out('\x1b[36m[shmakk voice→task] (Ctrl-C to interrupt)\x1b[0m\r\n');
+        try {
+          const updated = await runAgent({
+            input: text, roots: currentRoots(), glossary,
+            confirmTool: makeToolConfirm(opts, ask, out, () => ctrl.abort()),
+            write: out,
+            signal: ctrl.signal,
+            history,
+            profile: opts.profile,
+            colors: colorsEnabled,
+            voiceMode: true,
+          });
+          history = trimHistory(updated || history);
+          if ((opts.tts || opts.sts) && updated && updated.length) {
+            const lastAssistant = [...updated].reverse().find((m) => m.role === 'assistant');
+            if (lastAssistant?.content) {
+              const reply = typeof lastAssistant.content === 'string'
+                ? lastAssistant.content
+                : lastAssistant.content.map((c) => c.text || '').join(' ');
+              if (reply) {
+                if (opts.sts || opts.stt) {
+                  try { getVoiceService()._killRecorder(); } catch {}
+                }
+                if (session._stsFlags) session._stsFlags.setTtsSpeaking(true);
+                session._ttsGen = (session._ttsGen || 0) + 1;
+                const myGen = session._ttsGen;
+                const ttsVoice = opts.ttsVoice || process.env.SHMAKK_TTS_VOICE || 'af_heart';
+                const tts = getTTSService();
+                const settle = (err) => {
+                  if (session._ttsGen !== myGen) return;
+                  if (session._stsFlags) session._stsFlags.setTtsSpeaking(false);
+                  if (err && opts.debug) process.stderr.write(`[shmakk] tts: ${err.message}\n`);
+                };
+                // Parallel interrupt listener — lets user say "stop" to cut TTS.
+                // suppressKillTts=true so recording alongside TTS doesn't immediately kill it.
+                // Loop is gated on myGen so it stops the moment settle() fires.
+                const STOP_WORDS = new Set(['stop', 'quiet', 'shut up', 'silence', 'enough', 'cancel']);
+                let interruptListening = true;
+                const listenForInterrupt = async () => {
+                  const vs = getVoiceService();
+                  while (interruptListening && session._ttsGen === myGen) {
+                    try {
+                      const heard = await vs.recordAndTranscribe({ maxDurationSec: 2, suppressKillTts: true });
+                      if (!heard) continue;
+                      if (STOP_WORDS.has(heard.toLowerCase().trim().replace(/[.!?]$/, ''))) {
+                        try { fullVoiceTeardown(); } catch {}
+                        break;
+                      }
+                    } catch { break; }
+                  }
+                };
+                listenForInterrupt().catch(() => {});
+                const settleAndStop = (err) => {
+                  interruptListening = false; // stop interrupt loop before unpausing voice loop
+                  settle(err);
+                };
+                tts.speak(reply, { voice: ttsVoice }).then(() => settleAndStop()).catch(settleAndStop);
+              }
+            }
+          }
+          session.childWrite('\r');
+        } catch (e) {
+          if (isAbortError(e)) out('\r\n\x1b[33m[shmakk] interrupted\x1b[0m\r\n');
+          else out(`\r\n[shmakk] task error: ${e.message}\r\n`);
+        }
+      });
+    } finally {
+      voiceTaskRunning = false;
+    }
+  }
 
   // ── Continuous voice loop (--sts always-on) ──
   // When --sts is active, runs a background loop: listen → transcribe → inject.
   // No hotkey needed — just speak and pause.
+  // Pauses while TTS is speaking to avoid feedback loop.
   if (opts.sts) {
     const vs = getVoiceService();
     if (!vs.isAvailable()) {
       out('\r\n\x1b[33m[shmakk] no audio recorder found. Install sox.\x1b[0m\r\n');
     } else {
+      // Preload STT model in background so first transcription doesn't lag
+      try { vs.preloadSTT(); } catch {}
       let voiceLoopActive = true;
       let voiceBusy = false;
+      // Set when TTS starts, cleared when TTS finishes — voice loop pauses
+      let ttsSpeaking = false;
+      let ttsStoppedAt = 0;  // last time TTS finished (for cooldown)
 
       const voiceLoop = async () => {
         while (voiceLoopActive) {
           if (voiceBusy) { await new Promise(r => setTimeout(r, 100)); continue; }
+          // Pause recording while TTS is playing to avoid feedback loop.
+          // User can interrupt TTS by pressing Ctrl+C (handled globally).
+          if (ttsSpeaking) { await new Promise(r => setTimeout(r, 200)); continue; }
+          // Small cooldown after TTS stops — avoids picking up reverb
+          if (Date.now() - ttsStoppedAt < 1200) { await new Promise(r => setTimeout(r, 100)); continue; }
           voiceBusy = true;
           try {
             const text = await vs.recordAndTranscribe({
@@ -199,11 +345,13 @@ async function runOneSession(opts, registerSession) {
               maxDurationSec: parseInt(opts.voiceMaxDuration || process.env.SHMAKK_VOICE_MAX_SEC || '30', 10),
             });
             if (text && voiceLoopActive) {
-              session.childWrite(text + '\r');
+              // Send straight to the LLM agent — do NOT inject into the
+              // shell. Otherwise the correction engine will rewrite
+              // mis-transcribed fragments into real commands.
+              await runVoiceAsTask(text);
             }
           } catch (err) {
             if (opts.debug) process.stderr.write(`[shmakk voice] ${err.message}\n`);
-            // Brief pause on error before retrying
             await new Promise(r => setTimeout(r, 1000));
           } finally {
             voiceBusy = false;
@@ -216,6 +364,13 @@ async function runOneSession(opts, registerSession) {
 
       // Stop loop on session exit
       session.waitExit().then(() => { voiceLoopActive = false; });
+
+      // Expose setter for TTS module to pause/resume voice loop
+      // (used in the exit handler where TTS is launched)
+      if (!session._stsFlags) session._stsFlags = {};
+      session._stsFlags.setTtsSpeaking = (v) => { ttsSpeaking = v; if (!v) ttsStoppedAt = Date.now(); };
+      // Let the global Ctrl+C handler stop the STS loop on double-press.
+      session._stsFlags.stopLoop = () => { voiceLoopActive = false; };
     }
   }
 
@@ -243,7 +398,13 @@ async function runOneSession(opts, registerSession) {
         let recordingDone = false;
         const release = session.captureStdin((data) => {
           for (let i = 0; i < data.length; i++) {
-            if (data[i] === 0x03 || data[i] === 0x0f) { recordingDone = true; release(); return; }
+            if (data[i] === 0x03 || data[i] === 0x0f || findCtrlC(data) !== -1) {
+              recordingDone = true;
+              // Kill the recorder process immediately
+              try { vs._killRecorder(); } catch {}
+              release();
+              return;
+            }
           }
           session.childWrite(data);
         });
@@ -257,8 +418,9 @@ async function runOneSession(opts, registerSession) {
           },
         });
         if (text) {
-          // transcript already echoed to stderr by voice service
-          session.childWrite(text);
+          // Route to the agent, not the shell, so the correction engine
+          // doesn't try to turn transcripts into commands.
+          await runVoiceAsTask(text);
         } else {
           out('\r\x1b[33m[shmakk] no speech detected\x1b[0m\r\n');
         }
@@ -426,12 +588,26 @@ async function runOneSession(opts, registerSession) {
               ? lastAssistant.content
               : lastAssistant.content.map((c) => c.text || '').join(' ');
             if (text) {
+              // Interrupt any active voice recording so the mic doesn't
+              // pick up TTS audio as the next voice command.
+              if (opts.sts || opts.stt) {
+                try { getVoiceService()._killRecorder(); } catch {}
+              }
+              // Pause STS voice loop while TTS is speaking.
+              // Use a generation counter so only the latest speak's settle
+              // flips ttsSpeaking back to false — prevents an earlier,
+              // already-cancelled speak from unpausing the mic mid-sentence.
+              if (session._stsFlags) session._stsFlags.setTtsSpeaking(true);
+              session._ttsGen = (session._ttsGen || 0) + 1;
+              const myGen = session._ttsGen;
               const ttsVoice = opts.ttsVoice || process.env.SHMAKK_TTS_VOICE || 'af_heart';
               const tts = getTTSService();
-              tts.speak(text, { voice: ttsVoice }).catch((err) => {
-                // Fire-and-forget; ignore playback errors
-                if (opts.debug) process.stderr.write(`[shmakk] tts: ${err.message}\n`);
-              });
+              const settle = (err) => {
+                if (session._ttsGen !== myGen) return;
+                if (session._stsFlags) session._stsFlags.setTtsSpeaking(false);
+                if (err && opts.debug) process.stderr.write(`[shmakk] tts: ${err.message}\n`);
+              };
+              tts.speak(text, { voice: ttsVoice }).then(() => settle()).catch(settle);
             }
           }
         }

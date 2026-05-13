@@ -206,4 +206,8 @@ function relevantSubgraph(index, query, limit = 12, maxHops = 1) {
   return out;
 }
 
-module.exports = { buildOrRefreshIndex, relevantFiles, relevantSubgraph };
+function clearIndex(root) {
+  try { fs.rmSync(indexFilePath(root), { force: true }); } catch {}
+}
+
+module.exports = { buildOrRefreshIndex, clearIndex, relevantFiles, relevantSubgraph };

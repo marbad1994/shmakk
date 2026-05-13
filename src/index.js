@@ -31,6 +31,17 @@ async function main() {
     process.exit(0);
   }
 
+  if (opts.completion) {
+    const { generate } = require('./completions');
+    try {
+      process.stdout.write(generate(opts.completion));
+      process.exit(0);
+    } catch (e) {
+      process.stderr.write(`[shmakk] ${e.message}\n`);
+      process.exit(1);
+    }
+  }
+
   if (opts.printConfig) {
     const profile = resolveProfile(opts.profile || process.env.SHMAKK_PROFILE);
     const cfg = {
@@ -133,6 +144,16 @@ async function main() {
       }
     });
   }
+
+  // Pre-seed SHMAKK_VOICE_* env vars from CLI flags before voice module loads.
+  // voice.js reads these at require-time; orchestrator → session → getVoiceService().
+  if (opts.voiceLanguage) process.env.SHMAKK_VOICE_LANGUAGE = opts.voiceLanguage;
+  if (opts.voiceMaxDuration) process.env.SHMAKK_VOICE_MAX_SEC = String(opts.voiceMaxDuration);
+  if (opts.voiceSilenceSec) process.env.SHMAKK_VOICE_SILENCE_SEC = opts.voiceSilenceSec;
+  if (opts.voiceSilenceThreshold) process.env.SHMAKK_VOICE_SILENCE_THRESHOLD = opts.voiceSilenceThreshold;
+  if (opts.voiceSilenceStartSec) process.env.SHMAKK_VOICE_SILENCE_START_SEC = opts.voiceSilenceStartSec;
+  if (opts.voicePadStartSec) process.env.SHMAKK_VOICE_PAD_START_SEC = opts.voicePadStartSec;
+  if (opts.ttsVoice) process.env.SHMAKK_TTS_VOICE = opts.ttsVoice;
 
   const { start } = require('./orchestrator');
   const exitCode = await start(opts);

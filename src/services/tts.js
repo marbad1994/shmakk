@@ -1,3 +1,58 @@
+// Text-to-speech via Kokoro ONNX using kokoro-js.
+// No Python, no server — 100% JS, runs locally in-process.
+// Model auto-downloads on first use (~334MB quantized Kokoro-82M).
+
+const path = require('path');
+const fs = require('fs');
+const os = require('os');
+const { spawn, spawnSync } = require('child_process');
+const { WaveFile } = require('wavefile');
+
+let _tts = null;
+let _loadPromise = null;
+// Track current speak operation for interrupt support
+let _currentSpeakCtrl = null;
+let _currentSpeakAborted = false;
+
+/**
+ * Stop any active TTS playback immediately.
+ * Kills the audio player process and cancels sentence streaming.
+ */
+function stopSpeaking() {
+  _currentSpeakAborted = true;
+  if (_currentSpeakCtrl) {
+    try { _currentSpeakCtrl.abort(); } catch {}
+    _currentSpeakCtrl = null;
+  }
+  // Also kill the raw audio player process
+  try { require('./voice')._setTtsProc(null); } catch {}
+}
+
+async function _ensureModel() {
+  if (_tts) return _tts;
+
+  if (_loadPromise) return _loadPromise;
+
+  _loadPromise = (async () => {
+    let KokoroTTS;
+    try {
+      ({ KokoroTTS } = require('kokoro-js'));
+    } catch {
+      throw new Error(
+        'Voice deps not installed. Run: npm run setup:voice\n' +
+        'Or: npm install --include=optional'
+      );
+    }
+    _tts = await KokoroTTS.from_pretrained(
+      'onnx-community/Kokoro-82M-v1.0-ONNX',
+      { dtype: process.env.SHMAKK_TTS_DTYPE || 'fp16' },
+    );
+    return _tts;
+  })();
+
+  return _loadPromise;
+}
+
 /**
  * Pick a voice deterministically based on current time.
  * Changes every 2-5 hours (varied per day) so it feels random but is consistent
@@ -28,43 +83,6 @@ function _scheduleVoice(voices) {
   // Pick voice from bucket + day seed
   const voiceSeed = (daySeed ^ (bucket * 2246822519)) >>> 0;
   return voices[voiceSeed % voices.length].id;
-}
-// Text-to-speech via Kokoro ONNX using kokoro-js.
-// No Python, no server — 100% JS, runs locally in-process.
-// Model auto-downloads on first use (~334MB quantized Kokoro-82M).
-
-const path = require('path');
-const fs = require('fs');
-const os = require('os');
-const { spawn, spawnSync } = require('child_process');
-const { WaveFile } = require('wavefile');
-
-let _tts = null;
-let _loadPromise = null;
-
-async function _ensureModel() {
-  if (_tts) return _tts;
-
-  if (_loadPromise) return _loadPromise;
-
-  _loadPromise = (async () => {
-    let KokoroTTS;
-    try {
-      ({ KokoroTTS } = require('kokoro-js'));
-    } catch {
-      throw new Error(
-        'Voice deps not installed. Run: npm run setup:voice\n' +
-        'Or: npm install --include=optional'
-      );
-    }
-    _tts = await KokoroTTS.from_pretrained(
-      'onnx-community/Kokoro-82M-v1.0-ONNX',
-      { dtype: process.env.SHMAKK_TTS_DTYPE || 'fp16' },
-    );
-    return _tts;
-  })();
-
-  return _loadPromise;
 }
 
 /**
@@ -108,7 +126,7 @@ async function generate(text, opts = {}) {
     throw new Error('Empty text for TTS');
   }
 
-  const voice = opts.voice || process.env.SHMAKK_TTS_VOICE || 'af_bella';
+  const voice = opts.voice || process.env.SHMAKK_TTS_VOICE || 'af_heart';
   const tts = await _ensureModel();
 
   // Validate voice
@@ -128,7 +146,8 @@ async function generate(text, opts = {}) {
     }
   }
 
-  const result = await tts.generate(text, { voice: opts.voice || voice });
+  const speed = parseFloat(opts.speed || process.env.SHMAKK_TTS_SPEED || '1.5');
+  const result = await tts.generate(text, { voice: opts.voice || voice, speed });
 
   // result is a RawAudio with .audio (Float32Array) and .sampling_rate
   const audioData = result.audio;
@@ -188,17 +207,24 @@ function playAudio(audioPath) {
   }
 
   if (!cmd) {
-    return false;
+    return Promise.resolve(false);
   }
 
-  // Track process for interrupt support (voice._setTtsProc)
-  const proc = spawn(cmd, args, {
-    stdio: 'ignore',
-    detached: true,
+  return new Promise((resolve) => {
+    const proc = spawn(cmd, args, {
+      stdio: 'ignore',
+    });
+    // Track in voice.js for Ctrl+C interrupt kill
+    try { require('./voice')._setTtsProc(proc); } catch {}
+    proc.on('exit', () => {
+      try { require('./voice')._setTtsProc(null); } catch {}
+      resolve(true);
+    });
+    proc.on('error', () => {
+      try { require('./voice')._setTtsProc(null); } catch {}
+      resolve(false);
+    });
   });
-  proc.unref();
-  try { require('./voice')._setTtsProc(proc); } catch {}
-  return true;
 }
 
 /**
@@ -217,6 +243,12 @@ function splitSentences(text) {
  * Returns a promise that resolves when all audio is queued.
  */
 async function speakStreaming(text, opts = {}) {
+  // Cancel any previous speak operation still in progress
+  stopSpeaking();
+  _currentSpeakAborted = false;
+  _currentSpeakCtrl = new AbortController();
+  const signal = _currentSpeakCtrl.signal;
+
   const tts = await _ensureModel();
   const voices = Object.keys(tts.voices);
   // Use scheduled voice unless explicitly overridden via env or opts
@@ -230,15 +262,21 @@ async function speakStreaming(text, opts = {}) {
   // the first one as soon as it's ready without waiting for the rest.
   for (const sentence of sentences) {
     // Check if interrupted before each sentence
+    if (signal.aborted || _currentSpeakAborted) break;
     const { _isTtsKilled } = require('./voice');
     if (_isTtsKilled && _isTtsKilled()) break;
     try {
       const { audioPath } = await generate(sentence, { voice });
-      playAudio(audioPath);
+      if (signal.aborted || _currentSpeakAborted) {
+        try { fs.unlinkSync(audioPath); } catch {}
+        break;
+      }
+      await playAudio(audioPath);
       // Clean up after a delay
       setTimeout(() => { try { fs.unlinkSync(audioPath); } catch {} }, 10000);
     } catch {}
   }
+  _currentSpeakCtrl = null;
 }
 
 async function speak(text, opts = {}) {
@@ -266,4 +304,4 @@ function isCached() {
   }
 }
 
-module.exports = { generate, speak, speakStreaming, playAudio, listVoices, isCached };
+module.exports = { generate, speak, speakStreaming, playAudio, listVoices, isCached, stopSpeaking };
