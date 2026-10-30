@@ -108,6 +108,10 @@ function preserveCase(original, corrected) {
 }
 
 async function correct({ input, glossary, signal: _unused }) {
+  if (typeof input !== 'string' || !input.trim()) {
+    return { category: 'not_a_correction', proposed: null, safety: 'uncertain', reason: 'empty input' };
+  }
+
   // Pre-filter natural language
   if (looksLikeNaturalLanguage(input)) {
     return { category: 'not_a_correction', proposed: null, safety: 'uncertain', reason: 'looks like natural language' };

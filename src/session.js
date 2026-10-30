@@ -660,6 +660,10 @@ async function runOneSession(opts, registerSession) {
       }
     }
 
+    // No command was observed for this exit (e.g. a non-zero status from the
+    // shell's own startup/PROMPT_COMMAND before the first preexec fired).
+    if (!cmd) { flushPending(); return; }
+
     audit.append({ kind: 'failed-command', cmd, exit: code, cwd });
 
     // ── Correction runs standalone (no LLM needed) ──
