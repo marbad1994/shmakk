@@ -106,7 +106,11 @@ function highlightCodeBlocks(text, enabled = true) {
 
 // ── Main agent entry point ──────────────────────────────────────────────────
 
-async function runAgent({ input, roots, glossary, confirmTool, write, signal, history = [], profile = 'balanced', colors = true, voiceMode = false, specialistHint = null, mcpManager = null, requireToolUse = false }) {
+async function runAgent({ input, roots, glossary, confirmTool, write, signal, history = [], profile = 'balanced', colors = true, voiceMode = false, specialistHint = null, mcpManager = null, requireToolUse = false, onEvent = null }) {
+  // onEvent: optional structured-event sink used by GUI front-ends (web UI).
+  // When present, streaming text, tool calls and results are reported as
+  // objects instead of being rendered to `write` as terminal text.
+  const emit = typeof onEvent === 'function' ? (ev) => { try { onEvent(ev); } catch {} } : null;
   // roots: array of allowed workspace roots (first is the primary cwd).
   // history: prior conversation turns (assistant/user/tool). System prompt
   // is rebuilt fresh each call so the current cwd is always accurate.
@@ -227,16 +231,22 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
     if (promptCacheEnabled && cacheKey) {
       const hit = promptCache.get(roots[0], cacheKey);
       if (hit && hit.content) {
-        write(dim('[shmakk] prompt cache hit', colors) + '\n');
-        write(highlightCodeBlocks(hit.content, colors));
-        if (!hit.content.endsWith('\n')) write('\n');
+        if (emit) {
+          emit({ type: 'message', content: hit.content, cached: true });
+        } else {
+          write(dim('[shmakk] prompt cache hit', colors) + '\n');
+          write(highlightCodeBlocks(hit.content, colors));
+          if (!hit.content.endsWith('\n')) write('\n');
+        }
         messages.push({ role: 'assistant', content: hit.content });
         clearTaskJournal(roots[0]);
         return messages.slice(1);
       }
     }
 
-    const stop = startSpinner(write, i === 0 ? 'thinking' : 'continuing');
+    const spinnerLabel = i === 0 ? 'thinking' : 'continuing';
+    if (emit) emit({ type: 'status', label: spinnerLabel });
+    const stop = emit ? () => {} : startSpinner(write, spinnerLabel);
     const allTools = mcpManager ? [...TOOLS, ...mcpManager.getToolDefinitions()] : TOOLS;
     let stream;
     try {
@@ -264,9 +274,11 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
         if (!delta) continue;
         if (delta.content) {
           content += delta.content;
+          if (emit) emit({ type: 'delta', text: delta.content });
         }
         if (typeof delta.reasoning_content === 'string' && delta.reasoning_content.length) {
           reasoningContent += delta.reasoning_content;
+          if (emit) emit({ type: 'reasoning', text: delta.reasoning_content });
         }
         if (delta.tool_calls) {
           if (!spinnerStopped) { stop(); spinnerStopped = true; }
@@ -297,6 +309,8 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
         });
       }
       content = '';
+      // The streamed text was really a tool call in disguise — take it back.
+      if (emit) emit({ type: 'retract' });
     }
 
     const normalizedToolCalls = applyRoundToolBudget(normalizeToolCalls(toolCalls, i), maxDiscoveryCallsPerRound);
@@ -329,8 +343,12 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
     // No tools → done.
     if (!normalizedToolCalls.length) {
       if (content) {
-        write(highlightCodeBlocks(content, colors));
-        if (!content.endsWith('\n')) write('\n');
+        if (emit) {
+          emit({ type: 'message', content });
+        } else {
+          write(highlightCodeBlocks(content, colors));
+          if (!content.endsWith('\n')) write('\n');
+        }
         producedAnything = true;
         if (promptCacheEnabled && cacheKey) {
           promptCache.put(roots[0], cacheKey, { content });
@@ -351,6 +369,9 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
     const SILENT_TOOLS = new Set(['read_file', 'list_dir', 'web_search', 'fetch_url']);
     let iterProgress = false;
     let silentReads = [];
+    // Text that accompanied tool calls ("I'll read the config first…") is
+    // only surfaced to structured front-ends; the terminal stays quiet.
+    if (emit && content) emit({ type: 'message', content, interim: true });
     for (const c of normalizedToolCalls) {
       let args = {};
       try { args = JSON.parse(c.function.arguments || '{}'); } catch {}
@@ -365,6 +386,7 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
       const cacheKey = `${c.function.name}:${JSON.stringify(args || {})}`;
       const canUseCache = cacheableTools.has(c.function.name);
       let result;
+      if (emit) emit({ type: 'tool_start', id: c.id, name: c.function.name, args });
       if (canUseCache && toolResultCache.has(cacheKey)) {
         result = toolResultCache.get(cacheKey);
       } else {
@@ -373,7 +395,13 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
         iterProgress = true;
       }
 
-      if (result?.error) {
+      if (emit) {
+        emit({
+          type: 'tool_end', id: c.id, name: c.function.name, args, result,
+          summary: summarizeToolResult(c.function.name, result),
+          error: result?.error || null,
+        });
+      } else if (result?.error) {
         // Always show errors regardless of tool type
         write(dim(`→ ${c.function.name}(${shortArgs(args)}) — error: ${result.error}`, colors) + '\n');
       } else if (isSilent) {
@@ -392,7 +420,7 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
     }
 
     // Print batched read summary if any
-    if (silentReads.length) {
+    if (silentReads.length && !emit) {
       write(dim(`· read ${silentReads.length === 1 ? silentReads[0] : silentReads.length + ' files'}`, colors) + '\n');
     }
 
@@ -422,8 +450,12 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
     }, { signal });
     const finalText = final.choices?.[0]?.message?.content || '';
     if (finalText) {
-      write(finalText);
-      if (!finalText.endsWith('\n')) write('\n');
+      if (emit) {
+        emit({ type: 'message', content: finalText });
+      } else {
+        write(finalText);
+        if (!finalText.endsWith('\n')) write('\n');
+      }
       clearTaskJournal(roots[0]);
       return messages.slice(1);
     }
@@ -482,4 +514,5 @@ module.exports = {
   loadTaskJournal,
   clearTaskJournal,
   shouldUseAutoSubagents,
+  summarizeToolResult,
 };

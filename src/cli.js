@@ -40,6 +40,11 @@ function parseArgs(argv) {
     voicePadStartSec: null,
     ttsVoice: null,
     completion: null,
+    web: false,
+    desktop: false,
+    port: null,
+    host: null,
+    noOpen: false,
     unknown: [],
   };
 
@@ -96,6 +101,12 @@ function parseArgs(argv) {
       case '--completion': opts.completion = argv[++i] || null; break;
       case '--colors': opts.colors = argv[++i] || null; break;
       case '--endpoint': opts.endpoint = argv[++i] || null; break;
+      case '--web': opts.web = true; break;
+      case '--desktop': opts.desktop = true; break;
+      case '--port': { const n = parseInt(argv[++i], 10); opts.port = Number.isFinite(n) ? n : null; break; }
+      case '--host': opts.host = argv[++i] || null; break;
+      case '--no-open': opts.noOpen = true; break;
+      case '--new-token': opts.newToken = true; break;
       default: opts.unknown.push(a);
     }
   }
@@ -116,6 +127,16 @@ Usage:
                                   frequency map for better corrections.
                                   Auto-detects bash/zsh/fish history if no
                                   files given.
+
+Graphical interface:
+  shmakk --web                    Start the web UI (chat, terminal, skills, plans, settings…)
+                                  on http://127.0.0.1:4317 and open it in your browser
+  shmakk --desktop                Open the same interface as a desktop app (Electron)
+  --port <n>                      Port for --web (default 4317; 0 = any free port)
+  --host <addr>                   Bind address for --web (default 127.0.0.1; use 0.0.0.0 to
+                                  open it from your phone — the UI is touch-first and installable)
+  --new-token                     Rotate the access token (signs out other devices)
+  --no-open                       Don't open the browser automatically
 
 Control (run from inside an shmakk session):
   shmakk --status                 Show whether this terminal is inside shmakk

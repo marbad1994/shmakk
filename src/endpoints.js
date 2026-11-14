@@ -87,6 +87,12 @@ function getCurrentEndpointName() {
   return currentEndpointName;
 }
 
+// Drop the active preset so plain SHMAKK_* env vars take effect again.
+function clearEndpoint() {
+  currentEndpointName = null;
+  currentEndpointConfig = null;
+}
+
 function listEndpoints(cwd) {
   const endpoints = loadEndpoints(cwd);
   if (!endpoints) return [];
@@ -98,4 +104,6 @@ module.exports = {
   listEndpoints,
   getCurrentEndpoint,
   getCurrentEndpointName,
+  clearEndpoint,
+  loadEndpoints,
 };

@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.0] - 2026-11-14
+
+### Added
+- **Web interface** (`shmakk --web`) — a React app served by a small built-in server, with feature parity with the CLI:
+  chat with streaming markdown, tool timeline with inline diffs, approval cards (review mode / unsafe tools / plans /
+  command corrections), shell mode with the correction engine, plan-first and team runs, an integrated terminal running
+  the real CLI, and pages for skills, memory & rules, plan & resume journal, changes (with revert), session recall,
+  agents & workflows, MCP servers, audit log and settings (provider, endpoints, profile, voice, workspace, theme)
+- `/` commands in the composer and a `Ctrl/⌘ K` command palette mapped onto every CLI flag and self-command
+- Voice in the browser: mic → local Whisper, replies → local Kokoro, with Web Speech fallbacks; hands-free mode
+- **Mobile**: responsive down to phone widths with a bottom tab bar, bottom-sheet dialogs, swipeable drawer,
+  safe-area and on-screen-keyboard handling, a terminal key bar, and an installable PWA manifest
+- **Desktop app** (`shmakk --desktop`, `desktop/`) — Electron shell with native menus, folder picker and window state
+- `--port`, `--host`, `--no-open`, `--new-token` flags; `npm run build:web`, `dev:web`, `test:web`, `web`, `desktop`
+- Conversations persist under `~/.local/state/shmakk/web/`; UI settings in `~/.config/shmakk/web.json` (0600)
+- `runAgent` and `runTeam` accept an optional `onEvent` sink for structured progress (used by the web UI; the
+  terminal output is unchanged when it is not set)
+
+### Security
+- Web server binds to loopback by default, requires a token on every request (HttpOnly, SameSite=Strict cookie or
+  Bearer), rejects cross-origin requests and WebSocket upgrades, and ships a strict Content-Security-Policy
+
 ## [1.1.0] - 2026-05-12
 
 ### Added

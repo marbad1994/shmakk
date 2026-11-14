@@ -51,6 +51,36 @@ You're now in an AI-supervised terminal. Type commands as normal. shmakk will:
 - **Execute tasks** — ask "set up a new React project" and shmakk handles the steps
 - **Keep you safe** — confirms risky commands before running them
 
+## Web & desktop app
+
+Prefer a window to a prompt? The same engine has a full graphical interface — everything the CLI can do, plus things a terminal can't show well (streaming markdown, inline diffs, approval cards, a plan checklist).
+
+```bash
+shmakk --web              # http://127.0.0.1:4317, opens your browser
+shmakk --desktop          # the same UI as a desktop app (Electron)
+```
+
+What you get:
+
+- **Chat** with streaming replies, a live tool timeline, inline diffs, and one-tap **Allow / Deny** for anything risky
+- **Shell mode** (`$ git status`) — failed commands go through the same correction engine, then to the agent
+- **A real terminal** docked at the bottom running the full `shmakk` CLI (or a plain shell)
+- **Skills, memory & rules, plans, changes (with revert), session recall, agents & workflows, MCP servers, audit log, settings** — each a page of its own
+- **`/` commands and a `Ctrl/⌘ K` palette** covering every CLI flag and self-command
+- **Voice** — mic input, read-aloud replies, hands-free mode
+- **Mobile** — fully responsive and installable to your home screen; use `shmakk --web --host 0.0.0.0` and open the printed "phone" link
+
+| Flag | |
+|------|---|
+| `--port <n>` | Port for `--web` (default 4317, `0` = any free port) |
+| `--host <addr>` | Bind address (default `127.0.0.1`) |
+| `--no-open` | Don't open the browser |
+| `--new-token` | Rotate the access token |
+
+The server only listens on your machine by default and every request needs the access token from the launch URL. Running from a git checkout? Build the front-end once with `npm run build:web`. Desktop setup: `cd desktop && npm install` (one time), then `shmakk --desktop`.
+
+→ Details: [docs/web.md](docs/web.md)
+
 ## Voice (optional)
 
 speak naturally — shmakk listens, transcribes, responds, and reads its answer aloud. No push-to-talk.
@@ -121,6 +151,8 @@ The coordinator system enables complex, multi-step task execution with plan-firs
 | Command | What it does |
 |---------|-------------|
 | `shmakk --help` | Show help |
+| `shmakk --web` | Open the web interface |
+| `shmakk --desktop` | Open the desktop app |
 | `shmakk --status` | Check if inside shmakk |
 | `shmakk --stats` | Session statistics |
 | `shmakk --compact` | Clear conversation history |

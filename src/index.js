@@ -153,6 +153,29 @@ async function main() {
     process.exit(2);
   }
 
+  // ── Graphical front-ends ──
+  if (opts.desktop) {
+    const { launchDesktop } = require('./webui/desktop-launcher');
+    process.exit(await launchDesktop(opts));
+  }
+  if (opts.web) {
+    const { runWebCli } = require('./webui/server');
+    const code = await runWebCli({
+      port: opts.port,
+      host: opts.host,
+      workspace: opts.workspace || process.cwd(),
+      open: !opts.noOpen,
+      newToken: opts.newToken,
+      review: opts.review,
+      yesFiles: opts.yesFiles,
+      noCorrection: opts.noCorrection,
+      noAi: opts.noAi,
+      debug: opts.debug,
+      profile: normalizeProfile(opts.profile),
+    });
+    process.exit(code);
+  }
+
   // Lazy-init STT/TTS models if flags are set (model downloads happen on first use)
   if (opts.stt || opts.tts || opts.sts) {
     const initTasks = [];

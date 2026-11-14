@@ -1206,6 +1206,119 @@ function status(symbol, style, label) {
   return `${style}${symbol}${c.reset} ${c.bold}${label}${c.reset}`;
 }
 
+// ── web UI ──────────────────────────────────────────────────────────────────
+
+function withTempHome(fn) {
+  const os = require('os'); const fs = require('fs'); const path = require('path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shmakk-web-test-'));
+  const saved = { HOME: process.env.HOME, XDG_STATE_HOME: process.env.XDG_STATE_HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, cwd: process.cwd() };
+  process.env.HOME = dir; process.env.XDG_STATE_HOME = path.join(dir, 'state'); process.env.XDG_CONFIG_HOME = path.join(dir, 'config');
+  const restore = () => {
+    try { process.chdir(saved.cwd); } catch {}
+    for (const k of ['HOME', 'XDG_STATE_HOME', 'XDG_CONFIG_HOME']) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+    fs.rmSync(dir, { recursive: true, force: true });
+  };
+  return Promise.resolve().then(() => fn(dir)).finally(restore);
+}
+
+test('webui cli: --web/--desktop/--port/--host/--no-open parse', () => {
+  const { parseArgs } = require('../src/cli');
+  const o = parseArgs(['--web', '--port', '0', '--host', '0.0.0.0', '--no-open', '--new-token']);
+  assert.strictEqual(o.web, true);
+  assert.strictEqual(o.port, 0);
+  assert.strictEqual(o.host, '0.0.0.0');
+  assert.strictEqual(o.noOpen, true);
+  assert.strictEqual(o.newToken, true);
+  assert.strictEqual(parseArgs(['--desktop']).desktop, true);
+  assert.deepStrictEqual(o.unknown, []);
+});
+
+test('webui store: conversations round-trip and live states settle on load', () => withTempHome(() => {
+  const store = require('../src/webui/store');
+  const id = store.newId('c');
+  assert.ok(store.safeId(id));
+  assert.strictEqual(store.safeId('../etc/passwd'), null);
+  store.saveConversation({
+    id, title: 't', createdAt: 1, updatedAt: 2, pinned: false, workspace: '/w', cwd: '/w', preview: '', sessionId: null, history: [{ role: 'user', content: 'x' }],
+    items: [
+      { id: 'i1', type: 'assistant', text: 'partial', streaming: true },
+      { id: 'i2', type: 'ask', status: 'pending' },
+      { id: 'i3', type: 'tool', status: 'running' },
+    ],
+  });
+  const conv = store.loadConversation(id);
+  assert.strictEqual(conv.items[0].streaming, false);
+  assert.strictEqual(conv.items[1].status, 'expired');
+  assert.strictEqual(conv.items[2].status, 'interrupted');
+  assert.strictEqual(store.listConversations().length, 1);
+  store.deleteConversation(id);
+  assert.strictEqual(store.listConversations().length, 0);
+}));
+
+test('webui terminal: settings map onto CLI flags', () => {
+  const { cliFlags } = require('../src/webui/terminal');
+  assert.deepStrictEqual(cliFlags({ review: true, yesFiles: true, profile: 'deep' }, '/w'), ['--review', '--yes-files', '--profile', 'deep', '--workspace', '/w']);
+  assert.deepStrictEqual(cliFlags({}, null), []);
+});
+
+test('webui server: token auth, origin check, settings never leak secrets', () => withTempHome(async (dir) => {
+  const { startWebServer } = require('../src/webui/server');
+  const h = await startWebServer({ port: 0, workspace: dir, quiet: true, token: 'tok-test' });
+  try {
+    const get = (p, headers) => fetch(h.baseUrl + p, { headers, redirect: 'manual' });
+    assert.strictEqual((await get('/api/bootstrap')).status, 401);
+    assert.strictEqual((await get('/')).status, 401);
+    assert.strictEqual((await get('/api/bootstrap', { authorization: 'Bearer wrong' })).status, 401);
+    const auth = { authorization: 'Bearer tok-test' };
+    assert.strictEqual((await get('/api/status', { ...auth, origin: 'http://evil.example' })).status, 403);
+    const login = await get('/?token=tok-test');
+    assert.strictEqual(login.status, 302);
+    assert.match(login.headers.get('set-cookie'), /HttpOnly; SameSite=Strict/);
+    assert.strictEqual((await get('/?token=nope')).status, 401);
+    assert.strictEqual((await get('/manifest.webmanifest')).status === 401, false); // public asset (200 when built, 404 otherwise)
+    const boot = await (await get('/api/bootstrap', auth)).json();
+    assert.strictEqual(boot.workspace, require('path').resolve(dir));
+    assert.strictEqual('token' in boot.settings, false);
+    assert.strictEqual('provider' in boot.settings, false);
+    const patched = await (await fetch(h.baseUrl + '/api/settings', { method: 'PATCH', headers: { ...auth, 'content-type': 'application/json' }, body: JSON.stringify({ review: true, profile: 'deep' }) })).json();
+    assert.strictEqual(patched.review, true);
+    assert.strictEqual(patched.profile, 'deep');
+    const bad = await fetch(h.baseUrl + '/api/settings', { method: 'PATCH', headers: { ...auth, 'content-type': 'application/json' }, body: JSON.stringify({ profile: 'nope' }) });
+    assert.strictEqual(bad.status, 400);
+  } finally {
+    await h.close();
+  }
+}));
+
+test('webui chat: self-commands and shell mode run without an LLM', () => withTempHome(async (dir) => {
+  const savedUrl = process.env.SHMAKK_BASE_URL;
+  delete process.env.SHMAKK_BASE_URL;
+  const { ChatManager } = require('../src/webui/chat');
+  const settings = { ...require('../src/webui/store').DEFAULT_SETTINGS };
+  const chat = new ChatManager({ settings, saveSettings() {}, broadcast() {}, mcpManager: null, getWorkspace: () => dir, onProviderChanged() {} });
+  const conv = chat.create();
+  const idle = () => new Promise((r) => { const t = setInterval(() => { if (!conv.run) { clearInterval(t); r(); } }, 15); });
+  try {
+    await chat.send(conv.id, 'review on'); await idle();
+    assert.strictEqual(settings.review, true);
+    await chat.send(conv.id, 'review off'); await idle();
+    assert.strictEqual(settings.review, false);
+    await chat.send(conv.id, '$ echo web-$((40+2)) && cd / && true'); await idle();
+    const sh = conv.items.find((i) => i.type === 'shell');
+    assert.strictEqual(sh.exitCode, 0);
+    assert.match(sh.output, /web-42/);
+    assert.doesNotMatch(sh.output, /__SHMAKK_CWD__/);
+    assert.strictEqual(conv.cwd, '/');
+    assert.deepStrictEqual(chat.roots(conv), [require('path').resolve(dir), '/']);
+    await chat.send(conv.id, 'hello there'); await idle();
+    assert.ok(conv.items.some((i) => i.type === 'notice' && /No AI provider/.test(i.text)));
+    assert.strictEqual((await chat.send(conv.id, '   ')).ok, false);
+  } finally {
+    chat.remove(conv.id);
+    if (savedUrl !== undefined) process.env.SHMAKK_BASE_URL = savedUrl;
+  }
+}));
+
 function highlightDiffLines(text) {
   return text.split('\n').map(line => {
     if (/^\+/.test(line)) return `${c.green}${line}${c.reset}`;

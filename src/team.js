@@ -604,7 +604,7 @@ Be specific. No fluff. No restating the task.`,
 // ── Main entry point ──────────────────────────────────────────────────────────
 
 // Run agents sequentially with handoffs — each agent sees prior outputs.
-async function runPipelineAgents({ agents, overallInput, roots, signal, mcpManager, write }) {
+async function runPipelineAgents({ agents, overallInput, roots, signal, mcpManager, write, emit = null }) {
   const handoffs = [];
   const results = [];
   const startTime = Date.now();
@@ -612,7 +612,8 @@ async function runPipelineAgents({ agents, overallInput, roots, signal, mcpManag
   for (const a of agents) {
     if (signal && signal.aborted) break;
 
-    write(`\x1b[36m[shmakk · ${a.role}]\x1b[0m \x1b[2m starting (step ${results.length + 1}/${agents.length})…\x1b[0m\r\n`);
+    if (emit) emit({ type: 'team_agent', index: results.length, role: a.role, status: 'running' });
+    else write(`\x1b[36m[shmakk · ${a.role}]\x1b[0m \x1b[2m starting (step ${results.length + 1}/${agents.length})…\x1b[0m\r\n`);
 
     const result = await runSubAgent({
       role: a.role,
@@ -633,13 +634,15 @@ async function runPipelineAgents({ agents, overallInput, roots, signal, mcpManag
     const info = result.error
       ? result.error
       : `done · ${result.toolCount} tool calls · ${elapsed}s${skillTag}`;
-    write(`\x1b[36m[shmakk · ${result.role}]\x1b[0m ${icon} ${info}\r\n`);
+    if (emit) emit({ type: 'team_agent', index: results.length, role: result.role, status: result.error ? 'error' : 'done', error: result.error || null, toolCount: result.toolCount, elapsed: Number(elapsed), skill: result.skillUsed || null });
+    else write(`\x1b[36m[shmakk · ${result.role}]\x1b[0m ${icon} ${info}\r\n`);
 
     results.push(result);
 
     // Stop pipeline on hard error (don't pass broken state to next agent)
     if (result.error && !result.output) {
-      write(`\x1b[33m[shmakk · pm]\x1b[0m Pipeline halted at ${a.role} — downstream agents skipped\r\n`);
+      if (emit) emit({ type: 'team_note', level: 'warn', text: `Pipeline halted at ${a.role} — downstream agents skipped` });
+      else write(`\x1b[33m[shmakk · pm]\x1b[0m Pipeline halted at ${a.role} — downstream agents skipped\r\n`);
       break;
     }
 
@@ -650,11 +653,12 @@ async function runPipelineAgents({ agents, overallInput, roots, signal, mcpManag
 }
 
 // Run agents simultaneously via Promise.all.
-async function runParallelAgents({ agents, overallInput, roots, signal, mcpManager, write }) {
+async function runParallelAgents({ agents, overallInput, roots, signal, mcpManager, write, emit = null }) {
   const startTime = Date.now();
+  if (emit) agents.forEach((a, index) => emit({ type: 'team_agent', index, role: a.role, status: 'running' }));
 
   return Promise.all(
-    agents.map(async (a) => {
+    agents.map(async (a, index) => {
       const result = await runSubAgent({
         role: a.role,
         skill: a.skill,            // optional explicit skill override
@@ -672,7 +676,8 @@ async function runParallelAgents({ agents, overallInput, roots, signal, mcpManag
       const info = result.error
         ? result.error
         : `done · ${result.toolCount} tool calls · ${elapsed}s${skillTag}`;
-      write(`\x1b[36m[shmakk · ${result.role}]\x1b[0m ${icon} ${info}\r\n`);
+      if (emit) emit({ type: 'team_agent', index, role: result.role, status: result.error ? 'error' : 'done', error: result.error || null, toolCount: result.toolCount, elapsed: Number(elapsed), skill: result.skillUsed || null });
+      else write(`\x1b[36m[shmakk · ${result.role}]\x1b[0m ${icon} ${info}\r\n`);
       return result;
     }),
   );
@@ -680,8 +685,11 @@ async function runParallelAgents({ agents, overallInput, roots, signal, mcpManag
 
 // Returns true  → team handled the task (caller should not invoke single-agent).
 // Returns false → PM declined (caller falls through to single-agent execution).
-async function runTeam({ input, roots, write, signal, mcpManager }) {
+// onEvent (optional): structured progress sink for GUI front-ends. When set,
+// progress is reported as objects instead of ANSI text through `write`.
+async function runTeam({ input, roots, write, signal, mcpManager, onEvent = null }) {
   if (!isConfigured()) return false;
+  const emit = typeof onEvent === 'function' ? (ev) => { try { onEvent(ev); } catch {} } : null;
 
   const client = makeClient();
 
@@ -697,14 +705,15 @@ async function runTeam({ input, roots, write, signal, mcpManager }) {
     topology = matchedWorkflow.topology;
     reason = `Matched workflow template "${matchedWorkflow.id}" — ${matchedWorkflow.description}`;
     source = `workflow:${matchedWorkflow.id}`;
-    write(`\x1b[36m[shmakk · pm]\x1b[0m Matched workflow template: \x1b[1m${matchedWorkflow.id}\x1b[0m\r\n`);
+    if (!emit) write(`\x1b[36m[shmakk · pm]\x1b[0m Matched workflow template: \x1b[1m${matchedWorkflow.id}\x1b[0m\r\n`);
   } else {
     // Phase 1b: PM plans a custom team via LLM
-    write('\x1b[36m[shmakk · pm]\x1b[0m Planning team…\r\n');
+    if (emit) emit({ type: 'status', label: 'planning team' });
+    else write('\x1b[36m[shmakk · pm]\x1b[0m Planning team…\r\n');
     const plan = await planTeam(input, client, roots, signal);
 
     if (!plan.needsTeam || !Array.isArray(plan.agents) || plan.agents.length < 2) {
-      write('\x1b[2m[shmakk · pm] Routing to single agent\x1b[0m\r\n');
+      if (!emit) write('\x1b[2m[shmakk · pm] Routing to single agent\x1b[0m\r\n');
       return false;
     }
 
@@ -713,7 +722,7 @@ async function runTeam({ input, roots, write, signal, mcpManager }) {
     reason = plan.reason || 'Multi-domain task — assembling team';
 
     if (agents.length < 2) {
-      write('\x1b[2m[shmakk · pm] Insufficient valid agents — routing to single agent\x1b[0m\r\n');
+      if (!emit) write('\x1b[2m[shmakk · pm] Insufficient valid agents — routing to single agent\x1b[0m\r\n');
       return false;
     }
   }
@@ -723,6 +732,16 @@ async function runTeam({ input, roots, write, signal, mcpManager }) {
   if (agents.length < 2) return false;
 
   // Show team composition
+  if (emit) {
+    emit({ type: 'team_start', topology, reason, source, agents: agents.map((a) => ({ role: a.role, task: a.task, fileScope: a.fileScope || null, skill: a.skill || null })) });
+    const agentResults = topology === 'pipeline'
+      ? await runPipelineAgents({ agents, overallInput: input, roots, signal, mcpManager, write, emit })
+      : await runParallelAgents({ agents, overallInput: input, roots, signal, mcpManager, write, emit });
+    emit({ type: 'status', label: 'synthesizing results' });
+    const summary = await synthesizeResults({ overallInput: input, agentResults, client, signal });
+    emit({ type: 'team_summary', content: summary });
+    return true;
+  }
   write(`\x1b[36m[shmakk · pm]\x1b[0m ${reason}\r\n`);
   const verb = topology === 'pipeline' ? 'sequentially (pipeline)' : 'in parallel';
   write(`\x1b[36m[shmakk · pm]\x1b[0m Running ${agents.length} agents ${verb}:\r\n`);

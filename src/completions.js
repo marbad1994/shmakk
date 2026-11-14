@@ -33,9 +33,14 @@ const FLAGS = [
   { flag: '--tts', arg: false, desc: 'Text-to-Speech: spoken responses' },
   { flag: '--sts', arg: false, desc: 'Speech-to-Speech: always-on mic + TTS' },
   { flag: '--voice', arg: false, desc: 'Enable voice input (stt shortcut)' },
+  { flag: '--web', arg: false, desc: 'Start the web UI' },
+  { flag: '--desktop', arg: false, desc: 'Open the desktop app (Electron)' },
+  { flag: '--no-open', arg: false, desc: "Don't open the browser for --web" },
 
   // flags with arguments
   { flag: '--workspace', arg: '<path>', desc: 'Override workspace root' },
+  { flag: '--port', arg: '<n>', desc: 'Port for --web (default 4317)' },
+  { flag: '--host', arg: '<addr>', desc: 'Bind address for --web' },
   { flag: '--profile', arg: '<name>', desc: 'Startup profile (tiny|balanced|deep|builder|large-app)' },
   { flag: '--profile-set', arg: '<name>', desc: 'Switch profile and restart' },
   { flag: '--endpoint', arg: '<name>', desc: 'Use endpoint preset from ~/.config/shmakk/endpoints.js' },
