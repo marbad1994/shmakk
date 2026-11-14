@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect } from 'react';
-import { Eraser, Menu, PanelLeft, SquarePen, SquareTerminal } from 'lucide-react';
+import { Eraser, FolderKanban, Menu, PanelLeft, SquarePen, SquareTerminal } from 'lucide-react';
+import { PROJECT_COLORS, modeInfo } from '@/lib/modes';
 import { useDrawerSwipe, useIsMobile, useVisualViewport } from '@/hooks/useMobile';
 import { MobileNav } from '@/components/layout/MobileNav';
 import { cn, modKey } from '@/lib/utils';
@@ -15,6 +16,8 @@ import { FolderPicker } from '@/components/layout/FolderPicker';
 import { ChatView } from '@/components/chat/ChatView';
 
 // Secondary screens and the terminal (xterm) load on demand.
+const ProjectView = lazy(() => import('@/views/Project').then((m) => ({ default: m.ProjectView })));
+const AutomationsView = lazy(() => import('@/views/Automations').then((m) => ({ default: m.AutomationsView })));
 const GitHubView = lazy(() => import('@/views/GitHub').then((m) => ({ default: m.GitHubView })));
 const SkillsView = lazy(() => import('@/views/Skills').then((m) => ({ default: m.SkillsView })));
 const MemoryView = lazy(() => import('@/views/Memory').then((m) => ({ default: m.MemoryView })));
@@ -28,12 +31,14 @@ const SettingsView = lazy(() => import('@/views/Settings').then((m) => ({ defaul
 const TerminalDock = lazy(() => import('@/components/layout/TerminalDock').then((m) => ({ default: m.TerminalDock })));
 
 const TITLES: Record<ViewId, string> = {
-  chat: 'New chat', github: 'GitHub sessions', skills: 'Skills', memory: 'Memory & rules', plan: 'Plan & resume', changes: 'Changes',
+  chat: 'New chat', project: 'Project', automations: 'Automations', github: 'GitHub sessions', skills: 'Skills', memory: 'Memory & rules', plan: 'Plan & resume', changes: 'Changes',
   recall: 'Session recall', team: 'Agents & workflows', mcp: 'MCP servers', activity: 'Activity', settings: 'Settings',
 };
 
 function View({ view }: { view: ViewId }) {
   switch (view) {
+    case 'project': return <ProjectView />;
+    case 'automations': return <AutomationsView />;
     case 'github': return <GitHubView />;
     case 'skills': return <SkillsView />;
     case 'memory': return <MemoryView />;
@@ -85,8 +90,14 @@ export function App() {
   const running = useApp((s) => (s.activeId ? s.activeId in s.runs : false));
   useGlobalShortcuts();
 
-  const title = view === 'chat' ? active?.title || 'New chat' : TITLES[view];
-  useEffect(() => { document.title = view === 'chat' && active ? `${active.title} — shmakk` : `${TITLES[view]} — shmakk`; }, [view, active]);
+  const mode = useApp((s) => s.mode);
+  const projects = useApp((s) => s.projects);
+  const viewedProject = useApp((s) => s.projects.find((p) => p.id === s.projectId));
+  const pendingProjectId = useApp((s) => s.pendingProjectId);
+  const chatProject = projects.find((p) => p.id === (active ? active.projectId : pendingProjectId));
+  const agentic = mode === 'code' || mode === 'cowork';
+  const title = view === 'chat' ? active?.title || modeInfo(mode).newLabel : view === 'project' ? viewedProject?.name || 'Project' : TITLES[view];
+  useEffect(() => { document.title = `${title} — shmakk`; }, [title]);
 
   const mobile = useIsMobile();
   const newChat = useApp((s) => s.newChat);
@@ -123,13 +134,23 @@ export function App() {
           ) : !sidebarOpen ? (
             <Tip label={<>Show sidebar <kbd>{modKey} B</kbd></>}><Button variant="ghost" size="icon" aria-label="Show sidebar" onClick={() => toggleSidebar(true)}><PanelLeft /></Button></Tip>
           ) : null}
-          <h1 className="m-0 min-w-0 flex-1 truncate pl-1 text-[14.5px] font-semibold max-md:text-center max-md:text-[16px]">{dockOpen && mobile ? 'Terminal' : title}</h1>
-          {view === 'chat' && active && !mobile ? (
+          <h1 className="m-0 min-w-0 flex-1 truncate pl-1 text-[14.5px] font-semibold max-md:text-center max-md:text-[16px]">
+            {view === 'chat' && !(dockOpen && mobile) ? <span className={cn('mr-2 inline-flex translate-y-[2px] [&_svg]:size-4', modeInfo(mode).tone)} aria-label={`${modeInfo(mode).label} mode`}>{modeInfo(mode).icon}</span> : null}
+            {dockOpen && mobile ? 'Terminal' : title}
+          </h1>
+          {view === 'chat' && chatProject && !mobile ? (
+            <Tip label={chatProject.shareContext ? 'In this project — shares context with its other chats' : 'In this project — isolated from its other chats'}>
+              <button type="button" onClick={() => useApp.getState().openProject(chatProject.id)} className="inline-flex max-w-48 shrink-0 items-center gap-1.5 rounded-full border border-line px-2.5 py-0.5 text-[12.5px] text-dim hover:bg-hover hover:text-fg">
+                <span className={cn('size-2 rounded-full', PROJECT_COLORS[chatProject.color])} /><FolderKanban className="size-3.5" /><span className="truncate">{chatProject.name}</span>
+              </button>
+            </Tip>
+          ) : null}
+          {view === 'chat' && active && agentic && !mobile ? (
             <Tip label="Reset context — clear AI history for this chat"><Button variant="ghost" size="icon" aria-label="Reset conversation context" disabled={running} onClick={() => void resetConv()}><Eraser /></Button></Tip>
           ) : null}
           {mobile ? (
-            <Button variant="ghost" size="icon" aria-label="New chat" onClick={() => { toggleDock(false); newChat(); }}><SquarePen /></Button>
-          ) : (
+            <Button variant="ghost" size="icon" aria-label={modeInfo(mode).newLabel} onClick={() => { toggleDock(false); newChat(); }}><SquarePen /></Button>
+          ) : !agentic ? null : (
             <Tip label={<>Terminal <kbd>Ctrl `</kbd></>}><Button variant="ghost" size="icon" aria-label="Toggle terminal" aria-pressed={dockOpen} onClick={() => toggleDock()} className={dockOpen ? 'bg-accent/10 text-accent' : undefined}><SquareTerminal /></Button></Tip>
           )}
         </header>

@@ -78,6 +78,10 @@ function saveSettings(settings) {
 
 // ── Conversations ───────────────────────────────────────────────────────────
 
+// chat = plain conversation · code = agent in a workspace · design = live
+// HTML artifacts · cowork = automations and scheduled work
+const MODES = ['chat', 'code', 'design', 'cowork'];
+
 function metaOf(conv) {
   return {
     id: conv.id,
@@ -88,6 +92,9 @@ function metaOf(conv) {
     workspace: conv.workspace || null,
     preview: conv.preview || '',
     repo: conv.repo || null, // set for GitHub cloud sessions
+    mode: MODES.includes(conv.mode) ? conv.mode : 'code',
+    projectId: conv.projectId || null,
+    automationId: conv.automationId || null,
   };
 }
 
@@ -121,10 +128,10 @@ function loadConversation(id) {
 
 function saveConversation(conv) {
   try {
-    const { id, title, createdAt, updatedAt, pinned, workspace, cwd, preview, sessionId, repo, items, history } = conv;
+    const { id, title, createdAt, updatedAt, pinned, workspace, cwd, preview, sessionId, repo, mode, projectId, automationId, items, history } = conv;
     writeFileAtomic(
       path.join(conversationsDir(), `${id}.json`),
-      JSON.stringify({ id, title, createdAt, updatedAt, pinned, workspace, cwd, preview, sessionId, repo, items, history }),
+      JSON.stringify({ id, title, createdAt, updatedAt, pinned, workspace, cwd, preview, sessionId, repo, mode, projectId, automationId, items, history }),
     );
   } catch {}
 }
@@ -150,6 +157,7 @@ function listConversations() {
 
 module.exports = {
   stateDir,
+  MODES,
   configDir,
   settingsPath,
   newId,

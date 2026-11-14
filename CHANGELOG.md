@@ -20,6 +20,14 @@ All notable changes to this project will be documented in this file.
 - `runAgent` and `runTeam` accept an optional `onEvent` sink for structured progress (used by the web UI; the
   terminal output is unchanged when it is not set)
 
+- **Four modes** with a switcher: **Chat** (plain conversation with web search), **Code** (the existing agent),
+  **Design** (the agent writes HTML/CSS into a per-chat folder; live sandboxed preview, device sizes, version history
+  with restore) and **Cowork** (agent plus automation tools)
+- **Automations**: multi-step jobs triggered by schedule (cron with time zones), webhook, or by hand; per-automation
+  unattended-permission policy; run history where every run is its own chat; creatable from a Cowork conversation
+- **Projects**: group chats from any mode; project instructions, optional workspace folder, and a
+  *Share context between chats* setting that gives each chat a digest of its siblings and read access to the
+  project's design files
 - **GitHub cloud sessions** — connect an account (token, environment variable, or device sign-in), browse
   repositories, and start a session on a fresh clone with its own branch; in-chat source-control bar with
   commit & push and pull-request creation; `/clone owner/repo`; GitHub Enterprise via `SHMAKK_GITHUB_URL` /

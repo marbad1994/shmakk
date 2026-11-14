@@ -32,3 +32,20 @@ describe('utils', () => {
     expect(tildify('/home/me/code', '/home/me')).toBe('~/code');
   });
 });
+
+import { defaultSchedule, describe as describeSchedule, fromCron, toCron } from './schedule';
+
+describe('schedule', () => {
+  it('builds cron from friendly choices', () => {
+    const s = defaultSchedule();
+    expect(toCron(s)).toBe('0 9 * * 1-5');
+    expect(toCron({ ...s, freq: 'minutes', every: 10 })).toBe('*/10 * * * *');
+    expect(toCron({ ...s, freq: 'weekly', time: '18:30', days: [5, 1] })).toBe('30 18 * * 1,5');
+    expect(toCron({ ...s, freq: 'monthly', time: '07:05', dayOfMonth: 15 })).toBe('5 7 15 * *');
+  });
+  it('round-trips and falls back to raw cron for anything exotic', () => {
+    for (const c of ['0 9 * * 1-5', '*/10 * * * *', '30 18 * * 1,5', '5 7 15 * *', '15 6 * * *', '20 * * * *']) expect(toCron(fromCron(c))).toBe(c);
+    expect(fromCron('0 0 1 1 *').freq).toBe('cron');
+    expect(describeSchedule(fromCron('30 18 * * 1,5'))).toBe('Mon, Fri at 18:30');
+  });
+});

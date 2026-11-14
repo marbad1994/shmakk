@@ -1,5 +1,6 @@
 // Wire types shared with the server (src/webui/*.js).
 
+export type Mode = 'chat' | 'code' | 'design' | 'cowork';
 export type Safety = 'safe' | 'uncertain' | 'unsafe';
 export type AskStatus = 'pending' | 'yes' | 'no' | 'expired';
 
@@ -17,7 +18,7 @@ export interface ToolItem extends Base {
   diff?: string | null; created?: boolean; agent?: string | null; endedAt?: number;
 }
 export interface AskItem extends Base {
-  type: 'ask'; kind: 'tool' | 'plan' | 'confirm' | 'correction'; status: AskStatus; question: string;
+  type: 'ask'; kind: 'tool' | 'plan' | 'confirm' | 'correction'; status: AskStatus; question: string; auto?: boolean;
   defaultYes?: boolean; name?: string; args?: Record<string, unknown>; safety?: Safety; description?: string;
   diff?: string | null; what?: string; why?: string; detail?: string; input?: string; proposed?: string; reason?: string;
 }
@@ -47,6 +48,19 @@ export interface RepoRef { fullName: string; url: string; private: boolean; base
 export interface ConvMeta {
   id: string; title: string; createdAt: number; updatedAt: number; pinned: boolean;
   workspace: string | null; preview: string; running?: boolean; repo?: RepoRef | null;
+  mode: Mode; projectId: string | null; automationId: string | null;
+}
+export interface Project {
+  id: string; name: string; description: string; instructions: string; shareContext: boolean; color: string;
+  workspace: string | null; createdAt: number; updatedAt: number; conversations?: number; modes?: Mode[];
+}
+export interface AutomationStep { title: string; prompt: string }
+export interface AutomationRun { id: string; at: number; trigger: string; status: 'running' | 'ok' | 'error' | 'stopped' | 'interrupted'; convId: string; durationMs: number; summary: string; step: number; steps: number }
+export interface Automation {
+  id: string; name: string; description: string; steps: AutomationStep[]; enabled: boolean; approval: 'auto' | 'ask' | 'full';
+  trigger: { type: 'manual' } | { type: 'webhook' } | { type: 'schedule'; cron: string; timezone: string };
+  schedule: string | null; nextRunAt: number | null; running: boolean; lastStatus?: string; lastRunAt?: number;
+  workspace: string | null; projectId: string | null; runs: AutomationRun[]; updatedAt: number;
 }
 export interface ConvSnapshot extends ConvMeta { cwd: string; items: Item[]; running: boolean; activity: string | null }
 
@@ -74,7 +88,7 @@ export interface Status {
 export interface Bootstrap {
   version: string; workspace: string; home: string; platform: string; settings: Settings; provider: Provider;
   profiles: { name: string; contextMode: string; maxToolIters: number }[]; features: Features;
-  conversations: ConvMeta[]; status: Status; hosted: boolean;
+  conversations: ConvMeta[]; status: Status; hosted: boolean; projects: Project[];
 }
 
 export type ServerMsg =
@@ -89,9 +103,13 @@ export type ServerMsg =
   | { t: 'provider'; provider: Provider }
   | { t: 'workspace'; workspace: string }
   | { t: 'status.changed' }
+  | { t: 'projects.changed' }
+  | { t: 'automations.changed' }
+  | { t: 'automation.finished'; id: string; name: string; status: string; convId: string }
+  | { t: 'design.changed'; convId: string }
   | { t: 'toast'; level: 'error' | 'info' | 'ok'; text: string }
   | { t: 'term.data'; id: string; data: string }
   | { t: 'term.exit'; id: string; code: number; error?: string }
   | { t: 'pong' };
 
-export type ViewId = 'chat' | 'github' | 'skills' | 'memory' | 'plan' | 'changes' | 'recall' | 'team' | 'mcp' | 'activity' | 'settings';
+export type ViewId = 'chat' | 'project' | 'automations' | 'github' | 'skills' | 'memory' | 'plan' | 'changes' | 'recall' | 'team' | 'mcp' | 'activity' | 'settings';

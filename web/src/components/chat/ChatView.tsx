@@ -2,24 +2,34 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { ArrowDown } from 'lucide-react';
 import type { Item } from '@/lib/types';
 import { useApp } from '@/store/app';
+import { cn } from '@/lib/utils';
 import { useVoice } from '@/hooks/useVoice';
 import { Spinner } from '@/components/ui/misc';
 import { TranscriptItem } from './Items';
 import { Composer } from './Composer';
 import { Welcome } from './Welcome';
 import { RepoBar } from './RepoBar';
+import { DesignPreview } from './DesignPreview';
+import { useIsMobile } from '@/hooks/useMobile';
+import { Segmented } from '@/components/ui/misc';
 
 const EMPTY: Item[] = [];
 
 export function ChatView() {
   const activeId = useApp((s) => s.activeId);
+  const conv = useApp((s) => s.convs.find((c) => c.id === s.activeId));
   const items = useApp((s) => (s.activeId ? s.items[s.activeId] : undefined)) ?? EMPTY;
   const activity = useApp((s) => (s.activeId ? s.runs[s.activeId] : undefined)) ?? null;
   const loading = useApp((s) => s.loading);
-  const conv = useApp((s) => s.convs.find((c) => c.id === s.activeId));
   const settings = useApp((s) => s.settings);
   const send = useApp((s) => s.send);
   const running = activity !== null;
+  const mode = useApp((s) => conv?.mode ?? s.mode);
+  const mobile = useIsMobile();
+  const [pane, setPane] = useState<'chat' | 'preview'>('chat');
+  const tick = useApp((s) => (s.activeId ? s.designTick[s.activeId] || 0 : 0));
+  // On a phone, jump to the preview the first time a design gets files.
+  useEffect(() => { if (mode === 'design' && mobile && tick === 1) setPane('preview'); }, [tick]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const voice = useVoice();
   const scroller = useRef<HTMLDivElement>(null);
@@ -62,8 +72,9 @@ export function ChatView() {
     wasRunning.current = running;
   }, [running]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  return (
-    <div className="relative flex min-h-0 flex-1 flex-col">
+  const design = mode === 'design';
+  const chat = (
+    <div className={cn('relative flex min-h-0 flex-col', design ? 'w-[min(460px,42%)] shrink-0 border-r border-line max-md:w-full max-md:flex-1 max-md:border-r-0' : 'flex-1', design && mobile && pane !== 'chat' && 'hidden')}>
       {conv?.repo ? <RepoBar conv={conv} running={running} /> : null}
       <div ref={scroller} onScroll={onScroll} className="scroll-touch min-h-0 flex-1 overflow-y-auto [overflow-anchor:none]">
         {loading ? (
@@ -86,7 +97,23 @@ export function ChatView() {
           <ArrowDown className="size-4" />
         </button>
       ) : null}
-      <Composer running={running} activity={activity} mic={voice.mic} speaking={voice.speaking} onMic={onMic} onStopSpeaking={voice.stopSpeaking} />
+      <Composer mode={mode} running={running} activity={activity} mic={voice.mic} speaking={voice.speaking} onMic={onMic} onStopSpeaking={voice.stopSpeaking} />
+    </div>
+  );
+  if (!design) return chat;
+
+  // Design mode: chat on the left, live preview on the right (tabs on a phone).
+  return (
+    <div className="flex min-h-0 flex-1 max-md:flex-col">
+      {mobile ? (
+        <div className="flex shrink-0 justify-center border-b border-line bg-panel/60 py-1.5">
+          <Segmented label="Pane" value={pane} onChange={setPane} options={[{ value: 'chat', label: 'chat' }, { value: 'preview', label: 'preview' }]} />
+        </div>
+      ) : null}
+      {chat}
+      <div className={cn('min-h-0 min-w-0 flex-1', mobile && pane !== 'preview' && 'hidden')}>
+        <DesignPreview convId={activeId} running={running} />
+      </div>
     </div>
   );
 }

@@ -15,7 +15,13 @@ const { spawn } = require('child_process');
 const { setMaxListeners } = require('events');
 
 const { correct } = require('../correction');
-const { runAgent, clearTaskJournal } = require('../agent');
+const { runAgent, clearTaskJournal, summarizeToolResult } = require('../agent');
+const { TOOLS, dispatchTool } = require('../tools');
+const { makeClient, modelFor } = require('../llm');
+const { renderMemoryForPrompt } = require('../memory');
+const design = require('./design');
+const { buildContext } = require('./projects');
+const { coworkTools, COWORK_HINT } = require('./automations');
 const { route: routeToSpecialist } = require('../coordinator');
 const { shouldPlan, generatePlan, savePlan } = require('../planner');
 const { clearIndex } = require('../workspace-index');
@@ -130,7 +136,7 @@ class ChatManager {
 
   // workspace/repo are set for GitHub cloud sessions; plain chats use the
   // server's current workspace.
-  create({ title, workspace: ws, repo = null } = {}) {
+  create({ title, workspace: ws, repo = null, mode = 'code', projectId = null, automationId = null } = {}) {
     const now = Date.now();
     const workspace = ws || this.ctx.getWorkspace();
     const conv = {
@@ -144,6 +150,9 @@ class ChatManager {
       preview: '',
       sessionId: null,
       repo,
+      mode: store.MODES.includes(mode) ? mode : 'code',
+      projectId,
+      automationId,
       items: [],
       history: [],
     };
@@ -186,6 +195,7 @@ class ChatManager {
     if (!conv) return null;
     if (typeof patch.title === 'string' && patch.title.trim()) conv.title = patch.title.trim().slice(0, 120);
     if (typeof patch.pinned === 'boolean') conv.pinned = patch.pinned;
+    if ('projectId' in patch) conv.projectId = patch.projectId || null;
     this._persistSoon(conv);
     this.ctx.broadcast({ t: 'conv', conv: { ...store.metaOf(conv), running: !!conv.run } });
     return store.metaOf(conv);
@@ -200,6 +210,7 @@ class ChatManager {
       this.convs.delete(id);
     }
     store.deleteConversation(id);
+    try { const d = design.designDir(id); if (d) fs.rmSync(d, { recursive: true, force: true }); } catch {}
     this.ctx.broadcast({ t: 'conv.deleted', id });
     return true;
   }
@@ -265,10 +276,22 @@ class ChatManager {
 
   // Ask the user something and wait. Resolves false if the run is stopped.
   _ask(conv, item) {
+    // Unattended runs (automations) have nobody to ask: plan/confirm questions
+    // take their default; tool permissions are settled in _confirmTool.
+    const unattended = conv.run && conv.run.unattended;
+    if (unattended && unattended !== 'ask') {
+      const yes = unattended === 'full' ? true : !!item.defaultYes;
+      this._add(conv, { type: 'ask', ...item, status: yes ? 'yes' : 'no', auto: true, answeredAt: Date.now() });
+      return Promise.resolve(yes);
+    }
     const it = this._add(conv, { type: 'ask', status: 'pending', ...item });
     this._activity(conv, 'waiting for you');
     return new Promise((resolve) => {
+      // An automation waiting on a person gives up eventually instead of hanging forever.
+      const timer = unattended === 'ask' ? setTimeout(() => { const r = conv.asks.get(it.id); if (r) r('aborted'); }, conv.run.askTimeoutMs || 3600e3) : null;
+      if (timer) timer.unref();
       conv.asks.set(it.id, (value) => {
+        if (timer) clearTimeout(timer);
         conv.asks.delete(it.id);
         it.status = value === 'aborted' ? 'expired' : (value ? 'yes' : 'no');
         it.answeredAt = Date.now();
@@ -295,15 +318,45 @@ class ChatManager {
   }
 
   roots(conv) {
+    if (conv.mode === 'design') return [design.ensureDir(conv.id)];
     const ws = path.resolve(conv.workspace || this.ctx.getWorkspace());
     const cwd = path.resolve(conv.cwd || ws);
-    return cwd === ws ? [ws] : [ws, cwd];
+    const roots = cwd === ws ? [ws] : [ws, cwd];
+    // In a project that shares context, the designs made in it are readable
+    // from its code and cowork chats (so "build what we designed" just works).
+    for (const s of this._siblings(conv)) if (s.mode === 'design' && s.designDir && fs.existsSync(s.designDir)) roots.push(s.designDir);
+    return roots;
+  }
+
+  _project(conv) {
+    return conv.projectId && this.ctx.projects ? this.ctx.projects.get(conv.projectId) : null;
+  }
+
+  // Other conversations in the same project — only when the project shares context.
+  _siblings(conv) {
+    const project = this._project(conv);
+    if (!project || !project.shareContext) return [];
+    // Looked up once per run — this is consulted on every tool call.
+    if (conv.run && conv.run.siblings) return conv.run.siblings;
+    const found = this.list().filter((m) => m.projectId === project.id && m.id !== conv.id).slice(0, 9).map((m) => {
+      const c = this.get(m.id);
+      if (!c) return null;
+      const dir = c.mode === 'design' ? design.designDir(c.id) : null;
+      return { id: c.id, title: c.title, mode: c.mode || 'code', updatedAt: c.updatedAt, items: c.items, workspace: c.workspace, designDir: dir, designFiles: dir ? design.listFiles(dir).map((f) => f.path) : [] };
+    }).filter(Boolean);
+    if (conv.run) conv.run.siblings = found;
+    return found;
+  }
+
+  _projectContext(conv) {
+    return buildContext(this._project(conv), conv, this._siblings(conv));
   }
 
   // ── entry point ─────────────────────────────────────────────────────────
 
   // mode: 'ask' (default) or 'shell'. A leading "$ " also means shell.
-  async send(convId, rawText, { mode = 'ask' } = {}) {
+  // unattended: 'auto' | 'ask' | 'full' — set for automation runs (see _confirmTool).
+  async send(convId, rawText, { mode = 'ask', unattended = null, askTimeoutMs = null } = {}) {
     const conv = this.get(convId);
     if (!conv) return { ok: false, error: 'conversation not found' };
     if (conv.run) return { ok: false, error: 'a run is already in progress' };
@@ -314,7 +367,9 @@ class ChatManager {
 
     const ctrl = new AbortController();
     setMaxListeners(0, ctrl.signal);
-    conv.run = { ctrl, activity: 'starting' };
+    let finish;
+    const done = new Promise((r) => { finish = r; });
+    conv.run = { ctrl, activity: 'starting', unattended, askTimeoutMs, error: null, finish };
     this.ctx.broadcast({ t: 'run', convId: conv.id, running: true, activity: 'starting' });
 
     this._add(conv, { type: 'user', text, mode });
@@ -332,13 +387,25 @@ class ChatManager {
 
     // Fire and forget — progress flows through broadcasts.
     this._run(conv, text, mode, ctrl).catch(() => {});
-    return { ok: true };
+    return { ok: true, done };
+  }
+
+  // Send and resolve when the run is over: { status: 'ok' | 'error' | 'stopped', error, summary }.
+  async sendAndWait(convId, text, opts = {}) {
+    const r = await this.send(convId, text, opts);
+    if (!r.ok) return { status: 'error', error: r.error };
+    return r.done;
   }
 
   async _run(conv, text, mode, ctrl) {
+    let outcome = 'ok';
     try {
       const selfCmd = matchSelfCommand(text);
-      if (selfCmd.matched && mode !== 'shell') {
+      if (conv.mode === 'chat') {
+        await this._plainChat(conv, text, ctrl);
+      } else if (conv.mode === 'design') {
+        await this._design(conv, text, ctrl);
+      } else if (selfCmd.matched && mode !== 'shell' && !conv.run.unattended) {
         await this._selfCommand(conv, text, selfCmd);
       } else if (mode === 'shell') {
         await this._shell(conv, text, ctrl);
@@ -347,8 +414,11 @@ class ChatManager {
       }
     } catch (e) {
       if (isAbortError(e) || ctrl.signal.aborted) {
+        outcome = 'stopped';
         this._notice(conv, 'Stopped.', 'warn');
       } else {
+        outcome = 'error';
+        conv.run.error = String(e && e.message ? e.message : e);
         this._notice(conv, `Task error: ${e && e.message ? e.message : e}`, 'error');
         if (this.ctx.settings.debug && e && e.stack) this._add(conv, { type: 'output', title: 'stack trace', text: e.stack });
       }
@@ -358,9 +428,13 @@ class ChatManager {
         if (it.streaming) { it.streaming = false; this._touch(conv, it); }
         if (it.type === 'tool' && it.status === 'running') { it.status = 'interrupted'; this._touch(conv, it); }
       }
+      const run = conv.run;
+      if (outcome === 'ok' && run.error) outcome = 'error';
+      const last = [...conv.items].reverse().find((i) => i.type === 'assistant' && !i.interim && i.text);
       conv.run = null;
       conv.updatedAt = Date.now();
       store.saveConversation(conv);
+      run.finish({ status: outcome, error: run.error, summary: last ? last.text : '' });
       this.ctx.broadcast({ t: 'run', convId: conv.id, running: false });
       this.ctx.broadcast({ t: 'conv', conv: { ...store.metaOf(conv), running: false } });
     }
@@ -581,8 +655,22 @@ class ChatManager {
       const fileCreateAllowed = settings.yesFiles
         && (name === 'write_file' || name === 'edit_file' || name === 'make_dir')
         && safety !== 'unsafe';
-      const wouldAuto = safety === 'safe' || fileCreateAllowed;
-      if (!settings.review && wouldAuto) {
+      const isFileTool = name === 'write_file' || name === 'edit_file' || name === 'make_dir';
+      // Design chats only ever write inside their own artifact folder.
+      const designOk = conv.mode === 'design' && isFileTool && safety !== 'unsafe';
+      const wouldAuto = safety === 'safe' || fileCreateAllowed || designOk;
+
+      // Automation runs: nobody is watching, so the automation's own policy decides.
+      const unattended = conv.run && conv.run.unattended;
+      if (unattended === 'full') { audit.append({ kind: 'tool-allowed', name, args, via: 'automation-full' }); return true; }
+      if (unattended === 'auto') {
+        const ok = safety !== 'unsafe' && (safety === 'safe' || isFileTool || name.startsWith('mcp__'));
+        audit.append({ kind: ok ? 'tool-allowed' : 'tool-declined', name, args, via: 'automation' });
+        if (!ok) this._notice(conv, `Skipped (needs approval, and this automation runs unattended): ${description}`, 'warn');
+        return ok;
+      }
+
+      if (!unattended && !settings.review && wouldAuto) {
         audit.append({ kind: 'tool-allowed', name, args, via: fileCreateAllowed ? 'yes-files' : 'auto-safe' });
         return true;
       }
@@ -720,10 +808,16 @@ class ChatManager {
   async _task(conv, cmd, ctrl) {
     const { settings, mcpManager } = this.ctx;
     if (!isConfigured()) {
+      conv.run.error = 'no AI provider configured';
       this._notice(conv, 'No AI provider configured. Add a base URL and model in Settings (or set SHMAKK_BASE_URL).', 'warn', { action: 'open:settings' });
       return;
     }
     process.env.SHMAKK_SESSION_ID = conv.sessionId || '';
+    const cowork = conv.mode === 'cowork';
+    const hint = (base) => [base, cowork ? COWORK_HINT : null, this._projectContext(conv)].filter(Boolean).join('\n\n') || null;
+    const tools = cowork && this.ctx.automations
+      ? coworkTools(mcpManager, this.ctx.automations, { projectId: conv.projectId, workspace: conv.workspace })
+      : mcpManager;
     const roots = this.roots(conv);
     const routing = routeToSpecialist(cmd, [...conv.history, { role: 'user', content: cmd }]);
     const agentProfile = settings.profile || routing.profile || 'balanced';
@@ -737,13 +831,13 @@ class ChatManager {
       signal: ctrl.signal,
       profile: agentProfile,
       colors: false,
-      specialistHint: routing.specialistHint,
-      mcpManager,
+      specialistHint: hint(routing.specialistHint),
+      mcpManager: tools,
       onEvent: sink,
     };
 
     // ── Team mode ──
-    if (!settings.review && looksMultiDomain(cmd)) {
+    if (!settings.review && !cowork && looksMultiDomain(cmd)) {
       let teamItem = null;
       let summary = '';
       let handled = false;
@@ -862,6 +956,104 @@ class ChatManager {
     const updated = await runAgent({ ...agentOpts, input: cmd, history: conv.history });
     sink.close();
     conv.history = trimHistory(updated || conv.history);
+    if (ctrl.signal.aborted) throw new Error('stopped');
+  }
+
+  // ── Chat mode: a plain conversation — no workspace, no file or shell tools,
+  //    just the model (plus web search and page fetch when it needs facts). ──
+
+  async _plainChat(conv, text, ctrl) {
+    if (!isConfigured()) {
+      conv.run.error = 'no AI provider configured';
+      this._notice(conv, 'No AI provider configured. Add a base URL and model in Settings.', 'warn', { action: 'open:settings' });
+      return;
+    }
+    const client = makeClient();
+    const tools = TOOLS.filter((t) => t.function.name === 'web_search' || t.function.name === 'fetch_url');
+    const system = [
+      `You are shmakk, a thoughtful, direct assistant. Today is ${new Date().toDateString()}.`,
+      'Answer the question that was asked, at the depth it deserves. Use Markdown where it helps (code blocks, short lists, tables for comparisons).',
+      'You can search the web and fetch pages when the answer depends on current or specific facts; say so briefly when you do. You have no access to files or a shell in this mode — if the user wants work done in a codebase, suggest Code mode; for visual work, Design mode; for recurring or scheduled work, Cowork mode.',
+      renderMemoryForPrompt(this.ctx.getWorkspace()),
+      this._projectContext(conv),
+    ].filter(Boolean).join('\n\n');
+    const messages = [{ role: 'system', content: system }, ...trimHistory(conv.history), { role: 'user', content: text }];
+    const sink = this._eventSink(conv);
+
+    for (let round = 0; round < 6; round++) {
+      sink({ type: 'status', label: round === 0 ? 'thinking' : 'reading' });
+      const stream = await client.chat.completions.create({ model: modelFor(), messages, tools, stream: true }, { signal: ctrl.signal });
+      let content = '';
+      const calls = [];
+      for await (const chunk of stream) {
+        const delta = chunk.choices && chunk.choices[0] && chunk.choices[0].delta;
+        if (!delta) continue;
+        if (delta.content) { content += delta.content; sink({ type: 'delta', text: delta.content }); }
+        if (typeof delta.reasoning_content === 'string' && delta.reasoning_content) sink({ type: 'reasoning', text: delta.reasoning_content });
+        for (const tc of delta.tool_calls || []) {
+          const slot = calls[tc.index ?? 0] || (calls[tc.index ?? 0] = { id: '', type: 'function', function: { name: '', arguments: '' } });
+          if (tc.id) slot.id = tc.id;
+          if (tc.function && tc.function.name) slot.function.name = tc.function.name;
+          if (tc.function && tc.function.arguments) slot.function.arguments += tc.function.arguments;
+        }
+      }
+      const toolCalls = calls.filter((c) => c && c.function.name).map((c, i) => ({ ...c, id: c.id || `call_${round}_${i}` }));
+      if (!toolCalls.length) {
+        if (content) sink({ type: 'message', content });
+        else this._notice(conv, 'The model returned an empty reply — try rephrasing.', 'warn');
+        messages.push({ role: 'assistant', content });
+        break;
+      }
+      if (content) sink({ type: 'message', content, interim: true });
+      messages.push({ role: 'assistant', content: content || null, tool_calls: toolCalls });
+      for (const c of toolCalls) {
+        let args = {};
+        try { args = JSON.parse(c.function.arguments || '{}'); } catch {}
+        sink({ type: 'tool_start', id: c.id, name: c.function.name, args });
+        const allowed = tools.some((t) => t.function.name === c.function.name);
+        const result = allowed ? await dispatchTool(c.function.name, args, [], null, ctrl.signal, null) : { error: 'tool not available in Chat mode' };
+        sink({ type: 'tool_end', id: c.id, name: c.function.name, args, result, summary: summarizeToolResult(c.function.name, result), error: result && result.error ? result.error : null });
+        messages.push({ role: 'tool', tool_call_id: c.id, content: JSON.stringify(result).slice(0, 8000) });
+        if (ctrl.signal.aborted) throw new Error('stopped');
+      }
+    }
+    sink.close();
+    conv.history = trimHistory(messages.slice(1));
+    if (ctrl.signal.aborted) throw new Error('stopped');
+  }
+
+  // ── Design mode: the agent writes HTML/CSS into this conversation's artifact
+  //    folder; the UI previews it live and every run leaves a version. ──
+
+  async _design(conv, text, ctrl) {
+    if (!isConfigured()) {
+      conv.run.error = 'no AI provider configured';
+      this._notice(conv, 'No AI provider configured. Add a base URL and model in Settings.', 'warn', { action: 'open:settings' });
+      return;
+    }
+    const dir = design.ensureDir(conv.id);
+    const sink = this._eventSink(conv);
+    const changed = () => this.ctx.broadcast({ t: 'design.changed', convId: conv.id });
+    const updated = await runAgent({
+      input: text,
+      roots: [dir],
+      glossary: null,
+      confirmTool: this._confirmTool(conv, ctrl),
+      write: this._logWriter(conv),
+      signal: ctrl.signal,
+      history: conv.history,
+      profile: this.ctx.settings.profile || 'builder',
+      colors: false,
+      specialistHint: [design.DESIGN_HINT, this._projectContext(conv)].filter(Boolean).join('\n\n'),
+      mcpManager: null,
+      onEvent: (ev) => {
+        sink(ev);
+        if (ev.type === 'tool_end' && !ev.error && /^(write_file|edit_file|delete_file)$/.test(ev.name)) changed();
+      },
+    });
+    sink.close();
+    conv.history = trimHistory(updated || conv.history);
+    try { if (design.snapshot(dir, text)) changed(); } catch {}
     if (ctrl.signal.aborted) throw new Error('stopped');
   }
 }

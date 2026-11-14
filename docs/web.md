@@ -9,6 +9,56 @@ shmakk --desktop                  # Electron app (one-time: cd desktop && npm in
 All the usual launch flags apply: `--workspace`, `--profile`, `--review`, `--yes-files`,
 `--no-correction`, `--no-ai`, `--debug`, `--endpoint`.
 
+## The four modes
+
+The switcher at the top of the sidebar moves between four separate spaces. Each keeps its own
+list of chats and only shows the tools that make sense there.
+
+| Mode | What it is | What the assistant can do |
+|------|------------|---------------------------|
+| **Chat** | A plain conversation | Talk, write and reason; search the web and read pages. No files, no shell. |
+| **Code** | The agent in your workspace (everything the CLI does) | Read, edit, run commands, GitHub sessions, terminal, skills, plans, teams |
+| **Design** | Build interfaces with a live preview | Writes self-contained HTML/CSS into the chat's own folder; preview, device sizes, version history with restore, view/copy code |
+| **Cowork** | Hand work off | Everything Code can do, plus create and manage **automations** from the conversation |
+
+Design previews are served from a signed `/artifact/…` URL into a sandboxed frame: the page can
+run its own scripts and load fonts and images, but it has an opaque origin and cannot reach
+shmakk's cookies, storage or API.
+
+### Automations (Cowork)
+
+An automation is a list of steps (each a self-contained instruction) plus a trigger:
+
+- **On a schedule** — every few minutes, hourly, daily, weekdays, chosen days, monthly, or a raw
+  5-field cron expression, in a time zone you pick
+- **When called** — a private webhook URL; `POST` to it and the body is handed to the first step
+- **By hand** — only when you press *Run now*
+
+Each run becomes its own Cowork chat (listed under *Automation runs*), so you can read what
+happened and continue from there. Because nobody is watching, each automation states what it
+may do unattended: safe actions and file edits (default — risky actions are skipped and noted),
+ask first (the run waits up to an hour for your answer), or everything.
+
+You can build one in **Cowork → Automations**, or just ask in a Cowork chat ("every weekday at 9,
+summarise yesterday's commits"); the assistant asks permission before saving it. Runs missed while
+the server was stopped are not replayed. In Docker, schedules use the time zone stored on each
+automation, not the container's.
+
+## Projects
+
+A project groups chats from **any** mode — design a page, build it in Code, automate its upkeep in
+Cowork — and gives them:
+
+- **Instructions** that every chat in the project always follows
+- An optional **workspace folder** its Code and Cowork chats start in
+- One switch, **Share context between chats**:
+  - **On** — each chat is given a digest of the project's other chats (what was asked, the latest
+    answer) and Code/Cowork chats can read the files made by its Design chats
+  - **Off** — chats only know the project's name and instructions; nothing crosses between them
+
+Create a project from the sidebar, start chats from its page, or move an existing chat in from the
+chat's menu. Deleting a project keeps its chats.
+
 ## CLI → interface map
 
 | CLI | In the interface |
@@ -74,7 +124,8 @@ web/                 React 19 + TypeScript + Vite + Tailwind 4
   src/components/…   chat (transcript, composer), layout (sidebar, dock, status bar, mobile nav)
   src/views          one file per page, data via TanStack Query
   src/store          live state (Zustand) fed by the WebSocket
-src/webui/           server.js (HTTP/WS, auth) · api.js (REST) · chat.js (engine) · terminal.js · store.js
+src/webui/           server.js (HTTP/WS, auth) · api.js (REST) · chat.js (engine, all four modes) · terminal.js · store.js
+                     projects.js · design.js (artifacts, versions) · automations.js (cron, scheduler, webhooks) · github.js
 desktop/             Electron main + preload
 ```
 

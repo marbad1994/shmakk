@@ -60,7 +60,9 @@ shmakk --web              # http://127.0.0.1:4317, opens your browser
 shmakk --desktop          # the same UI as a desktop app (Electron)
 ```
 
-What you get:
+It has four modes, each its own space — **Chat** (plain conversation), **Code** (the agent in your workspace), **Design** (interfaces with a live preview and version history) and **Cowork** (tasks and automations on a schedule or webhook) — and **Projects** that hold chats from all four, with a per-project switch for whether they share context.
+
+In Code mode you get:
 
 - **Chat** with streaming replies, a live tool timeline, inline diffs, and one-tap **Allow / Deny** for anything risky
 - **Shell mode** (`$ git status`) — failed commands go through the same correction engine, then to the agent

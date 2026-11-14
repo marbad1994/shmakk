@@ -4,7 +4,7 @@
 
 import type { ReactNode } from 'react';
 import {
-  Activity, BookOpen, GitBranch, Brain, Bug, CircleHelp, Cpu, Eraser, FileDiff, FolderOpen, Gauge, History, ListChecks,
+  Activity, BookOpen, Code2, GitBranch, MessageCircle, Palette, Workflow, Brain, Bug, CircleHelp, Cpu, Eraser, FileDiff, FolderOpen, Gauge, History, ListChecks,
   MessageSquarePlus, Mic, Moon, Plug, Power, ScrollText, Search, Settings, ShieldCheck, Sparkles, SquareTerminal,
   TerminalSquare, Users, Wand2, Zap,
 } from 'lucide-react';
@@ -45,6 +45,12 @@ export const COMMANDS: Command[] = [
   { id: 'help', slash: 'help', title: 'Help', hint: 'Show the full CLI reference', group: 'Chat', icon: <CircleHelp />, run: () => say('help') },
 
   { id: 'clone', slash: 'clone', title: 'Start a GitHub session', hint: 'Clone owner/repo on the server and open a session on it', group: 'Chat', icon: <GitBranch />, arg: 'owner/repo [branch]', argRequired: true, run: (a) => { const [repo, branch] = a.split(/\s+/); const id = toast.loading(`Cloning ${repo}…`); return app().startSession({ repo, branch }).then(() => { toast.success(`Session ready on ${repo}`, { id }); }).catch((e: Error) => { toast.error(e.message, { id }); }); } },
+
+  { id: 'mode-chat', slash: 'chat', title: 'Switch to Chat', hint: 'A plain conversation', group: 'Go to', icon: <MessageCircle />, run: () => app().setMode('chat') },
+  { id: 'mode-code', slash: 'code', title: 'Switch to Code', hint: 'The agent in your workspace', group: 'Go to', icon: <Code2 />, run: () => app().setMode('code') },
+  { id: 'mode-design', slash: 'design', title: 'Switch to Design', hint: 'Build interfaces with a live preview', group: 'Go to', icon: <Palette />, run: () => app().setMode('design') },
+  { id: 'mode-cowork', slash: 'cowork', title: 'Switch to Cowork', hint: 'Tasks, automations and schedules', group: 'Go to', icon: <Workflow />, run: () => app().setMode('cowork') },
+  { id: 'v-automations', slash: 'automations', title: 'Automations', hint: 'Scheduled, webhook and manual jobs', group: 'Go to', icon: <Zap />, run: () => { app().setMode('cowork'); app().setView('automations'); } },
 
   // ── Go to ──
   { id: 'v-github', slash: 'github', title: 'GitHub', hint: 'Connect your account and start sessions on your repositories', group: 'Go to', icon: <GitBranch />, run: go('github') },

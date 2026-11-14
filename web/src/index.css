@@ -157,6 +157,9 @@ html.is-desktop.is-mac { --titlebar-pad: 72px; }
 .ansi-33, .ansi-93 { color: var(--warn); } .ansi-34, .ansi-94 { color: var(--info); } .ansi-35, .ansi-95 { color: var(--violet); }
 .ansi-36, .ansi-96 { color: #56c8d8; } .ansi-37, .ansi-97 { color: var(--fg); }
 
+/* Tooltips are labels, not targets: never let one (or its positioning wrapper) swallow a click. */
+[data-radix-popper-content-wrapper]:has(> [data-tip]) { pointer-events: none !important; }
+
 .xterm-viewport { background: transparent !important; }
 .streaming-caret > :last-child::after {
   content: ""; display: inline-block; width: 7px; height: 1.05em; margin-left: 2px; vertical-align: text-bottom;

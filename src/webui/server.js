@@ -22,6 +22,9 @@ const { ChatManager } = require('./chat');
 const { TerminalHub } = require('./terminal');
 const { createApi, HttpError, publicSettings } = require('./api');
 const { createMCPManager } = require('../mcp-client');
+const { createProjects } = require('./projects');
+const { createAutomations } = require('./automations');
+const design = require('./design');
 const endpoints = require('../endpoints');
 const sessionSearch = require('../session-search');
 
@@ -196,7 +199,11 @@ async function startWebServer(opts = {}) {
     if (p.registry && !process.env.SHMAKK_REGISTRY) process.env.SHMAKK_REGISTRY = p.registry;
   }
 
+  app.projects = createProjects();
+  app.artifactSecret = token;
   app.chat = new ChatManager({
+    projects: app.projects,
+    get automations() { return app.automations; },
     settings,
     saveSettings: app.saveSettings,
     broadcast,
@@ -204,6 +211,8 @@ async function startWebServer(opts = {}) {
     getWorkspace: () => workspace,
     onProviderChanged: () => app.broadcastProvider(),
   });
+
+  app.automations = createAutomations({ chat: app.chat, projects: app.projects, broadcast, getWorkspace: () => workspace });
 
   app.restartMcp = async () => {
     try { await app.mcp.shutdown(); } catch {}
@@ -304,6 +313,31 @@ async function startWebServer(opts = {}) {
     if (pathname === '/healthz') return send(res, 200, { ok: true });
 
     const ip = clientIp(req);
+
+    // Design previews: signed URL instead of the cookie, served into a sandboxed
+    // (opaque-origin) frame so generated pages can't reach the app.
+    if (pathname.startsWith('/artifact/')) {
+      const [, , convId, sig, ...rest] = pathname.split('/');
+      const hit = design.resolveArtifact(app.artifactSecret, convId, sig, rest.join('/'));
+      if (!hit || (req.method !== 'GET' && req.method !== 'HEAD')) return send(res, 404, 'not found');
+      return fs.readFile(hit.file, (err, data) => {
+        if (err) return send(res, 404, 'not found');
+        res.writeHead(200, { 'content-type': hit.type, 'content-length': data.length, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'content-security-policy': design.ARTIFACT_CSP, 'referrer-policy': 'no-referrer' });
+        res.end(data);
+      });
+    }
+
+    // Automation webhooks: POST /hooks/<id>/<secret> — the secret is the credential.
+    if (pathname.startsWith('/hooks/')) {
+      if (req.method !== 'POST') return send(res, 405, { error: 'POST only' });
+      if (blocked(ip)) return send(res, 429, { error: 'too many attempts' });
+      const [, , id, secret] = pathname.split('/');
+      let payload = '';
+      try { payload = (await readBody(req, 256 * 1024)).toString('utf8'); } catch (e) { return send(res, e.status || 400, { error: e.message }); }
+      const r = await app.automations.trigger(id, secret, payload).catch((e) => ({ status: 500, error: e.message }));
+      if (r.status === 404) noteFailure(ip);
+      return send(res, r.status, r.status === 202 ? { ok: true, runId: r.runId } : { error: r.error || 'not found' });
+    }
     // Token hand-off: /?token=… → cookie → clean URL.
     if (url.searchParams.has('token')) {
       if (blocked(ip)) return send(res, 429, 'Too many attempts. Try again in a few minutes.', { 'retry-after': '600' });
@@ -465,6 +499,7 @@ async function startWebServer(opts = {}) {
   const mcpCount = app.mcp.loadConfig(workspace);
   if (mcpCount > 0) app.mcp.startAll(() => {}).then(() => broadcast({ t: 'status.changed' })).catch(() => {});
   setImmediate(() => { try { sessionSearch.indexAuditLog(); } catch {} });
+  app.automations.start();
 
   let closed = false;
   let resolveClosed;
@@ -473,6 +508,7 @@ async function startWebServer(opts = {}) {
     if (closed) return;
     closed = true;
     clearInterval(heartbeat);
+    app.automations.stop();
     try { app.chat.shutdown(); } catch {}
     terminals.closeAll();
     for (const ws of clients) { try { ws.close(1001); } catch {} }

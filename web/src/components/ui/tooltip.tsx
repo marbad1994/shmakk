@@ -12,7 +12,8 @@ export function Tip({ label, side = 'bottom', children }: { label: React.ReactNo
         <Primitive.Content
           side={side}
           sideOffset={6}
-          className="z-[60] max-w-72 rounded-lg border border-line-strong bg-raised px-2.5 py-1 text-xs text-fg shadow-pop animate-pop"
+          data-tip=""
+          className="pointer-events-none z-[60] max-w-72 rounded-lg border border-line-strong bg-raised px-2.5 py-1 text-xs text-fg shadow-pop animate-pop"
         >
           {label}
         </Primitive.Content>

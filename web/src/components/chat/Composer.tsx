@@ -2,6 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { ArrowUp, ChevronDown, Gauge, Mic, ShieldCheck, Square, Volume2, VolumeX, Zap } from 'lucide-react';
 import { COMMANDS, filterCommands, matchSlash, type Command } from '@/lib/commands';
 import { cn, modKey } from '@/lib/utils';
+import { modeInfo } from '@/lib/modes';
+import type { Mode } from '@/lib/types';
 import { useApp } from '@/store/app';
 import type { MicState } from '@/hooks/useVoice';
 import { haptic, isTouch } from '@/hooks/useMobile';
@@ -11,6 +13,7 @@ import { Tip } from '@/components/ui/tooltip';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 
 interface Props {
+  mode: Mode;
   running: boolean;
   activity: string | null;
   mic: MicState;
@@ -22,7 +25,9 @@ interface Props {
 const HISTORY_KEY = 'shmakk.inputHistory';
 function loadHistory(): string[] { try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch { return []; } }
 
-export function Composer({ running, activity, mic, speaking, onMic, onStopSpeaking }: Props) {
+export function Composer({ mode: space, running, activity, mic, speaking, onMic, onStopSpeaking }: Props) {
+  // Shell input, profiles and approval switches only make sense where there is a workspace.
+  const agentic = space === 'code' || space === 'cowork';
   const send = useApp((s) => s.send);
   const stop = useApp((s) => s.stop);
   const settings = useApp((s) => s.settings);
@@ -33,6 +38,8 @@ export function Composer({ running, activity, mic, speaking, onMic, onStopSpeaki
 
   const [text, setText] = useState('');
   const [mode, setMode] = useState<'ask' | 'shell'>('ask');
+  const shell = agentic && mode === 'shell';
+  useEffect(() => { if (!agentic && mode === 'shell') setMode('ask'); }, [agentic, mode]);
   const [sel, setSel] = useState(0);
   const [menuDismissed, setMenuDismissed] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -86,8 +93,8 @@ export function Composer({ running, activity, mic, speaking, onMic, onStopSpeaki
     setText('');
     setMenuDismissed(false);
     haptic();
-    void send(value, mode);
-  }, [text, running, mode, matches, runCommand, send]);
+    void send(value, shell ? 'shell' : 'ask');
+  }, [text, running, mode, shell, matches, runCommand, send]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.nativeEvent.isComposing) return;
@@ -122,11 +129,10 @@ export function Composer({ running, activity, mic, speaking, onMic, onStopSpeaki
     setMenuDismissed(false);
     histIdx.current = -1;
     // Typing "$ " at the start flips to shell mode, like a prompt.
-    if (mode === 'ask' && /^\$\s/.test(value)) { setMode('shell'); setText(value.replace(/^\$\s+/, '')); return; }
+    if (agentic && mode === 'ask' && /^\$\s/.test(value)) { setMode('shell'); setText(value.replace(/^\$\s+/, '')); return; }
     setText(value);
   };
 
-  const shell = mode === 'shell';
   return (
     <div className="relative shrink-0 px-5.5 pb-3 max-md:px-2 max-md:pb-2">
       <div className="relative mx-auto max-w-[780px]">
@@ -174,7 +180,7 @@ export function Composer({ running, activity, mic, speaking, onMic, onStopSpeaki
               value={text}
               onChange={(e) => onChange(e.target.value)}
               onKeyDown={onKeyDown}
-              placeholder={shell ? 'Run a command…' : 'Ask shmakk anything — / for commands'}
+              placeholder={shell ? 'Run a command…' : modeInfo(space).placeholder}
               enterKeyHint={shell ? 'go' : 'enter'}
               autoCapitalize={shell ? 'off' : 'sentences'}
               autoCorrect={shell ? 'off' : 'on'}
@@ -185,6 +191,8 @@ export function Composer({ running, activity, mic, speaking, onMic, onStopSpeaki
           </div>
           <div className="flex items-center gap-1.5 px-2.5 pb-2 pt-1">
             <div className="no-scrollbar flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto [mask-image:linear-gradient(to_right,black_calc(100%-16px),transparent)] [&>*]:shrink-0">
+            {!agentic ? <span className={cn('inline-flex items-center gap-1.5 rounded-full border border-line px-2.5 py-0.5 font-mono text-xs touch:py-1.5 [&_svg]:size-3.5', modeInfo(space).tone)}>{modeInfo(space).icon}{modeInfo(space).label.toLowerCase()}</span> : null}
+            {agentic ? <>
             <Segmented label="Input mode" value={mode} onChange={(m) => { setMode(m); ref.current?.focus(); }} options={[{ value: 'ask', label: 'ask' }, { value: 'shell', label: 'shell' }]} />
 
             <DropdownMenu>
@@ -216,6 +224,7 @@ export function Composer({ running, activity, mic, speaking, onMic, onStopSpeaki
                 <Zap className="size-3.5" />yes-files
               </button>
             </Tip>
+            </> : null}
 
             <span className="w-3" />
             </div>
@@ -246,7 +255,7 @@ export function Composer({ running, activity, mic, speaking, onMic, onStopSpeaki
           </div>
         </div>
         <p className="m-0 pt-1.5 text-center text-[11.5px] text-faint max-md:hidden touch:hidden">
-          <kbd>Enter</kbd> send · <kbd>Shift Enter</kbd> newline · <kbd>/</kbd> commands · <kbd>$</kbd> shell · <kbd>{modKey} K</kbd> palette
+          <kbd>Enter</kbd> send · <kbd>Shift Enter</kbd> newline · <kbd>/</kbd> commands{agentic ? <> · <kbd>$</kbd> shell</> : null} · <kbd>{modKey} K</kbd> palette
         </p>
       </div>
     </div>

@@ -24,6 +24,9 @@ const { HELP } = require('../cli');
 const { workspaceWarning } = require('../safety');
 const terminal = require('./terminal');
 const { createGitHub, GitHubError } = require('./github');
+const design = require('./design');
+const { AutomationError } = require('./automations');
+const store = require('./store');
 
 class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -167,6 +170,7 @@ function createApi(app) {
     profiles: Object.entries(PRESETS).map(([name, p]) => ({ name, ...p })),
     features: features(),
     hosted: !!app.hosted,
+    projects: app.projects.list(),
     conversations: app.chat.list(),
     status: statusInfo(),
   }));
@@ -280,7 +284,14 @@ function createApi(app) {
   // ── conversations ─────────────────────────────────────────────────────
 
   add('GET', '/api/conversations', () => ({ conversations: app.chat.list() }));
-  add('POST', '/api/conversations', ({ body }) => app.chat.snapshot(app.chat.create({ title: body.title }).id));
+  add('POST', '/api/conversations', ({ body }) => {
+    const project = body.projectId ? app.projects.get(body.projectId) : null;
+    if (body.projectId && !project) throw new HttpError(404, 'project not found');
+    const mode = store.MODES.includes(body.mode) ? body.mode : 'code';
+    // A project can pin the folder its code and cowork chats work in.
+    const workspace = project && project.workspace && (mode === 'code' || mode === 'cowork') && fs.existsSync(project.workspace) ? project.workspace : undefined;
+    return app.chat.snapshot(app.chat.create({ title: body.title, mode, projectId: project ? project.id : null, workspace }).id);
+  });
   add('GET', '/api/conversations/:id', ({ params }) => {
     const snap = app.chat.snapshot(params.id);
     if (!snap) throw new HttpError(404, 'conversation not found');
@@ -610,6 +621,86 @@ function createApi(app) {
     return { __binary: data, contentType: 'audio/wav' };
   });
 
+  // ── projects ──────────────────────────────────────────────────────────
+
+  const projectView = (p) => {
+    const convs = app.chat.list().filter((c) => c.projectId === p.id);
+    return { ...p, conversations: convs.length, modes: Array.from(new Set(convs.map((c) => c.mode))) };
+  };
+  add('GET', '/api/projects', () => ({ projects: app.projects.list().map(projectView) }));
+  add('POST', '/api/projects', ({ body }) => { const p = app.projects.create(body || {}); app.broadcast({ t: 'projects.changed' }); return projectView(p); });
+  add('GET', '/api/projects/:id', ({ params }) => {
+    const p = app.projects.get(params.id);
+    if (!p) throw new HttpError(404, 'project not found');
+    return { project: projectView(p), conversations: app.chat.list().filter((c) => c.projectId === p.id), automations: app.automations.list().filter((a) => a.projectId === p.id) };
+  });
+  add('PATCH', '/api/projects/:id', ({ params, body }) => {
+    if (body && body.workspace && !(fs.existsSync(body.workspace) && fs.statSync(body.workspace).isDirectory())) throw new HttpError(400, 'workspace folder not found');
+    const p = app.projects.update(params.id, body || {});
+    if (!p) throw new HttpError(404, 'project not found');
+    app.broadcast({ t: 'projects.changed' });
+    return projectView(p);
+  });
+  // Deleting a project keeps its conversations; they just leave the project.
+  add('DELETE', '/api/projects/:id', ({ params }) => {
+    for (const c of app.chat.list().filter((x) => x.projectId === params.id)) app.chat.update(c.id, { projectId: null });
+    for (const a of app.automations.list().filter((x) => x.projectId === params.id)) app.automations.update(a.id, { projectId: null });
+    const ok = app.projects.remove(params.id);
+    app.broadcast({ t: 'projects.changed' });
+    return { ok };
+  });
+
+  // ── design mode: files, versions, preview links ───────────────────────
+
+  const designConv = (id) => {
+    const conv = app.chat.get(id);
+    if (!conv) throw new HttpError(404, 'conversation not found');
+    if (conv.mode !== 'design') throw new HttpError(400, 'not a design conversation');
+    return conv;
+  };
+  add('GET', '/api/design/:id', ({ params }) => {
+    const conv = designConv(params.id);
+    const dir = design.ensureDir(conv.id);
+    return { base: `/artifact/${conv.id}/${design.sign(app.artifactSecret, conv.id)}/`, dir, files: design.listFiles(dir), versions: design.listVersions(dir) };
+  });
+  add('GET', '/api/design/:id/file', ({ params, query }) => {
+    const conv = designConv(params.id);
+    const hit = design.resolveArtifact(app.artifactSecret, conv.id, design.sign(app.artifactSecret, conv.id), String(query.path || ''));
+    if (!hit) throw new HttpError(404, 'file not found');
+    return { path: query.path, content: readText(hit.file) };
+  });
+  add('POST', '/api/design/:id/restore', ({ params, body }) => {
+    const conv = designConv(params.id);
+    if (conv.run) throw new HttpError(409, 'wait for the current run to finish');
+    if (!design.restore(design.ensureDir(conv.id), body.version)) throw new HttpError(404, 'version not found');
+    app.broadcast({ t: 'design.changed', convId: conv.id });
+    return { ok: true };
+  });
+
+  // ── cowork: automations (manual, scheduled, webhook) ──────────────────
+
+  add('GET', '/api/automations', () => ({
+    automations: app.automations.list(),
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+    templates: workflows.listWorkflows().map((w) => {
+      const full = workflows.getWorkflow(w.id);
+      return { id: w.id, name: w.id.replace(/-/g, ' '), description: w.description, steps: (full?.steps || []).map((s) => ({ title: s.role, prompt: s.task.replace(/\{input\}/g, 'the task described in this automation') })) };
+    }),
+  }));
+  add('POST', '/api/automations', ({ body }) => app.automations.create(body || {}));
+  add('PATCH', '/api/automations/:id', ({ params, body }) => {
+    const a = app.automations.update(params.id, body || {});
+    if (!a) throw new HttpError(404, 'automation not found');
+    return a;
+  });
+  add('DELETE', '/api/automations/:id', ({ params }) => ({ ok: app.automations.remove(params.id) }));
+  add('POST', '/api/automations/:id/run', ({ params }) => app.automations.run(params.id, { trigger: 'manual' }));
+  add('GET', '/api/automations/:id/webhook', ({ params }) => {
+    const p = app.automations.webhookPath(params.id);
+    if (!p) throw new HttpError(404, 'this automation has no webhook trigger');
+    return { path: p };
+  });
+
   // ── GitHub: account, repositories, cloud sessions ─────────────────────
 
   add('GET', '/api/github', () => github.status());
@@ -670,6 +761,7 @@ function createApi(app) {
         return { found: true, result: await r.handler({ ...ctx, params }) };
       } catch (e) {
         if (e instanceof GitHubError) throw new HttpError(e.status === 401 ? 400 : e.status, e.message);
+        if (e instanceof AutomationError) throw new HttpError(400, e.message);
         throw e;
       }
     }

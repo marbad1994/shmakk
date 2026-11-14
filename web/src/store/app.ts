@@ -2,16 +2,21 @@ import { create } from 'zustand';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { socket } from '@/lib/ws';
-import type { Bootstrap, ConvMeta, ConvSnapshot, Features, Item, Provider, ServerMsg, Settings, Status, ViewId } from '@/lib/types';
+import { queryClient } from '@/lib/query';
+import type { Bootstrap, ConvMeta, ConvSnapshot, Features, Item, Mode, Project, Provider, ServerMsg, Settings, Status, ViewId } from '@/lib/types';
 
-const VIEWS: ViewId[] = ['chat', 'github', 'skills', 'memory', 'plan', 'changes', 'recall', 'team', 'mcp', 'activity', 'settings'];
+const VIEWS: ViewId[] = ['chat', 'automations', 'github', 'skills', 'memory', 'plan', 'changes', 'recall', 'team', 'mcp', 'activity', 'settings'];
 
-function readHash(): { view: ViewId; conv: string | null } {
+function readHash(): { view: ViewId; conv: string | null; project: string | null } {
   const h = location.hash.replace(/^#\/?/, '');
   const [a, b] = h.split('/');
-  if (a === 'c' && b) return { view: 'chat', conv: b };
-  return { view: (VIEWS as string[]).includes(a) ? (a as ViewId) : 'chat', conv: null };
+  if (a === 'c' && b) return { view: 'chat', conv: b, project: null };
+  if (a === 'p' && b) return { view: 'project', conv: null, project: b };
+  return { view: (VIEWS as string[]).includes(a) ? (a as ViewId) : 'chat', conv: null, project: null };
 }
+
+const MODE_IDS: Mode[] = ['chat', 'code', 'design', 'cowork'];
+const savedMode = (): Mode => { const m = localStorage.getItem('shmakk.mode') as Mode | null; return m && MODE_IDS.includes(m) ? m : 'code'; };
 
 interface AppState {
   ready: boolean;
@@ -26,6 +31,12 @@ interface AppState {
   features: Features;
   profiles: Bootstrap['profiles'];
   status: Status | null;
+
+  mode: Mode;                       // which space the sidebar and new chats belong to
+  projects: Project[];
+  projectId: string | null;         // project shown in the Project view
+  pendingProjectId: string | null;  // project a not-yet-created chat will join
+  designTick: Record<string, number>;
 
   view: ViewId;
   activeId: string | null;
@@ -43,8 +54,12 @@ interface AppState {
 
   init(): Promise<void>;
   setView(v: ViewId): void;
+  setMode(m: Mode): void;
+  openProject(id: string): void;
+  refreshProjects(): Promise<void>;
+  moveConv(id: string, projectId: string | null): Promise<void>;
   openConv(id: string): Promise<void>;
-  newChat(): void;
+  newChat(opts?: { mode?: Mode; projectId?: string | null }): void;
   send(text: string, mode: 'ask' | 'shell'): Promise<void>;
   stop(): void;
   answer(askId: string, value: boolean): void;
@@ -122,14 +137,25 @@ export const useApp = create<AppState>((set, get) => {
       case 'provider': set({ provider: msg.provider }); break;
       case 'workspace': set({ workspace: msg.workspace }); void get().refreshStatus(); break;
       case 'status.changed': void get().refreshStatus(); break;
+      case 'projects.changed': void get().refreshProjects(); void queryClient.invalidateQueries({ queryKey: ['project'] }); break;
+      case 'automations.changed': void queryClient.invalidateQueries({ queryKey: ['automations'] }); break;
+      case 'automation.finished': {
+        const open = { label: 'Open', onClick: () => void get().openConv(msg.convId) };
+        if (msg.status === 'ok') toast.success(`${msg.name} finished`, { action: open });
+        else toast.error(`${msg.name} ${msg.status === 'stopped' ? 'was stopped' : 'failed'}`, { action: open });
+        break;
+      }
+      case 'design.changed':
+        set((s) => ({ designTick: { ...s.designTick, [msg.convId]: (s.designTick[msg.convId] || 0) + 1 } }));
+        break;
       case 'toast': (msg.level === 'error' ? toast.error : toast)(msg.text); break;
       default:
     }
   }
 
   function syncHash() {
-    const { view, activeId } = get();
-    const target = view === 'chat' ? (activeId ? `#/c/${activeId}` : '#/') : `#/${view}`;
+    const { view, activeId, projectId } = get();
+    const target = view === 'chat' ? (activeId ? `#/c/${activeId}` : '#/') : view === 'project' && projectId ? `#/p/${projectId}` : `#/${view}`;
     if (location.hash !== target) history.replaceState(null, '', target);
   }
 
@@ -146,6 +172,11 @@ export const useApp = create<AppState>((set, get) => {
     features: {} as Features,
     profiles: [],
     status: null,
+    mode: savedMode(),
+    projects: [],
+    projectId: null,
+    pendingProjectId: null,
+    designTick: {},
     view: 'chat',
     activeId: null,
     convs: [],
@@ -166,7 +197,7 @@ export const useApp = create<AppState>((set, get) => {
       set({
         ready: true, version: boot.version, home: boot.home, platform: boot.platform, hosted: boot.hosted, workspace: boot.workspace,
         settings: boot.settings, provider: boot.provider, features: boot.features, profiles: boot.profiles,
-        status: boot.status, convs: boot.conversations, runs,
+        status: boot.status, convs: boot.conversations, runs, projects: boot.projects,
       });
       socket.on(onMessage);
       socket.onStatus((online) => {
@@ -176,12 +207,13 @@ export const useApp = create<AppState>((set, get) => {
         if (online && id) void get().openConv(id);
       });
       socket.connect();
-      const { view, conv } = readHash();
-      set({ view });
+      const { view, conv, project } = readHash();
+      set({ view: view === 'project' && !boot.projects.some((p) => p.id === project) ? 'chat' : view, projectId: project });
       if (conv && boot.conversations.some((c) => c.id === conv)) await get().openConv(conv);
       window.addEventListener('hashchange', () => {
         const h = readHash();
         if (h.conv && h.conv !== get().activeId) void get().openConv(h.conv);
+        else if (h.project) get().openProject(h.project);
         else if (h.view !== get().view) set({ view: h.view });
       });
     },
@@ -192,8 +224,35 @@ export const useApp = create<AppState>((set, get) => {
       syncHash();
     },
 
+    setMode(mode) {
+      localStorage.setItem('shmakk.mode', mode);
+      // Land on the most recent chat of that space, or its empty state.
+      const recent = get().convs.find((c) => c.mode === mode && !c.automationId);
+      set({ mode, view: 'chat', activeId: null, pendingProjectId: null });
+      syncHash();
+      if (recent && window.innerWidth >= 1024) void get().openConv(recent.id);
+    },
+
+    openProject(id) {
+      set({ view: 'project', projectId: id });
+      if (window.innerWidth < 1024) set({ sidebarOpen: false });
+      syncHash();
+    },
+
+    async refreshProjects() {
+      try { set({ projects: (await api.get<{ projects: Project[] }>('/api/projects')).projects }); } catch { /* offline */ }
+    },
+
+    async moveConv(id, projectId) {
+      await api.patch(`/api/conversations/${id}`, { projectId });
+      void get().refreshProjects();
+      void queryClient.invalidateQueries({ queryKey: ['project'] });
+    },
+
     async openConv(id) {
-      set({ view: 'chat', activeId: id, loading: !get().items[id] });
+      const meta = get().convs.find((c) => c.id === id);
+      if (meta && meta.mode !== get().mode) { localStorage.setItem('shmakk.mode', meta.mode); set({ mode: meta.mode }); }
+      set({ view: 'chat', activeId: id, pendingProjectId: null, loading: !get().items[id] });
       if (window.innerWidth < 1024) set({ sidebarOpen: false });
       syncHash();
       try {
@@ -216,8 +275,9 @@ export const useApp = create<AppState>((set, get) => {
       }
     },
 
-    newChat() {
-      set({ view: 'chat', activeId: null });
+    newChat(opts = {}) {
+      if (opts.mode && opts.mode !== get().mode) { localStorage.setItem('shmakk.mode', opts.mode); set({ mode: opts.mode }); }
+      set({ view: 'chat', activeId: null, pendingProjectId: opts.projectId ?? null });
       if (window.innerWidth < 1024) set({ sidebarOpen: false });
       syncHash();
     },
@@ -225,9 +285,10 @@ export const useApp = create<AppState>((set, get) => {
     async send(text, mode) {
       let id = get().activeId;
       if (!id) {
-        const snap = await api.post<ConvSnapshot>('/api/conversations', {});
+        const snap = await api.post<ConvSnapshot>('/api/conversations', { mode: get().mode, projectId: get().pendingProjectId });
         id = snap.id;
-        set((s) => ({ activeId: id, items: { ...s.items, [snap.id]: [] }, convs: upsertMeta(s.convs, snap) }));
+        set((s) => ({ activeId: id, pendingProjectId: null, items: { ...s.items, [snap.id]: [] }, convs: upsertMeta(s.convs, snap) }));
+        if (snap.projectId) { void get().refreshProjects(); void queryClient.invalidateQueries({ queryKey: ['project'] }); }
         syncHash();
       }
       if ('Notification' in window && Notification.permission === 'default') void Notification.requestPermission();
@@ -265,7 +326,7 @@ export const useApp = create<AppState>((set, get) => {
 
     async setWorkspace(path) {
       const r = await api.post<{ workspace: string; warning: string | null }>('/api/workspace', { path });
-      set({ workspace: r.workspace, activeId: null, view: 'chat' });
+      set({ workspace: r.workspace, activeId: null, view: 'chat', pendingProjectId: null });
       syncHash();
       if (r.warning) toast.warning(r.warning);
       else toast.success(`Workspace: ${r.workspace}`);
@@ -289,7 +350,8 @@ export const useApp = create<AppState>((set, get) => {
       set((s) => {
         const runs = { ...s.runs };
         if (snap.running) runs[snap.id] = snap.activity || 'working';
-        return { view: 'chat', activeId: snap.id, workspace: snap.workspace || s.workspace, items: { ...s.items, [snap.id]: snap.items }, runs, convs: upsertMeta(s.convs, snap) };
+        localStorage.setItem('shmakk.mode', 'code');
+        return { mode: 'code' as Mode, view: 'chat', activeId: snap.id, workspace: snap.workspace || s.workspace, items: { ...s.items, [snap.id]: snap.items }, runs, convs: upsertMeta(s.convs, snap) };
       });
       syncHash();
       void get().refreshStatus();
