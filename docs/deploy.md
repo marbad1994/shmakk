@@ -20,10 +20,14 @@ lives in the `shmakk-data` volume (`/data` in the container).
 
 ## 2. Put it behind your existing reverse proxy (recommended)
 
-Port 1029 speaks plain HTTP. Since the token is effectively a password for a machine that
-runs commands, serve it over HTTPS through the proxy that already owns 443, and stop
-exposing 1029 publicly by changing the port mapping in `docker-compose.yml` to
-`"127.0.0.1:1029:1029"`. HTTPS is also required for the microphone and for installing
+The compose file follows the same layout as the other stacks on the machine: the app is
+not published itself; a `caddy:2-alpine` `proxy` service listens on 1029 and forwards to
+it, bound to `${SHMAKK_BIND:-127.0.0.1}`.
+
+Note that `caddy reverse-proxy --from :1029` serves plain HTTP on that port — it does not
+obtain a certificate. HTTPS for `sh.makketing.com` therefore comes from whatever sits in
+front of `127.0.0.1:1029` on the host (examples below). Since the token is effectively a password for a machine that
+runs commands, serve it over HTTPS and keep `SHMAKK_BIND=127.0.0.1`. HTTPS is also required for the microphone and for installing
 the app on a phone.
 
 **nginx**
@@ -63,7 +67,7 @@ Keep `SHMAKK_TRUST_PROXY=1` and `SHMAKK_PUBLIC_URL=https://sh.makketing.com` in 
 
 ### Without a proxy
 
-`http://sh.makketing.com:1029` works as-is (set `SHMAKK_TRUST_PROXY=0`). To get HTTPS on
+Set `SHMAKK_BIND=0.0.0.0` and `http://sh.makketing.com:1029` works as-is. To get HTTPS on
 1029 directly, mount a certificate into the volume and set `SHMAKK_TLS_CERT` /
 `SHMAKK_TLS_KEY`; then `SHMAKK_PUBLIC_URL=https://sh.makketing.com:1029`.
 
