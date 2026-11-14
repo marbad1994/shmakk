@@ -4,6 +4,7 @@ import { api } from '@/lib/api';
 import { useApp } from '@/store/app';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { ExtTabs } from './ExtTabs';
 import { Loading, Page, Section } from './Page';
 
 interface Workflow { id: string; description: string; topology: string; steps: { role: string; task: string }[] }
@@ -15,7 +16,7 @@ export function TeamView() {
   const ag = useQuery({ queryKey: ['agents'], queryFn: () => api.get<Agents>('/api/agents') });
 
   return (
-    <Page lead="For work that spans several domains, a project-manager agent assembles a team of specialists and runs them in parallel or as a pipeline. Workflows are pre-built team recipes it matches automatically.">
+    <Page tabs={<ExtTabs />} lead="For work that spans several domains, a project-manager agent assembles a team of specialists and runs them in parallel or as a pipeline. Workflows are pre-built team recipes it matches automatically.">
       <Section title="Workflow templates">
         {wf.isLoading ? <Loading /> : (
           <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-2.5">

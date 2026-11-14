@@ -1,10 +1,11 @@
 import type { ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 
-export function Page({ lead, actions, children }: { lead?: ReactNode; actions?: ReactNode; children: ReactNode }) {
+export function Page({ lead, actions, tabs, children }: { lead?: ReactNode; actions?: ReactNode; tabs?: ReactNode; children: ReactNode }) {
   return (
     <div className="scroll-touch min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto grid max-w-[940px] gap-5.5 px-6.5 pb-16 pt-2 max-md:px-3.5">
+      <div className="mx-auto grid max-w-[940px] grid-cols-[minmax(0,1fr)] gap-5.5 px-6.5 pb-16 pt-2 max-md:px-3.5">
+        {tabs}
         {lead || actions ? (
           <div className="flex flex-wrap items-start justify-between gap-3">
             {lead ? <p className="m-0 max-w-[680px] text-dim">{lead}</p> : <span />}

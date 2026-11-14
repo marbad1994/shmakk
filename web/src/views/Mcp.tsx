@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/input';
 import { Empty } from '@/components/ui/misc';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { ExtTabs } from './ExtTabs';
 import { Loading, Page, Row, Rows, Section } from './Page';
 
 interface Server { name: string; source: string; command: string; disabled: boolean; safety: string | null; safeTools: string[]; env: string[]; live: { connected?: boolean; tools?: number; toolCount?: number } | null }
@@ -53,6 +54,7 @@ export function McpView() {
 
   return (
     <Page
+      tabs={<ExtTabs />}
       lead="Model Context Protocol servers give the agent extra tools — databases, issue trackers, browsers. Workspace config overrides global."
       actions={<Button size="sm" onClick={() => restart.mutate()} disabled={restart.isPending}><RotateCw className={restart.isPending ? 'animate-spin' : undefined} />Restart servers</Button>}
     >

@@ -338,7 +338,7 @@ function createApi(app) {
       categories,
       skills: all.map((s) => ({
         name: s.name, version: s.version || '1', category: s.category || 'general', scope: s.scope,
-        description: s.description || '', active: !!(active && active.name === s.name), bytes: s.bytes || 0,
+        description: String(s.description || '').replace(/^['"]/, '').replace(/['"]$/, ''), active: !!(active && active.name === s.name), bytes: s.bytes || 0,
       })),
     };
   });
@@ -350,7 +350,15 @@ function createApi(app) {
     return { ...s, content: file && fs.existsSync(file) ? readText(file) : '' };
   });
   add('POST', '/api/skills/load', ({ body }) => {
-    const res = body.global ? skills.loadSkillGlobally(body.name) : skills.loadSkillToWorkspace(body.name, ws());
+    const name = skills.safeName(body.name);
+    // Catalog entries are keyed by their frontmatter name, which can differ from
+    // the file name (dev-adr-review.md → "adr-review"), so load from the real file.
+    const entry = skills.listAllSkills(ws()).find((s) => s.name === name);
+    let res;
+    if (body.global) res = skills.loadSkillGlobally(body.name);
+    else if (entry && entry.scope !== 'workspace' && entry.localPath && fs.existsSync(entry.localPath)) {
+      res = skills.importSkillContent(fs.readFileSync(entry.localPath, 'utf8'), entry.localPath, ws(), name);
+    } else res = skills.loadSkillToWorkspace(body.name, ws());
     if (!res.ok) throw new HttpError(400, res.error + (res.searched ? ` (searched ${res.searched.length} locations)` : ''));
     return res;
   });
@@ -364,6 +372,14 @@ function createApi(app) {
   add('POST', '/api/skills/deactivate', () => {
     try { fs.rmSync(path.join(ws(), '.shmakk', 'state', 'active-skill.json'), { force: true }); } catch {}
     return { ok: true };
+  });
+  // Create / upload: the browser sends the finished markdown (frontmatter + body).
+  add('POST', '/api/skills/import', ({ body }) => {
+    const raw = String(body.raw || '');
+    if (!raw.trim()) throw new HttpError(400, 'skill content is empty');
+    const res = body.global ? skills.importGlobalSkillContent(raw, 'web', body.name) : skills.importSkillContent(raw, 'web', ws(), body.name);
+    if (!res.ok) throw new HttpError(400, res.error);
+    return res;
   });
   add('POST', '/api/skills/install', async ({ body }) => {
     const res = body.global ? await skills.installSkillFromUrlGlobally(body.url) : await skills.installSkillFromUrl(body.url, ws());

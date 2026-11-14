@@ -1368,6 +1368,28 @@ test('webui github: token never appears in API settings; credential helper only 
   assert.strictEqual(run('protocol=https\nhost=github.com\n\n', ['store']), '');
 }));
 
+test('webui skills: catalog loads by frontmatter name; create/upload imports validated markdown', () => withTempHome(async (dir) => {
+  const fs = require('fs'); const path = require('path');
+  const { startWebServer } = require('../src/webui/server');
+  // A catalog skill whose file name differs from its frontmatter name (like dev-adr-review.md).
+  const catalog = path.join(dir, '.config', 'shmakk', 'skills'); fs.mkdirSync(catalog, { recursive: true });
+  fs.writeFileSync(path.join(catalog, 'dev-adr-review.md'), "---\nname: adr-review\ndescription: 'Review decision records'\n---\n# ADR review\n\n## When to use\nReviewing ADRs.\n\n## Steps\n1. Read it\n");
+  const ws = path.join(dir, 'ws'); fs.mkdirSync(ws);
+  const h = await startWebServer({ port: 0, workspace: ws, quiet: true, token: 'tok' });
+  const call = async (m, p, b) => { const r = await fetch(h.baseUrl + p, { method: m, headers: { authorization: 'Bearer tok', 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined }); return { s: r.status, j: await r.json() }; };
+  try {
+    const list = (await call('GET', '/api/skills')).j;
+    const s = list.skills.find((x) => x.name === 'adr-review');
+    assert.ok(s); assert.strictEqual(s.scope, 'global'); assert.strictEqual(s.description, 'Review decision records');
+    assert.strictEqual((await call('POST', '/api/skills/load', { name: 'adr-review' })).s, 200);
+    assert.strictEqual((await call('GET', '/api/skills')).j.skills.find((x) => x.name === 'adr-review').scope, 'workspace');
+    const made = await call('POST', '/api/skills/import', { raw: '---\nname: release-checklist\n---\n# Release checklist\n\n## Instructions\n1. Run tests\n', name: 'release-checklist' });
+    assert.strictEqual(made.s, 200); assert.strictEqual(made.j.name, 'release-checklist');
+    assert.strictEqual((await call('POST', '/api/skills/import', { raw: 'no heading or sections' })).s, 400);
+    assert.strictEqual((await call('POST', '/api/skills/import', { raw: '  ' })).s, 400);
+  } finally { await h.close(); }
+}));
+
 function highlightDiffLines(text) {
   return text.split('\n').map(line => {
     if (/^\+/.test(line)) return `${c.green}${line}${c.reset}`;
