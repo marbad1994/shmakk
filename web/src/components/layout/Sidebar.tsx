@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import {
-  Activity, Brain, ChevronsUpDown, FileDiff, Folder, ListChecks, MoreHorizontal, PanelLeftClose, Pencil, Pin, PinOff, Plug, Plus, Search,
+  Activity, Brain, ChevronsUpDown, GitBranch, FileDiff, Folder, ListChecks, MoreHorizontal, PanelLeftClose, Pencil, Pin, PinOff, Plug, Plus, Search,
   Settings, Sparkles, Trash2, Users, History,
 } from 'lucide-react';
 import type { ConvMeta, ViewId } from '@/lib/types';
@@ -31,6 +31,7 @@ function ConvRow({ conv, active, running, onRename }: { conv: ConvMeta; active: 
     <div role="listitem" className={cn('group relative flex items-center rounded-lg text-dim hover:bg-hover hover:text-fg', active && 'bg-raised text-fg shadow-[inset_2px_0_0_var(--accent)]')}>
       <button type="button" aria-current={active || undefined} onClick={() => openConv(conv.id)} className="flex min-w-0 flex-1 items-center gap-2 py-1.5 pl-2.5 pr-1 text-left touch:py-2.5 touch:text-[15px]">
         {running ? <span className="size-[7px] shrink-0 animate-pulse rounded-full bg-accent" aria-label="Running" /> : null}
+        {conv.repo ? <GitBranch className="size-3.5 shrink-0 text-violet" aria-label={`GitHub session on ${conv.repo.fullName}`} /> : null}
         <span className="truncate">{conv.title}</span>
       </button>
       <DropdownMenu>
@@ -43,7 +44,7 @@ function ConvRow({ conv, active, running, onRename }: { conv: ConvMeta; active: 
           <DropdownMenuItem onSelect={() => onRename(conv)}><Pencil />Rename</DropdownMenuItem>
           <DropdownMenuItem onSelect={() => pinConv(conv.id, !conv.pinned)}>{conv.pinned ? <PinOff /> : <Pin />}{conv.pinned ? 'Unpin' : 'Pin'}</DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem danger onSelect={() => deleteConv(conv.id)}><Trash2 />Delete</DropdownMenuItem>
+          <DropdownMenuItem danger onSelect={() => { if (!conv.repo || confirm(`Delete this session and its clone of ${conv.repo.fullName}? Unpushed work will be lost.`)) void deleteConv(conv.id); }}><Trash2 />{conv.repo ? 'Delete session & clone' : 'Delete'}</DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
@@ -90,6 +91,9 @@ export function Sidebar() {
       <div className="grid gap-1 px-2.5 pb-1 pt-1.5">
         <button type="button" onClick={newChat} className="flex w-full items-center gap-2.5 rounded-[10px] border border-line bg-raised px-2.5 py-2 text-left font-medium hover:border-accent/40">
           <Plus className="size-4 text-accent" />New chat<kbd className="ml-auto touch:hidden">{modKey} N</kbd>
+        </button>
+        <button type="button" aria-current={view === 'github' ? 'page' : undefined} onClick={() => setView('github')} className={cn('flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left text-dim hover:bg-hover hover:text-fg', view === 'github' && 'bg-accent/10 text-accent hover:bg-accent/10 hover:text-accent')}>
+          <GitBranch className="size-4" />GitHub sessions
         </button>
         <button type="button" onClick={() => setPalette(true)} className="flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left text-dim hover:bg-hover hover:text-fg">
           <Search className="size-4" />Search &amp; commands<kbd className="ml-auto touch:hidden">{modKey} K</kbd>

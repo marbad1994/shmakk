@@ -214,6 +214,15 @@ Environment:
   SHMAKK_MODEL                    Default model
   SHMAKK_HEADERS                  Comma-separated extra headers (k=v,k=v)
   SHMAKK_REGISTRY                 Comma-separated model registry filter (for makkorch)
+
+Web interface environment (shmakk --web / Docker):
+  SHMAKK_WEB_TOKEN                Access token (generated and saved if unset)
+  SHMAKK_PUBLIC_URL               Public address(es) of the app, comma-separated
+  SHMAKK_TRUST_PROXY              1 when behind a reverse proxy (honours X-Forwarded-*)
+  SHMAKK_TLS_CERT / SHMAKK_TLS_KEY  Serve HTTPS directly
+  SHMAKK_GITHUB_TOKEN             GitHub token for cloud sessions (or connect in the UI)
+  SHMAKK_GITHUB_CLIENT_ID         OAuth app client id to enable "Sign in with GitHub"
+  SHMAKK_WORKSPACES_DIR           Where GitHub sessions are cloned
 `;
 
 module.exports = { parseArgs, HELP };

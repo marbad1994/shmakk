@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { CheckCircle2, Download, FolderOpen, Monitor, Moon, Power, Sun, XCircle } from 'lucide-react';
+import { CheckCircle2, Download, FolderOpen, LogOut, Monitor, Moon, Power, Sun, XCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { COMMANDS } from '@/lib/commands';
@@ -100,6 +100,7 @@ export function SettingsView() {
   const workspace = useApp((s) => s.workspace);
   const home = useApp((s) => s.home);
   const version = useApp((s) => s.version);
+  const hosted = useApp((s) => s.hosted);
   const status = useApp((s) => s.status);
   const [theme, setTheme] = useTheme();
   const [doc, setDoc] = useState<{ title: string; text: string } | null>(null);
@@ -202,8 +203,13 @@ export function SettingsView() {
       <Section title="About">
         <Rows>
           <Row title={`shmakk ${version}`} sub={features.desktop ? 'Desktop app' : 'Web interface — also available as a desktop app via shmakk --desktop'}>
-            <Button variant="danger" onClick={() => run('exit')}><Power />Quit shmakk</Button>
+            <Button variant="danger" onClick={() => run('exit')}><Power />{hosted ? 'Restart server' : 'Quit shmakk'}</Button>
           </Row>
+          {hosted ? (
+            <Row title="This device" sub="Remove the access token from this browser. You’ll need the token to sign in again.">
+              <Button onClick={() => { window.location.href = '/logout'; }}><LogOut />Sign out</Button>
+            </Row>
+          ) : null}
         </Rows>
       </Section>
 

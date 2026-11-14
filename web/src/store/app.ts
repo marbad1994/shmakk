@@ -4,7 +4,7 @@ import { api } from '@/lib/api';
 import { socket } from '@/lib/ws';
 import type { Bootstrap, ConvMeta, ConvSnapshot, Features, Item, Provider, ServerMsg, Settings, Status, ViewId } from '@/lib/types';
 
-const VIEWS: ViewId[] = ['chat', 'skills', 'memory', 'plan', 'changes', 'recall', 'team', 'mcp', 'activity', 'settings'];
+const VIEWS: ViewId[] = ['chat', 'github', 'skills', 'memory', 'plan', 'changes', 'recall', 'team', 'mcp', 'activity', 'settings'];
 
 function readHash(): { view: ViewId; conv: string | null } {
   const h = location.hash.replace(/^#\/?/, '');
@@ -19,6 +19,7 @@ interface AppState {
   version: string;
   home: string;
   platform: string;
+  hosted: boolean;
   workspace: string;
   settings: Settings;
   provider: Provider;
@@ -60,6 +61,7 @@ interface AppState {
   setPalette(open: boolean): void;
   setFolderPicker(open: boolean): void;
   setKeyboard(open: boolean): void;
+  startSession(opts: { repo: string; branch?: string; newBranch?: string; prompt?: string }): Promise<void>;
 }
 
 function upsertMeta(list: ConvMeta[], conv: ConvMeta) {
@@ -137,6 +139,7 @@ export const useApp = create<AppState>((set, get) => {
     version: '',
     home: '',
     platform: '',
+    hosted: false,
     workspace: '',
     settings: {} as Settings,
     provider: {} as Provider,
@@ -161,7 +164,7 @@ export const useApp = create<AppState>((set, get) => {
       const runs: Record<string, string> = {};
       for (const c of boot.conversations) if (c.running) runs[c.id] = 'working';
       set({
-        ready: true, version: boot.version, home: boot.home, platform: boot.platform, workspace: boot.workspace,
+        ready: true, version: boot.version, home: boot.home, platform: boot.platform, hosted: boot.hosted, workspace: boot.workspace,
         settings: boot.settings, provider: boot.provider, features: boot.features, profiles: boot.profiles,
         status: boot.status, convs: boot.conversations, runs,
       });
@@ -198,8 +201,15 @@ export const useApp = create<AppState>((set, get) => {
         set((s) => {
           const runs = { ...s.runs };
           if (snap.running) runs[id] = snap.activity || 'working'; else delete runs[id];
-          return { items: { ...s.items, [id]: snap.items }, runs, loading: false };
+          return { items: { ...s.items, [id]: snap.items }, runs, loading: false, convs: upsertMeta(s.convs, { ...snap, items: undefined, cwd: undefined } as unknown as ConvMeta) };
         });
+        // Each conversation belongs to a workspace (cloud sessions have their own
+        // clone). Follow it, so the terminal, changes and skills pages match.
+        if (snap.workspace && snap.workspace !== get().workspace) {
+          api.post<{ workspace: string }>('/api/workspace', { path: snap.workspace })
+            .then((r) => { set({ workspace: r.workspace }); void get().refreshStatus(); })
+            .catch(() => { /* folder no longer exists */ });
+        }
       } catch {
         set({ activeId: null, loading: false });
         syncHash();
@@ -272,6 +282,18 @@ export const useApp = create<AppState>((set, get) => {
     setPalette(open) { set({ paletteOpen: open }); },
     setFolderPicker(open) { set({ folderPickerOpen: open }); },
     setKeyboard(open) { set({ keyboardOpen: open }); },
+
+    // Clone a GitHub repository on the server and open a conversation on it.
+    async startSession(opts) {
+      const snap = await api.post<ConvSnapshot>('/api/github/sessions', opts);
+      set((s) => {
+        const runs = { ...s.runs };
+        if (snap.running) runs[snap.id] = snap.activity || 'working';
+        return { view: 'chat', activeId: snap.id, workspace: snap.workspace || s.workspace, items: { ...s.items, [snap.id]: snap.items }, runs, convs: upsertMeta(s.convs, snap) };
+      });
+      syncHash();
+      void get().refreshStatus();
+    },
   };
 });
 

@@ -20,9 +20,20 @@ All notable changes to this project will be documented in this file.
 - `runAgent` and `runTeam` accept an optional `onEvent` sink for structured progress (used by the web UI; the
   terminal output is unchanged when it is not set)
 
+- **GitHub cloud sessions** — connect an account (token, environment variable, or device sign-in), browse
+  repositories, and start a session on a fresh clone with its own branch; in-chat source-control bar with
+  commit & push and pull-request creation; `/clone owner/repo`; GitHub Enterprise via `SHMAKK_GITHUB_URL` /
+  `SHMAKK_GITHUB_API_URL`
+- **Docker deployment** — `Dockerfile`, `docker-compose.yml` (port 1029), `.env.docker.example`, `docs/deploy.md`;
+  `/healthz`, `SHMAKK_PUBLIC_URL`, `SHMAKK_TRUST_PROXY`, optional built-in TLS, sign-out
+- Conversations are bound to a workspace; opening one switches the terminal and pages to it
+
 ### Security
 - Web server binds to loopback by default, requires a token on every request (HttpOnly, SameSite=Strict cookie or
   Bearer), rejects cross-origin requests and WebSocket upgrades, and ships a strict Content-Security-Policy
+- Token guesses are rate-limited per address; the cookie is `Secure` over HTTPS
+- GitHub tokens are stored owner-only, never returned by the API, never written into clones or remote URLs
+  (git authenticates through a credential helper), and session state (`.shmakk/`) is excluded from commits
 
 ## [1.1.0] - 2026-05-12
 

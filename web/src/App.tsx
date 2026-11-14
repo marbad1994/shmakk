@@ -15,6 +15,7 @@ import { FolderPicker } from '@/components/layout/FolderPicker';
 import { ChatView } from '@/components/chat/ChatView';
 
 // Secondary screens and the terminal (xterm) load on demand.
+const GitHubView = lazy(() => import('@/views/GitHub').then((m) => ({ default: m.GitHubView })));
 const SkillsView = lazy(() => import('@/views/Skills').then((m) => ({ default: m.SkillsView })));
 const MemoryView = lazy(() => import('@/views/Memory').then((m) => ({ default: m.MemoryView })));
 const PlanView = lazy(() => import('@/views/Plan').then((m) => ({ default: m.PlanView })));
@@ -27,12 +28,13 @@ const SettingsView = lazy(() => import('@/views/Settings').then((m) => ({ defaul
 const TerminalDock = lazy(() => import('@/components/layout/TerminalDock').then((m) => ({ default: m.TerminalDock })));
 
 const TITLES: Record<ViewId, string> = {
-  chat: 'New chat', skills: 'Skills', memory: 'Memory & rules', plan: 'Plan & resume', changes: 'Changes',
+  chat: 'New chat', github: 'GitHub sessions', skills: 'Skills', memory: 'Memory & rules', plan: 'Plan & resume', changes: 'Changes',
   recall: 'Session recall', team: 'Agents & workflows', mcp: 'MCP servers', activity: 'Activity', settings: 'Settings',
 };
 
 function View({ view }: { view: ViewId }) {
   switch (view) {
+    case 'github': return <GitHubView />;
     case 'skills': return <SkillsView />;
     case 'memory': return <MemoryView />;
     case 'plan': return <PlanView />;

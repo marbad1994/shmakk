@@ -43,9 +43,10 @@ export type Item =
   | UserItem | AssistantItem | ToolItem | AskItem | PlanItem | StepItem | TeamItem
   | ShellItem | OutputItem | LogItem | NoticeItem | RouteItem;
 
+export interface RepoRef { fullName: string; url: string; private: boolean; baseBranch: string; branch: string; defaultBranch: string; canPush: boolean }
 export interface ConvMeta {
   id: string; title: string; createdAt: number; updatedAt: number; pinned: boolean;
-  workspace: string | null; preview: string; running?: boolean;
+  workspace: string | null; preview: string; running?: boolean; repo?: RepoRef | null;
 }
 export interface ConvSnapshot extends ConvMeta { cwd: string; items: Item[]; running: boolean; activity: string | null }
 
@@ -73,7 +74,7 @@ export interface Status {
 export interface Bootstrap {
   version: string; workspace: string; home: string; platform: string; settings: Settings; provider: Provider;
   profiles: { name: string; contextMode: string; maxToolIters: number }[]; features: Features;
-  conversations: ConvMeta[]; status: Status;
+  conversations: ConvMeta[]; status: Status; hosted: boolean;
 }
 
 export type ServerMsg =
@@ -93,4 +94,4 @@ export type ServerMsg =
   | { t: 'term.exit'; id: string; code: number; error?: string }
   | { t: 'pong' };
 
-export type ViewId = 'chat' | 'skills' | 'memory' | 'plan' | 'changes' | 'recall' | 'team' | 'mcp' | 'activity' | 'settings';
+export type ViewId = 'chat' | 'github' | 'skills' | 'memory' | 'plan' | 'changes' | 'recall' | 'team' | 'mcp' | 'activity' | 'settings';

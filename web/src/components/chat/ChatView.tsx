@@ -7,6 +7,7 @@ import { Spinner } from '@/components/ui/misc';
 import { TranscriptItem } from './Items';
 import { Composer } from './Composer';
 import { Welcome } from './Welcome';
+import { RepoBar } from './RepoBar';
 
 const EMPTY: Item[] = [];
 
@@ -15,6 +16,7 @@ export function ChatView() {
   const items = useApp((s) => (s.activeId ? s.items[s.activeId] : undefined)) ?? EMPTY;
   const activity = useApp((s) => (s.activeId ? s.runs[s.activeId] : undefined)) ?? null;
   const loading = useApp((s) => s.loading);
+  const conv = useApp((s) => s.convs.find((c) => c.id === s.activeId));
   const settings = useApp((s) => s.settings);
   const send = useApp((s) => s.send);
   const running = activity !== null;
@@ -62,6 +64,7 @@ export function ChatView() {
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
+      {conv?.repo ? <RepoBar conv={conv} running={running} /> : null}
       <div ref={scroller} onScroll={onScroll} className="scroll-touch min-h-0 flex-1 overflow-y-auto [overflow-anchor:none]">
         {loading ? (
           <div className="grid h-full place-items-center"><Spinner className="size-5" /></div>

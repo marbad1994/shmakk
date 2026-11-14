@@ -10,6 +10,7 @@
 //   • cross-origin requests and WebSocket upgrades are rejected
 
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -47,7 +48,7 @@ const CSP = [
   "default-src 'self'",
   "script-src 'self'",
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
+  "img-src 'self' data: blob: https://avatars.githubusercontent.com",
   "media-src 'self' blob:",
   "font-src 'self' data:",
   "connect-src 'self' ws: wss:",
@@ -135,6 +136,8 @@ async function startWebServer(opts = {}) {
   if (opts.profile) settings.profile = opts.profile;
 
   let workspace = path.resolve(opts.workspace || process.cwd());
+  try { fs.mkdirSync(workspace, { recursive: true }); } catch {}
+  const homeWorkspace = workspace;
   try { process.chdir(workspace); } catch {}
 
   const clients = new Set();
@@ -148,6 +151,10 @@ async function startWebServer(opts = {}) {
     settings,
     saveSettings: () => { store.saveSettings(settings); broadcast({ t: 'settings', settings: publicSettings(settings) }); },
     getWorkspace: () => workspace,
+    homeWorkspace,
+    // "hosted" = reachable beyond this machine (Docker / --host): the UI
+    // then offers sign-out and hides things that only make sense locally.
+    hosted: host !== '127.0.0.1' && host !== 'localhost' && host !== '::1',
     broadcast,
     mcp: createMCPManager(),
     getMcp: () => app.mcp,
@@ -228,10 +235,30 @@ async function startWebServer(opts = {}) {
   };
   // Same-origin check: browsers always send Origin on WebSocket upgrades and
   // on cross-origin / non-GET requests.
+  // SHMAKK_PUBLIC_URL lists the address(es) the app is served from when it
+  // sits behind a reverse proxy that rewrites Host.
+  const publicHosts = new Set(String(process.env.SHMAKK_PUBLIC_URL || '').split(',').map((u) => { try { return new URL(u.trim()).host; } catch { return ''; } }).filter(Boolean));
+  const trustProxy = /^(1|true|yes)$/i.test(process.env.SHMAKK_TRUST_PROXY || '');
   const originOk = (req) => {
     const origin = req.headers.origin;
     if (!origin) return true;
-    try { return new URL(origin).host === req.headers.host; } catch { return false; }
+    try {
+      const h = new URL(origin).host;
+      return h === req.headers.host || publicHosts.has(h) || (trustProxy && h === req.headers['x-forwarded-host']);
+    } catch { return false; }
+  };
+  const clientIp = (req) => (trustProxy && String(req.headers['x-forwarded-for'] || '').split(',')[0].trim()) || req.socket.remoteAddress || '?';
+  const isHttps = (req) => !!req.socket.encrypted || (trustProxy && String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https');
+
+  // Brute-force guard for the token: 8 wrong guesses per address per 10 minutes.
+  const failures = new Map(); // ip → { n, resetAt }
+  const blocked = (ip) => { const f = failures.get(ip); return !!f && f.resetAt > Date.now() && f.n >= 8; };
+  const noteFailure = (ip) => {
+    const now = Date.now();
+    const f = failures.get(ip);
+    if (!f || f.resetAt <= now) failures.set(ip, { n: 1, resetAt: now + 10 * 60e3 });
+    else f.n += 1;
+    if (failures.size > 5000) for (const [k, v] of failures) if (v.resetAt <= now) failures.delete(k);
   };
 
   const send = (res, status, body, headers = {}) => {
@@ -264,18 +291,28 @@ async function startWebServer(opts = {}) {
     });
   };
 
-  const server = http.createServer(async (req, res) => {
+  // Optional built-in TLS (otherwise terminate TLS at your reverse proxy).
+  const tls = process.env.SHMAKK_TLS_CERT && process.env.SHMAKK_TLS_KEY
+    ? { cert: fs.readFileSync(process.env.SHMAKK_TLS_CERT), key: fs.readFileSync(process.env.SHMAKK_TLS_KEY) }
+    : null;
+  const handler = async (req, res) => {
     let url;
     try { url = new URL(req.url, 'http://localhost'); } catch { return send(res, 400, 'bad request'); }
     const pathname = decodeURIComponent(url.pathname);
 
+    // Liveness probe for Docker / load balancers — reveals nothing.
+    if (pathname === '/healthz') return send(res, 200, { ok: true });
+
+    const ip = clientIp(req);
     // Token hand-off: /?token=… → cookie → clean URL.
     if (url.searchParams.has('token')) {
+      if (blocked(ip)) return send(res, 429, 'Too many attempts. Try again in a few minutes.', { 'retry-after': '600' });
       if (!safeEqual(url.searchParams.get('token'), token)) {
+        noteFailure(ip);
         return send(res, 401, LOGIN_PAGE, { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'" });
       }
       res.writeHead(302, {
-        'set-cookie': `${COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${60 * 60 * 24 * 90}`,
+        'set-cookie': `${COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${60 * 60 * 24 * 90}${isHttps(req) ? '; Secure' : ''}`,
         location: pathname || '/',
         'cache-control': 'no-store',
       });
@@ -286,7 +323,13 @@ async function startWebServer(opts = {}) {
     if (pathname === '/favicon.ico') return serveFile(res, path.join(PUBLIC_DIR, 'favicon.svg'));
     if (PUBLIC_FILES.has(pathname)) return serveFile(res, path.join(PUBLIC_DIR, pathname));
 
+    if (pathname === '/logout') {
+      res.writeHead(302, { 'set-cookie': `${COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`, location: '/', 'cache-control': 'no-store' });
+      return res.end();
+    }
+
     if (!isAuthed(req)) {
+      if (req.headers.authorization) { if (blocked(ip)) return send(res, 429, { error: 'too many attempts' }); noteFailure(ip); }
       if (pathname.startsWith('/api/')) return send(res, 401, { error: 'unauthorized' });
       return send(res, 401, LOGIN_PAGE, { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'" });
     }
@@ -331,7 +374,8 @@ async function startWebServer(opts = {}) {
       return serveFile(res, path.join(PUBLIC_DIR, 'index.html'));
     }
     return send(res, 404, 'not found');
-  });
+  };
+  const server = tls ? https.createServer(tls, handler) : http.createServer(handler);
 
   // ── WebSocket: live transcript updates + terminals ──
   const wss = new WebSocketServer({ noServer: true, maxPayload: 4 * 1024 * 1024 });
@@ -414,7 +458,7 @@ async function startWebServer(opts = {}) {
   }
   const port = server.address().port;
   const shownHost = host === '0.0.0.0' || host === '::' ? 'localhost' : (host.includes(':') ? `[${host}]` : host);
-  const baseUrl = `http://${shownHost}:${port}`;
+  const baseUrl = `${tls ? 'https' : 'http'}://${shownHost}:${port}`;
   const url = `${baseUrl}/?token=${token}`;
 
   // MCP servers + search index warm up in the background.
@@ -445,6 +489,7 @@ async function startWebServer(opts = {}) {
     log(`  \x1b[1m\x1b[32mshmakk web\x1b[0m  v${version}`);
     log(`  \x1b[2mworkspace\x1b[0m  ${workspace}`);
     log(`  \x1b[2mopen\x1b[0m       \x1b[36m${url}\x1b[0m`);
+    for (const u of String(process.env.SHMAKK_PUBLIC_URL || '').split(',').map((x) => x.trim()).filter(Boolean)) log(`  \x1b[2mpublic\x1b[0m     \x1b[36m${u.replace(/\/$/, '')}/?token=${token}\x1b[0m`);
     if (host !== '127.0.0.1' && host !== 'localhost' && host !== '::1') {
       // Addresses a phone on the same network can open.
       for (const addrs of Object.values(require('os').networkInterfaces())) {

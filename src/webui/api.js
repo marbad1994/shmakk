@@ -23,6 +23,7 @@ const { SPECIALISTS } = require('../coordinator');
 const { HELP } = require('../cli');
 const { workspaceWarning } = require('../safety');
 const terminal = require('./terminal');
+const { createGitHub, GitHubError } = require('./github');
 
 class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -66,7 +67,7 @@ function readJson(p) {
 //        restartMcp, broadcast, version, shutdown, applyProvider }
 // What the browser gets to see of the settings: no token, no API key.
 function publicSettings(settings) {
-  const { token: _t, provider: _p, ...rest } = settings;
+  const { token: _t, provider: _p, github: _g, ...rest } = settings;
   return rest;
 }
 
@@ -79,6 +80,8 @@ function createApi(app) {
   };
 
   const ws = () => app.getWorkspace();
+  const github = createGitHub({ settings: app.settings, saveSettings: app.saveSettings });
+  app.github = github;
 
   function providerInfo() {
     const active = endpoints.getCurrentEndpoint();
@@ -163,6 +166,7 @@ function createApi(app) {
     provider: providerInfo(),
     profiles: Object.entries(PRESETS).map(([name, p]) => ({ name, ...p })),
     features: features(),
+    hosted: !!app.hosted,
     conversations: app.chat.list(),
     status: statusInfo(),
   }));
@@ -287,7 +291,19 @@ function createApi(app) {
     if (!r) throw new HttpError(404, 'conversation not found');
     return r;
   });
-  add('DELETE', '/api/conversations/:id', ({ params }) => ({ ok: app.chat.remove(params.id) }));
+  add('DELETE', '/api/conversations/:id', ({ params, query }) => {
+    const conv = app.chat.get(params.id);
+    const dir = conv && conv.repo ? conv.workspace : null;
+    const ok = app.chat.remove(params.id);
+    // Cloud sessions own their clone; remove it with the session unless asked not to.
+    if (dir && query.keepWorkspace !== '1') {
+      try {
+        github.removeWorkspace(dir);
+        if (ws() === dir) app.setWorkspace(app.homeWorkspace);
+      } catch {}
+    }
+    return { ok };
+  });
   // --reset / --compact for one conversation
   add('POST', '/api/conversations/:id/reset', ({ params }) => {
     const conv = app.chat.get(params.id);
@@ -578,6 +594,51 @@ function createApi(app) {
     return { __binary: data, contentType: 'audio/wav' };
   });
 
+  // ── GitHub: account, repositories, cloud sessions ─────────────────────
+
+  add('GET', '/api/github', () => github.status());
+  add('POST', '/api/github/connect', ({ body }) => github.connect(body.token));
+  add('POST', '/api/github/disconnect', () => github.disconnect());
+  add('POST', '/api/github/device/start', () => github.deviceStart());
+  add('POST', '/api/github/device/poll', ({ body }) => github.devicePoll(String(body.deviceCode || '')));
+  add('GET', '/api/github/repos', ({ query }) => github.listRepos({ q: query.q || '', refresh: query.refresh === '1' }));
+  add('GET', '/api/github/branches', ({ query }) => github.listBranches(query.repo));
+
+  // Clone a repository into its own workspace and open a conversation on it.
+  add('POST', '/api/github/sessions', async ({ body }) => {
+    const prompt = String(body.prompt || '').trim();
+    const { dir, repo } = await github.prepareWorkspace({ repo: body.repo, branch: body.branch || '', newBranch: body.newBranch || '', label: prompt || body.newBranch });
+    const conv = app.chat.create({ title: prompt ? undefined : `${repo.fullName} · ${repo.branch}`, workspace: dir, repo });
+    app.setWorkspace(dir);
+    if (prompt) await app.chat.send(conv.id, prompt, { mode: 'ask' });
+    return app.chat.snapshot(conv.id);
+  });
+
+  const repoConv = (id) => {
+    const conv = app.chat.get(id);
+    if (!conv) throw new HttpError(404, 'conversation not found');
+    if (!conv.repo) throw new HttpError(400, 'not a GitHub session');
+    return conv;
+  };
+  add('GET', '/api/github/sessions/:id', async ({ params }) => {
+    const conv = repoConv(params.id);
+    const status = await github.gitStatus(conv.workspace);
+    if (status.branch && status.branch !== conv.repo.branch) { conv.repo.branch = status.branch; app.chat.update(conv.id, {}); }
+    const pr = status.branch !== conv.repo.baseBranch ? await github.findPullRequest(conv.repo.fullName, status.branch) : null;
+    return { repo: conv.repo, status, pr };
+  });
+  add('POST', '/api/github/sessions/:id/push', async ({ params, body }) => {
+    const conv = repoConv(params.id);
+    if (conv.run) throw new HttpError(409, 'wait for the current run to finish');
+    return github.commitAndPush(conv.workspace, { message: body.message });
+  });
+  add('POST', '/api/github/sessions/:id/pr', async ({ params, body }) => {
+    const conv = repoConv(params.id);
+    const status = await github.gitStatus(conv.workspace);
+    if (status.branch === conv.repo.baseBranch) throw new HttpError(400, 'create a branch first — this session is on the base branch');
+    return github.createPullRequest(conv.repo.fullName, { head: status.branch, base: body.base || conv.repo.baseBranch, title: body.title, body: body.body, draft: body.draft });
+  });
+
   // ── lifecycle (--exit) ────────────────────────────────────────────────
 
   add('POST', '/api/shutdown', () => { setTimeout(() => app.shutdown(), 150); return { ok: true }; });
@@ -589,7 +650,12 @@ function createApi(app) {
       if (!m) continue;
       const params = {};
       r.keys.forEach((k, i) => { params[k] = decodeURIComponent(m[i + 1]); });
-      return { found: true, result: await r.handler({ ...ctx, params }) };
+      try {
+        return { found: true, result: await r.handler({ ...ctx, params }) };
+      } catch (e) {
+        if (e instanceof GitHubError) throw new HttpError(e.status === 401 ? 400 : e.status, e.message);
+        throw e;
+      }
     }
     return { found: false };
   }

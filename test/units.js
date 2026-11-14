@@ -1319,6 +1319,55 @@ test('webui chat: self-commands and shell mode run without an LLM', () => withTe
   }
 }));
 
+test('webui github: repository and branch names are validated', () => {
+  const { parseRepo, validBranch } = require('../src/webui/github');
+  assert.deepStrictEqual(parseRepo('octo/demo'), { owner: 'octo', repo: 'demo', fullName: 'octo/demo' });
+  assert.strictEqual(parseRepo('https://github.com/octo/demo.git').fullName, 'octo/demo');
+  assert.strictEqual(parseRepo('git@github.com:octo/demo.git').fullName, 'octo/demo');
+  for (const bad of ['', 'demo', '../etc', 'octo/..', 'a/b/c', '-x/y', 'octo/de mo', 'octo/demo;rm -rf']) assert.strictEqual(parseRepo(bad), null, bad);
+  for (const ok of ['main', 'feat/login-fix', 'release-1.2']) assert.ok(validBranch(ok), ok);
+  for (const bad of ['', '-force', 'a..b', 'a b', 'x.lock', 'a//b', 'trail/', '--upload-pack=x']) assert.ok(!validBranch(bad), bad);
+});
+
+test('webui github: status, commit and push work against a real git remote', () => withTempHome(async (dir) => {
+  const fs = require('fs'); const path = require('path'); const { execFileSync } = require('child_process');
+  const g = (cwd, ...a) => execFileSync('git', a, { cwd, stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null' } }).toString();
+  const seed = path.join(dir, 'seed'); const remote = path.join(dir, 'remote.git'); const work = path.join(dir, 'work');
+  fs.mkdirSync(seed);
+  g(seed, 'init', '-q', '-b', 'main'); fs.writeFileSync(path.join(seed, 'a.txt'), 'one\n');
+  g(seed, 'add', '-A'); g(seed, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'init');
+  g(dir, 'clone', '-q', '--bare', seed, remote); g(dir, 'clone', '-q', remote, work);
+  g(work, 'config', 'user.name', 't'); g(work, 'config', 'user.email', 't@t'); g(work, 'checkout', '-q', '-b', 'feature');
+
+  const gh = require('../src/webui/github').createGitHub({ settings: {}, saveSettings() {} });
+  let st = await gh.gitStatus(work);
+  assert.strictEqual(st.branch, 'feature');
+  assert.deepStrictEqual(st.files, []);
+  await assert.rejects(() => gh.commitAndPush(work, { message: 'x' }), /nothing to commit/);
+
+  fs.writeFileSync(path.join(work, 'new file.txt'), 'hi\n'); fs.writeFileSync(path.join(work, 'a.txt'), 'two\n');
+  st = await gh.gitStatus(work);
+  assert.deepStrictEqual(st.files.map((f) => f.path).sort(), ['a.txt', 'new file.txt']);
+  await assert.rejects(() => gh.commitAndPush(work, { message: '  ' }), /commit message required/);
+  const r = await gh.commitAndPush(work, { message: 'change things' });
+  assert.strictEqual(r.committed, true);
+  assert.strictEqual(r.status.files.length, 0);
+  assert.strictEqual(r.status.unpushed, 0);
+  assert.match(g(remote, 'log', '--oneline', 'feature'), /change things/);
+  assert.throws(() => gh.removeWorkspace(work), /not a session workspace/); // only clones under the workspaces dir may be deleted
+}));
+
+test('webui github: token never appears in API settings; credential helper only answers for GitHub', () => withTempHome(async (dir) => {
+  const { publicSettings } = require('../src/webui/api');
+  assert.deepStrictEqual(publicSettings({ review: true, token: 't', provider: { apiKey: 'k' }, github: { token: 'ghp_x' } }), { review: true });
+  const { execFileSync } = require('child_process'); const path = require('path');
+  const helper = path.join(__dirname, '..', 'src', 'webui', 'git-credential.js');
+  const run = (input, args = ['get']) => execFileSync('node', [helper, ...args], { input, env: { ...process.env, SHMAKK_GITHUB_TOKEN: 'ghp_secret', GITHUB_TOKEN: '' } }).toString();
+  assert.match(run('protocol=https\nhost=github.com\n\n'), /username=x-access-token\npassword=ghp_secret/);
+  assert.strictEqual(run('protocol=https\nhost=evil.example\n\n'), '');
+  assert.strictEqual(run('protocol=https\nhost=github.com\n\n', ['store']), '');
+}));
+
 function highlightDiffLines(text) {
   return text.split('\n').map(line => {
     if (/^\+/.test(line)) return `${c.green}${line}${c.reset}`;

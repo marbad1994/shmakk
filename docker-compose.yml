@@ -1,0 +1,36 @@
+# shmakk web on http://<host>:1029  →  https://sh.makketing.com via your reverse proxy
+#
+#   cp .env.docker.example .env   # fill in the token and model provider
+#   docker compose up -d --build
+#   docker compose logs shmakk    # prints the sign-in link
+
+services:
+  shmakk:
+    build: .
+    image: shmakk-web:latest
+    container_name: shmakk
+    restart: unless-stopped
+    init: false            # tini is already the entrypoint
+    ports:
+      # Port 80/443 belong to other services on this machine; shmakk uses 1029.
+      # Change the left side to "127.0.0.1:1029:1029" once a reverse proxy
+      # fronts it, so the port is no longer reachable directly.
+      - "1029:1029"
+    env_file: .env
+    environment:
+      PORT: "1029"
+      SHMAKK_PUBLIC_URL: ${SHMAKK_PUBLIC_URL:-https://sh.makketing.com,http://sh.makketing.com:1029}
+      SHMAKK_TRUST_PROXY: ${SHMAKK_TRUST_PROXY:-1}
+    volumes:
+      # Conversations, settings, GitHub token, cloned repositories.
+      - shmakk-data:/data
+    # The agent runs shell commands: keep it boxed in.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 1024
+    mem_limit: ${SHMAKK_MEM_LIMIT:-4g}
+
+volumes:
+  shmakk-data:

@@ -81,6 +81,20 @@ The server only listens on your machine by default and every request needs the a
 
 → Details: [docs/web.md](docs/web.md)
 
+### GitHub cloud sessions
+
+Connect your GitHub account (**GitHub sessions** in the sidebar), pick a repository, and shmakk clones it on the server into a session of its own. Each session has its own clone and branch, a source-control bar with **Commit & push** and **Open PR**, and can be driven from any device.
+
+### Self-hosting with Docker
+
+```bash
+cp .env.docker.example .env      # set SHMAKK_WEB_TOKEN and your model provider
+docker compose up -d --build     # serves on port 1029
+docker compose logs shmakk       # prints the sign-in link
+```
+
+→ Reverse proxy, TLS and hardening: [docs/deploy.md](docs/deploy.md)
+
 ## Voice (optional)
 
 speak naturally — shmakk listens, transcribes, responds, and reads its answer aloud. No push-to-talk.

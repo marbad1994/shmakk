@@ -4,7 +4,7 @@
 
 import type { ReactNode } from 'react';
 import {
-  Activity, BookOpen, Brain, Bug, CircleHelp, Cpu, Eraser, FileDiff, FolderOpen, Gauge, History, ListChecks,
+  Activity, BookOpen, GitBranch, Brain, Bug, CircleHelp, Cpu, Eraser, FileDiff, FolderOpen, Gauge, History, ListChecks,
   MessageSquarePlus, Mic, Moon, Plug, Power, ScrollText, Search, Settings, ShieldCheck, Sparkles, SquareTerminal,
   TerminalSquare, Users, Wand2, Zap,
 } from 'lucide-react';
@@ -44,7 +44,10 @@ export const COMMANDS: Command[] = [
   { id: 'recall', slash: 'recall', title: 'Recall from past sessions', hint: 'Full-text search across every session', group: 'Chat', icon: <History />, arg: 'query', argRequired: true, run: (a) => say(`recall ${a}`) },
   { id: 'help', slash: 'help', title: 'Help', hint: 'Show the full CLI reference', group: 'Chat', icon: <CircleHelp />, run: () => say('help') },
 
+  { id: 'clone', slash: 'clone', title: 'Start a GitHub session', hint: 'Clone owner/repo on the server and open a session on it', group: 'Chat', icon: <GitBranch />, arg: 'owner/repo [branch]', argRequired: true, run: (a) => { const [repo, branch] = a.split(/\s+/); const id = toast.loading(`Cloning ${repo}…`); return app().startSession({ repo, branch }).then(() => { toast.success(`Session ready on ${repo}`, { id }); }).catch((e: Error) => { toast.error(e.message, { id }); }); } },
+
   // ── Go to ──
+  { id: 'v-github', slash: 'github', title: 'GitHub', hint: 'Connect your account and start sessions on your repositories', group: 'Go to', icon: <GitBranch />, run: go('github') },
   { id: 'v-skills', slash: 'skills', title: 'Skills', hint: 'Browse, load and install skills (--list-skills)', group: 'Go to', icon: <Sparkles />, run: go('skills') },
   { id: 'v-memory', slash: 'memory', title: 'Memory & rules', hint: 'What shmakk remembers and must follow', group: 'Go to', icon: <Brain />, run: go('memory') },
   { id: 'v-plan', slash: 'plan', title: 'Plan & resume status', hint: 'Active plan and task journal (--show-plan, --resume-status)', group: 'Go to', icon: <ListChecks />, run: go('plan') },

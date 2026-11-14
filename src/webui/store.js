@@ -55,6 +55,7 @@ const DEFAULT_SETTINGS = {
   // provider overrides saved from the UI (applied only when env is unset)
   provider: null,
   recentWorkspaces: [],
+  github: null, // { token, login } when connected from the UI
   token: null, // access token, kept so signed-in devices survive restarts
 };
 
@@ -86,6 +87,7 @@ function metaOf(conv) {
     pinned: !!conv.pinned,
     workspace: conv.workspace || null,
     preview: conv.preview || '',
+    repo: conv.repo || null, // set for GitHub cloud sessions
   };
 }
 
@@ -119,10 +121,10 @@ function loadConversation(id) {
 
 function saveConversation(conv) {
   try {
-    const { id, title, createdAt, updatedAt, pinned, workspace, cwd, preview, sessionId, items, history } = conv;
+    const { id, title, createdAt, updatedAt, pinned, workspace, cwd, preview, sessionId, repo, items, history } = conv;
     writeFileAtomic(
       path.join(conversationsDir(), `${id}.json`),
-      JSON.stringify({ id, title, createdAt, updatedAt, pinned, workspace, cwd, preview, sessionId, items, history }),
+      JSON.stringify({ id, title, createdAt, updatedAt, pinned, workspace, cwd, preview, sessionId, repo, items, history }),
     );
   } catch {}
 }

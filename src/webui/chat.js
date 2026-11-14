@@ -128,9 +128,11 @@ class ChatManager {
     return Array.from(byId.values()).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   }
 
-  create({ title } = {}) {
+  // workspace/repo are set for GitHub cloud sessions; plain chats use the
+  // server's current workspace.
+  create({ title, workspace: ws, repo = null } = {}) {
     const now = Date.now();
-    const workspace = this.ctx.getWorkspace();
+    const workspace = ws || this.ctx.getWorkspace();
     const conv = {
       id: store.newId('c'),
       title: title || 'New chat',
@@ -141,6 +143,7 @@ class ChatManager {
       cwd: workspace,
       preview: '',
       sessionId: null,
+      repo,
       items: [],
       history: [],
     };

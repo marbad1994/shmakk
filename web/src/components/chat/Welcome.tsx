@@ -1,4 +1,4 @@
-import { ArrowRight, KeyRound } from 'lucide-react';
+import { ArrowRight, GitBranch, KeyRound } from 'lucide-react';
 import { basename } from '@/lib/utils';
 import { useApp } from '@/store/app';
 import { Button } from '@/components/ui/button';
@@ -35,6 +35,12 @@ export function Welcome() {
           <Button variant="primary" onClick={() => setView('settings')}>Open settings<ArrowRight /></Button>
         </div>
       ) : null}
+
+      <button type="button" onClick={() => setView('github')} className="flex w-full max-w-[640px] items-center gap-3 rounded-2xl border border-line bg-raised px-3.5 py-3 text-left transition-colors hover:border-violet/50">
+        <GitBranch className="size-5 shrink-0 text-violet" />
+        <span className="min-w-0 flex-1"><strong className="block font-semibold">Start from a GitHub repository</strong><span className="text-[13px] text-dim">Clone a repo here and work on it in its own session — push and open a PR when you’re done.</span></span>
+        <ArrowRight className="size-4 shrink-0 text-faint" />
+      </button>
 
       <div className="mt-1.5 grid w-full max-w-[640px] grid-cols-2 gap-2.5 max-md:grid-cols-1">
         {SUGGESTIONS.map((s) => (
