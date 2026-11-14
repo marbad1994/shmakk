@@ -1206,6 +1206,417 @@ function status(symbol, style, label) {
   return `${style}${symbol}${c.reset} ${c.bold}${label}${c.reset}`;
 }
 
+// ── web UI ──────────────────────────────────────────────────────────────────
+
+function withTempHome(fn) {
+  const os = require('os'); const fs = require('fs'); const path = require('path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shmakk-web-test-'));
+  const saved = { HOME: process.env.HOME, XDG_STATE_HOME: process.env.XDG_STATE_HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, cwd: process.cwd() };
+  process.env.HOME = dir; process.env.XDG_STATE_HOME = path.join(dir, 'state'); process.env.XDG_CONFIG_HOME = path.join(dir, 'config');
+  const restore = () => {
+    try { process.chdir(saved.cwd); } catch {}
+    for (const k of ['HOME', 'XDG_STATE_HOME', 'XDG_CONFIG_HOME']) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+    fs.rmSync(dir, { recursive: true, force: true });
+  };
+  return Promise.resolve().then(() => fn(dir)).finally(restore);
+}
+
+test('webui cli: --web/--desktop/--port/--host/--no-open parse', () => {
+  const { parseArgs } = require('../src/cli');
+  const o = parseArgs(['--web', '--port', '0', '--host', '0.0.0.0', '--no-open', '--new-token']);
+  assert.strictEqual(o.web, true);
+  assert.strictEqual(o.port, 0);
+  assert.strictEqual(o.host, '0.0.0.0');
+  assert.strictEqual(o.noOpen, true);
+  assert.strictEqual(o.newToken, true);
+  assert.strictEqual(parseArgs(['--desktop']).desktop, true);
+  assert.deepStrictEqual(o.unknown, []);
+});
+
+test('webui store: conversations round-trip and live states settle on load', () => withTempHome(() => {
+  const store = require('../src/webui/store');
+  const id = store.newId('c');
+  assert.ok(store.safeId(id));
+  assert.strictEqual(store.safeId('../etc/passwd'), null);
+  store.saveConversation({
+    id, title: 't', createdAt: 1, updatedAt: 2, pinned: false, workspace: '/w', cwd: '/w', preview: '', sessionId: null, history: [{ role: 'user', content: 'x' }],
+    items: [
+      { id: 'i1', type: 'assistant', text: 'partial', streaming: true },
+      { id: 'i2', type: 'ask', status: 'pending' },
+      { id: 'i3', type: 'tool', status: 'running' },
+    ],
+  });
+  const conv = store.loadConversation(id);
+  assert.strictEqual(conv.items[0].streaming, false);
+  assert.strictEqual(conv.items[1].status, 'expired');
+  assert.strictEqual(conv.items[2].status, 'interrupted');
+  assert.strictEqual(store.listConversations().length, 1);
+  store.deleteConversation(id);
+  assert.strictEqual(store.listConversations().length, 0);
+}));
+
+test('webui terminal: settings map onto CLI flags', () => {
+  const { cliFlags } = require('../src/webui/terminal');
+  assert.deepStrictEqual(cliFlags({ review: true, yesFiles: true, profile: 'deep' }, '/w'), ['--review', '--yes-files', '--profile', 'deep', '--workspace', '/w']);
+  assert.deepStrictEqual(cliFlags({}, null), []);
+});
+
+test('webui server: token auth, origin check, settings never leak secrets', () => withTempHome(async (dir) => {
+  const { startWebServer } = require('../src/webui/server');
+  const h = await startWebServer({ port: 0, workspace: dir, quiet: true, token: 'tok-test' });
+  try {
+    const get = (p, headers) => fetch(h.baseUrl + p, { headers, redirect: 'manual' });
+    assert.strictEqual((await get('/api/bootstrap')).status, 401);
+    assert.strictEqual((await get('/')).status, 401);
+    assert.strictEqual((await get('/api/bootstrap', { authorization: 'Bearer wrong' })).status, 401);
+    const auth = { authorization: 'Bearer tok-test' };
+    assert.strictEqual((await get('/api/status', { ...auth, origin: 'http://evil.example' })).status, 403);
+    const login = await get('/?token=tok-test');
+    assert.strictEqual(login.status, 302);
+    assert.match(login.headers.get('set-cookie'), /HttpOnly; SameSite=Strict/);
+    assert.strictEqual((await get('/?token=nope')).status, 401);
+    assert.strictEqual((await get('/manifest.webmanifest')).status === 401, false); // public asset (200 when built, 404 otherwise)
+    const boot = await (await get('/api/bootstrap', auth)).json();
+    assert.strictEqual(boot.workspace, require('path').resolve(dir));
+    assert.strictEqual('token' in boot.settings, false);
+    assert.strictEqual('provider' in boot.settings, false);
+    const patched = await (await fetch(h.baseUrl + '/api/settings', { method: 'PATCH', headers: { ...auth, 'content-type': 'application/json' }, body: JSON.stringify({ review: true, profile: 'deep' }) })).json();
+    assert.strictEqual(patched.review, true);
+    assert.strictEqual(patched.profile, 'deep');
+    const bad = await fetch(h.baseUrl + '/api/settings', { method: 'PATCH', headers: { ...auth, 'content-type': 'application/json' }, body: JSON.stringify({ profile: 'nope' }) });
+    assert.strictEqual(bad.status, 400);
+  } finally {
+    await h.close();
+  }
+}));
+
+test('webui chat: self-commands and shell mode run without an LLM', () => withTempHome(async (dir) => {
+  const savedUrl = process.env.SHMAKK_BASE_URL;
+  delete process.env.SHMAKK_BASE_URL;
+  const { ChatManager } = require('../src/webui/chat');
+  const settings = { ...require('../src/webui/store').DEFAULT_SETTINGS };
+  const chat = new ChatManager({ settings, saveSettings() {}, broadcast() {}, mcpManager: null, getWorkspace: () => dir, onProviderChanged() {} });
+  const conv = chat.create();
+  const idle = () => new Promise((r) => { const t = setInterval(() => { if (!conv.run) { clearInterval(t); r(); } }, 15); });
+  try {
+    await chat.send(conv.id, 'review on'); await idle();
+    assert.strictEqual(settings.review, true);
+    await chat.send(conv.id, 'review off'); await idle();
+    assert.strictEqual(settings.review, false);
+    await chat.send(conv.id, '$ echo web-$((40+2)) && cd / && true'); await idle();
+    const sh = conv.items.find((i) => i.type === 'shell');
+    assert.strictEqual(sh.exitCode, 0);
+    assert.match(sh.output, /web-42/);
+    assert.doesNotMatch(sh.output, /__SHMAKK_CWD__/);
+    assert.strictEqual(conv.cwd, '/');
+    assert.deepStrictEqual(chat.roots(conv), [require('path').resolve(dir), '/']);
+    await chat.send(conv.id, 'hello there'); await idle();
+    assert.ok(conv.items.some((i) => i.type === 'notice' && /No AI provider/.test(i.text)));
+    assert.strictEqual((await chat.send(conv.id, '   ')).ok, false);
+  } finally {
+    chat.remove(conv.id);
+    if (savedUrl !== undefined) process.env.SHMAKK_BASE_URL = savedUrl;
+  }
+}));
+
+test('webui github: repository and branch names are validated', () => {
+  const { parseRepo, validBranch } = require('../src/webui/github');
+  assert.deepStrictEqual(parseRepo('octo/demo'), { owner: 'octo', repo: 'demo', fullName: 'octo/demo' });
+  assert.strictEqual(parseRepo('https://github.com/octo/demo.git').fullName, 'octo/demo');
+  assert.strictEqual(parseRepo('git@github.com:octo/demo.git').fullName, 'octo/demo');
+  for (const bad of ['', 'demo', '../etc', 'octo/..', 'a/b/c', '-x/y', 'octo/de mo', 'octo/demo;rm -rf']) assert.strictEqual(parseRepo(bad), null, bad);
+  for (const ok of ['main', 'feat/login-fix', 'release-1.2']) assert.ok(validBranch(ok), ok);
+  for (const bad of ['', '-force', 'a..b', 'a b', 'x.lock', 'a//b', 'trail/', '--upload-pack=x']) assert.ok(!validBranch(bad), bad);
+});
+
+test('webui github: status, commit and push work against a real git remote', () => withTempHome(async (dir) => {
+  const fs = require('fs'); const path = require('path'); const { execFileSync } = require('child_process');
+  const g = (cwd, ...a) => execFileSync('git', a, { cwd, stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null' } }).toString();
+  const seed = path.join(dir, 'seed'); const remote = path.join(dir, 'remote.git'); const work = path.join(dir, 'work');
+  fs.mkdirSync(seed);
+  g(seed, 'init', '-q', '-b', 'main'); fs.writeFileSync(path.join(seed, 'a.txt'), 'one\n');
+  g(seed, 'add', '-A'); g(seed, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'init');
+  g(dir, 'clone', '-q', '--bare', seed, remote); g(dir, 'clone', '-q', remote, work);
+  g(work, 'config', 'user.name', 't'); g(work, 'config', 'user.email', 't@t'); g(work, 'checkout', '-q', '-b', 'feature');
+
+  const gh = require('../src/webui/github').createGitHub({ settings: {}, saveSettings() {} });
+  let st = await gh.gitStatus(work);
+  assert.strictEqual(st.branch, 'feature');
+  assert.deepStrictEqual(st.files, []);
+  await assert.rejects(() => gh.commitAndPush(work, { message: 'x' }), /nothing to commit/);
+
+  fs.writeFileSync(path.join(work, 'new file.txt'), 'hi\n'); fs.writeFileSync(path.join(work, 'a.txt'), 'two\n');
+  st = await gh.gitStatus(work);
+  assert.deepStrictEqual(st.files.map((f) => f.path).sort(), ['a.txt', 'new file.txt']);
+  await assert.rejects(() => gh.commitAndPush(work, { message: '  ' }), /commit message required/);
+  const r = await gh.commitAndPush(work, { message: 'change things' });
+  assert.strictEqual(r.committed, true);
+  assert.strictEqual(r.status.files.length, 0);
+  assert.strictEqual(r.status.unpushed, 0);
+  assert.match(g(remote, 'log', '--oneline', 'feature'), /change things/);
+  assert.throws(() => gh.removeWorkspace(work), /not a session workspace/); // only clones under the workspaces dir may be deleted
+}));
+
+test('webui github: token never appears in API settings; credential helper only answers for GitHub', () => withTempHome(async (dir) => {
+  const { publicSettings } = require('../src/webui/api');
+  assert.deepStrictEqual(publicSettings({ review: true, token: 't', provider: { apiKey: 'k' }, github: { token: 'ghp_x' } }), { review: true });
+  const { execFileSync } = require('child_process'); const path = require('path');
+  const helper = path.join(__dirname, '..', 'src', 'webui', 'git-credential.js');
+  const run = (input, args = ['get']) => execFileSync('node', [helper, ...args], { input, env: { ...process.env, SHMAKK_GITHUB_TOKEN: 'ghp_secret', GITHUB_TOKEN: '' } }).toString();
+  assert.match(run('protocol=https\nhost=github.com\n\n'), /username=x-access-token\npassword=ghp_secret/);
+  assert.strictEqual(run('protocol=https\nhost=evil.example\n\n'), '');
+  assert.strictEqual(run('protocol=https\nhost=github.com\n\n', ['store']), '');
+}));
+
+test('webui skills: catalog loads by frontmatter name; create/upload imports validated markdown', () => withTempHome(async (dir) => {
+  const fs = require('fs'); const path = require('path');
+  const { startWebServer } = require('../src/webui/server');
+  // A catalog skill whose file name differs from its frontmatter name (like dev-adr-review.md).
+  const catalog = path.join(dir, '.config', 'shmakk', 'skills'); fs.mkdirSync(catalog, { recursive: true });
+  fs.writeFileSync(path.join(catalog, 'dev-adr-review.md'), "---\nname: adr-review\ndescription: 'Review decision records'\n---\n# ADR review\n\n## When to use\nReviewing ADRs.\n\n## Steps\n1. Read it\n");
+  const ws = path.join(dir, 'ws'); fs.mkdirSync(ws);
+  const h = await startWebServer({ port: 0, workspace: ws, quiet: true, token: 'tok' });
+  const call = async (m, p, b) => { const r = await fetch(h.baseUrl + p, { method: m, headers: { authorization: 'Bearer tok', 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined }); return { s: r.status, j: await r.json() }; };
+  try {
+    const list = (await call('GET', '/api/skills')).j;
+    const s = list.skills.find((x) => x.name === 'adr-review');
+    assert.ok(s); assert.strictEqual(s.scope, 'global'); assert.strictEqual(s.description, 'Review decision records');
+    assert.strictEqual((await call('POST', '/api/skills/load', { name: 'adr-review' })).s, 200);
+    assert.strictEqual((await call('GET', '/api/skills')).j.skills.find((x) => x.name === 'adr-review').scope, 'workspace');
+    const made = await call('POST', '/api/skills/import', { raw: '---\nname: release-checklist\n---\n# Release checklist\n\n## Instructions\n1. Run tests\n', name: 'release-checklist' });
+    assert.strictEqual(made.s, 200); assert.strictEqual(made.j.name, 'release-checklist');
+    assert.strictEqual((await call('POST', '/api/skills/import', { raw: 'no heading or sections' })).s, 400);
+    assert.strictEqual((await call('POST', '/api/skills/import', { raw: '  ' })).s, 400);
+  } finally { await h.close(); }
+}));
+
+// ── modes, projects, design, automations ────────────────────────────────────
+
+test('webui cron: next run honours weekdays, time zones, steps and leap days', () => {
+  const { nextRun, parseCron, describeCron } = require('../src/webui/automations');
+  const iso = (t) => new Date(t).toISOString().slice(0, 16);
+  const fri = Date.UTC(2026, 10, 13, 8, 59, 30); // Fri 13 Nov 2026 08:59:30 UTC
+  assert.strictEqual(iso(nextRun('0 9 * * 1-5', fri)), '2026-11-13T09:00');
+  assert.strictEqual(iso(nextRun('0 9 * * 1-5', Date.UTC(2026, 10, 13, 9, 0))), '2026-11-16T09:00'); // skips the weekend
+  assert.strictEqual(iso(nextRun('*/15 * * * *', fri)), '2026-11-13T09:00');
+  assert.strictEqual(iso(nextRun('0 9 * * *', fri, 'Europe/Stockholm')), '2026-11-14T08:00');      // 09:00 CET
+  assert.strictEqual(iso(nextRun('0 9 * * *', Date.UTC(2026, 5, 1), 'Europe/Stockholm')), '2026-06-01T07:00'); // 09:00 CEST
+  assert.strictEqual(iso(nextRun('0 0 29 2 *', fri)), '2028-02-29T00:00');
+  assert.strictEqual(iso(nextRun('0 12 * * sun', fri)), '2026-11-15T12:00');
+  assert.strictEqual(iso(nextRun('0 12 * * 7', fri)), '2026-11-15T12:00');
+  assert.strictEqual(iso(nextRun('0 0 1 * 1', fri)), '2026-11-16T00:00'); // day-of-month OR weekday
+  for (const bad of ['* * * *', '61 * * * *', 'a b c d e', '*/0 * * * *', '5-1 * * * *']) assert.throws(() => parseCron(bad), bad);
+  assert.strictEqual(describeCron('0 9 * * 1-5'), 'Weekdays at 09:00');
+  assert.strictEqual(describeCron('*/10 * * * *'), 'Every 10 minutes');
+  assert.strictEqual(describeCron('30 18 * * 1,5'), 'Mon, Fri at 18:30');
+});
+
+test('webui design: versions snapshot only on change, restore works, artifact URLs are signed and confined', () => withTempHome(() => {
+  const fs = require('fs'); const path = require('path');
+  const d = require('../src/webui/design');
+  const id = 'c_abcdef123456';
+  const dir = d.ensureDir(id);
+  assert.strictEqual(d.snapshot(dir), null); // nothing to snapshot yet
+  fs.writeFileSync(path.join(dir, 'index.html'), '<h1>one</h1>');
+  fs.writeFileSync(path.join(dir, 'about.html'), '<h1>about</h1>');
+  assert.strictEqual(d.snapshot(dir, 'first').n, 1);
+  assert.strictEqual(d.snapshot(dir), null);
+  fs.writeFileSync(path.join(dir, 'index.html'), '<h1>two</h1>');
+  assert.strictEqual(d.snapshot(dir, 'second').n, 2);
+  assert.deepStrictEqual(d.listFiles(dir).map((f) => f.path), ['index.html', 'about.html']); // index first, versions hidden
+  assert.ok(d.restore(dir, 1));
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'index.html'), 'utf8'), '<h1>one</h1>');
+  assert.strictEqual(d.listVersions(dir).length, 2); // restoring an identical state adds nothing new
+
+  const sig = d.sign('secret', id);
+  assert.ok(d.resolveArtifact('secret', id, sig, 'index.html'));
+  assert.ok(d.resolveArtifact('secret', id, sig, '.versions/2/index.html'));
+  assert.ok(d.resolveArtifact('secret', id, sig, ''));                        // defaults to index.html
+  assert.strictEqual(d.resolveArtifact('secret', id, 'x'.repeat(32), 'index.html'), null); // wrong signature
+  assert.strictEqual(d.resolveArtifact('other', id, sig, 'index.html'), null);             // signed with another secret
+  assert.strictEqual(d.resolveArtifact('secret', id, sig, '../../projects.json'), null);
+  assert.strictEqual(d.resolveArtifact('secret', id, sig, '.versions/1/.meta.json'), null); // dotfiles stay private
+  assert.strictEqual(d.resolveArtifact('secret', '../x', sig, 'index.html'), null);
+  fs.symlinkSync('/etc/hostname', path.join(dir, 'leak.txt'));
+  assert.strictEqual(d.resolveArtifact('secret', id, sig, 'leak.txt'), null);              // symlink out of the folder
+  assert.match(d.ARTIFACT_CSP, /^sandbox /);
+}));
+
+test('webui projects: instructions always apply; sibling chats appear only when context is shared', () => {
+  const { buildContext } = require('../src/webui/projects');
+  const conv = { id: 'c1' };
+  const siblings = [
+    { id: 'c2', title: 'Landing page', mode: 'design', updatedAt: 2, designDir: '/d/c2', designFiles: ['index.html'], items: [{ type: 'user', text: 'make a landing page' }, { type: 'assistant', text: 'Built a warm editorial page.' }] },
+    { id: 'c1', title: 'self', mode: 'code', updatedAt: 3, items: [] },
+  ];
+  const base = { name: 'Fernhill', description: 'Coffee site', instructions: 'Tone: warm.' };
+  const shared = buildContext({ ...base, shareContext: true }, conv, siblings);
+  assert.match(shared, /## Project: Fernhill/);
+  assert.match(shared, /Tone: warm\./);
+  assert.match(shared, /\[design\] “Landing page”/);
+  assert.match(shared, /design files \(readable\): \/d\/c2 → index\.html/);
+  assert.match(shared, /Built a warm editorial page\./);
+  assert.doesNotMatch(shared, /“self”/); // never lists the conversation itself
+  const isolated = buildContext({ ...base, shareContext: false }, conv, siblings);
+  assert.match(isolated, /Tone: warm\./);
+  assert.doesNotMatch(isolated, /Landing page|Shared context/);
+  assert.strictEqual(buildContext(null, conv, siblings), '');
+});
+
+test('webui automations: validation, scheduling, runs, webhooks and the unattended chain', () => withTempHome(async () => {
+  const { createAutomations, coworkTools } = require('../src/webui/automations');
+  const sent = []; const events = [];
+  let outcome = { status: 'ok', summary: 'all good' };
+  const chat = { n: 0, create(o) { return { id: `c_run${++this.n}`, ...o }; }, async sendAndWait(id, text, opts) { sent.push({ id, text, opts }); return outcome; } };
+  const autos = createAutomations({ chat, projects: null, broadcast: (m) => events.push(m.t), getWorkspace: () => '/w' });
+  const settle = () => new Promise((r) => setTimeout(r, 20));
+
+  assert.throws(() => autos.create({ name: 'x', steps: [] }), /at least one step/);
+  assert.throws(() => autos.create({ name: 'x', steps: ['a'], trigger: { type: 'schedule', cron: 'nope' } }), /Invalid schedule/);
+
+  const a = autos.create({ name: 'Digest', steps: ['collect', { title: 'Write', prompt: 'summarise' }], trigger: { type: 'schedule', cron: '0 9 * * *', timezone: 'UTC' } });
+  assert.strictEqual(a.schedule, 'Every day at 09:00');
+  assert.ok(a.nextRunAt > Date.now());
+  assert.strictEqual(autos.update(a.id, { enabled: false }).nextRunAt, null);
+  autos.update(a.id, { enabled: true });
+
+  // Not due → nothing runs; due → runs once and is rescheduled into the future.
+  autos.tick(Date.now()); await settle();
+  assert.strictEqual(sent.length, 0);
+  autos.tick(autos.get(a.id).nextRunAt + 1000); await settle();
+  assert.strictEqual(sent.length, 2);
+  assert.match(sent[0].text, /step 1 of 2\]\ncollect/);
+  assert.match(sent[1].text, /step 2 of 2: Write\]\nsummarise/);
+  assert.strictEqual(sent[0].opts.unattended, 'auto');
+  let got = autos.get(a.id);
+  assert.strictEqual(got.runs[0].status, 'ok');
+  assert.strictEqual(got.runs[0].trigger, 'schedule');
+  assert.strictEqual(got.runs[0].summary, 'all good');
+  assert.ok(events.includes('automation.finished'));
+
+  // A failing step stops the chain.
+  outcome = { status: 'error', error: 'boom' }; sent.length = 0;
+  await autos.run(a.id); await settle();
+  assert.strictEqual(sent.length, 1);
+  assert.strictEqual(autos.get(a.id).runs[0].status, 'error');
+  outcome = { status: 'ok', summary: 'fine' };
+
+  // Webhooks: secret required, never listed, payload reaches the first step.
+  const hook = autos.create({ name: 'On deploy', steps: ['handle it'], trigger: { type: 'webhook' } });
+  const p = autos.webhookPath(hook.id);
+  assert.match(p, /^\/hooks\/a_[a-z0-9]+\/[\w-]{20,}$/);
+  assert.ok(!JSON.stringify(autos.list()).includes(p.split('/').pop()));
+  assert.strictEqual((await autos.trigger(hook.id, 'wrong', '')).status, 404);
+  assert.strictEqual((await autos.trigger(a.id, 'x', '')).status, 404); // not a webhook automation
+  sent.length = 0;
+  assert.strictEqual((await autos.trigger(hook.id, p.split('/').pop(), '{"ref":"main"}')).status, 202); await settle();
+  assert.match(sent[0].text, /handle it\n\n\[Webhook payload\]\n\{"ref":"main"\}/);
+  autos.update(hook.id, { enabled: false });
+  assert.strictEqual((await autos.trigger(hook.id, p.split('/').pop(), '')).status, 409);
+
+  // The assistant's tools: create from chat, risk levels, delete.
+  const tools = coworkTools(null, autos, { projectId: 'p_1' });
+  assert.deepStrictEqual(tools.getToolDefinitions().map((t) => t.function.name.replace('mcp__cowork__', '')), ['list_automations', 'create_automation', 'update_automation', 'run_automation', 'delete_automation']);
+  assert.strictEqual(tools.classifyTool('mcp__cowork__list_automations'), 'safe');
+  assert.strictEqual(tools.classifyTool('mcp__cowork__create_automation'), 'uncertain');
+  assert.strictEqual(tools.classifyTool('mcp__cowork__delete_automation'), 'unsafe');
+  const made = await tools.dispatchTool('mcp__cowork__create_automation', { name: 'Weekly', steps: ['check deps'], cron: '0 8 * * 1', timezone: 'Europe/Stockholm' });
+  assert.strictEqual(made.automation.schedule, 'Mon at 08:00');
+  assert.strictEqual(autos.get(made.automation.id).projectId, 'p_1');
+  assert.match((await tools.dispatchTool('mcp__cowork__create_automation', { name: 'Bad', steps: ['x'], cron: 'whenever' })).error, /Invalid schedule/);
+  assert.deepStrictEqual(await tools.dispatchTool('mcp__cowork__delete_automation', { id: made.automation.id }), { ok: true });
+}));
+
+test('webui modes: conversations carry mode and project; unattended runs settle approvals by policy', () => withTempHome(async (dir) => {
+  const fs = require('fs'); const path = require('path');
+  const savedUrl = process.env.SHMAKK_BASE_URL; delete process.env.SHMAKK_BASE_URL;
+  const { ChatManager } = require('../src/webui/chat');
+  const { createProjects } = require('../src/webui/projects');
+  const design = require('../src/webui/design');
+  const projects = createProjects();
+  const settings = { ...require('../src/webui/store').DEFAULT_SETTINGS };
+  const chat = new ChatManager({ settings, saveSettings() {}, broadcast() {}, mcpManager: null, projects, automations: null, getWorkspace: () => dir, onProviderChanged() {} });
+  try {
+    const p = projects.create({ name: 'Site', shareContext: true });
+    const d = chat.create({ mode: 'design', projectId: p.id });
+    const c = chat.create({ mode: 'code', projectId: p.id });
+    assert.strictEqual(require('../src/webui/store').metaOf(d).mode, 'design');
+    assert.strictEqual(chat.create({ mode: 'bogus' }).mode, 'code');
+    fs.writeFileSync(path.join(design.ensureDir(d.id), 'index.html'), '<h1>x</h1>');
+
+    // Design chats live in their own folder; shared projects expose it to code chats.
+    assert.deepStrictEqual(chat.roots(d), [design.designDir(d.id)]);
+    assert.deepStrictEqual(chat.roots(c), [path.resolve(dir), design.designDir(d.id)]);
+    assert.match(chat._projectContext(c), /\[design\]/);
+    projects.update(p.id, { shareContext: false });
+    assert.deepStrictEqual(chat.roots(c), [path.resolve(dir)]);
+    assert.doesNotMatch(chat._projectContext(c), /\[design\]/);
+
+    // Without a model every mode reports the same clear outcome instead of hanging.
+    for (const conv of [d, c, chat.create({ mode: 'chat' }), chat.create({ mode: 'cowork' })]) {
+      const r = await chat.sendAndWait(conv.id, 'hello there');
+      assert.strictEqual(r.status, 'error', conv.mode);
+      assert.match(r.error, /no AI provider/);
+    }
+
+    // Unattended policy, exercised directly.
+    const w = chat.create({ mode: 'cowork' });
+    const decide = async (unattended, tool) => { w.run = { unattended, ctrl: new AbortController() }; try { return await chat._confirmTool(w, w.run.ctrl)(tool); } finally { w.run = null; } };
+    const rm = { name: 'run', args: { cmd: 'rm -rf build' }, safety: 'unsafe', description: 'run command' };
+    const write = { name: 'write_file', args: { path: 'a.txt', content: 'x' }, safety: 'uncertain', description: 'write a.txt' };
+    assert.strictEqual(await decide('auto', write), true);
+    assert.strictEqual(await decide('auto', rm), false);
+    assert.ok(w.items.some((i) => i.type === 'notice' && /Skipped/.test(i.text)));
+    assert.strictEqual(await decide('full', rm), true);
+    w.run = { unattended: 'auto', ctrl: new AbortController() };
+    assert.strictEqual(await chat._ask(w, { kind: 'plan', question: 'ok?', defaultYes: true }), true); // nobody to ask → default
+    w.run = null;
+
+    // Deleting a design chat removes its artifact folder.
+    chat.remove(d.id);
+    assert.ok(!fs.existsSync(design.designDir(d.id)));
+  } finally {
+    if (savedUrl !== undefined) process.env.SHMAKK_BASE_URL = savedUrl;
+  }
+}));
+
+test('webui server: project, design and automation routes; artifact and webhook endpoints need their own credentials', () => withTempHome(async (dir) => {
+  const { startWebServer } = require('../src/webui/server');
+  const h = await startWebServer({ port: 0, workspace: dir, quiet: true, token: 'tok' });
+  const call = async (m, p, b) => { const r = await fetch(h.baseUrl + p, { method: m, headers: { authorization: 'Bearer tok', 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined }); return { s: r.status, j: await r.json() }; };
+  try {
+    const p = (await call('POST', '/api/projects', { name: 'Launch' })).j;
+    assert.strictEqual(p.shareContext, true);
+    const d = (await call('POST', '/api/conversations', { mode: 'design', projectId: p.id })).j;
+    assert.strictEqual(d.mode, 'design'); assert.strictEqual(d.projectId, p.id);
+    assert.strictEqual((await call('POST', '/api/conversations', { projectId: 'p_missing' })).s, 404);
+    assert.strictEqual((await call('PATCH', `/api/projects/${p.id}`, { shareContext: false })).j.shareContext, false);
+    assert.strictEqual((await call('GET', `/api/projects/${p.id}`)).j.conversations.length, 1);
+
+    const ds = (await call('GET', `/api/design/${d.id}`)).j;
+    assert.match(ds.base, new RegExp(`^/artifact/${d.id}/[\\w-]{32}/$`));
+    require('fs').writeFileSync(require('path').join(ds.dir, 'index.html'), '<h1>hi</h1>');
+    const art = await fetch(h.baseUrl + ds.base + 'index.html'); // no cookie, no bearer — the signature is the credential
+    assert.strictEqual(art.status, 200);
+    assert.match(art.headers.get('content-security-policy'), /^sandbox /);
+    assert.strictEqual((await fetch(h.baseUrl + ds.base.replace(/[\w-]{32}\/$/, `${'a'.repeat(32)}/`) + 'index.html')).status, 404);
+    const code = (await call('POST', '/api/conversations', { mode: 'code' })).j;
+    assert.strictEqual((await call('GET', `/api/design/${code.id}`)).s, 400);
+
+    const a = (await call('POST', '/api/automations', { name: 'Hook', steps: ['do it'], trigger: { type: 'webhook' } })).j;
+    assert.deepStrictEqual(a.trigger, { type: 'webhook' });
+    const hook = (await call('GET', `/api/automations/${a.id}/webhook`)).j.path;
+    assert.strictEqual((await fetch(h.baseUrl + hook.replace(/[^/]+$/, 'wrong'), { method: 'POST' })).status, 404);
+    assert.strictEqual((await fetch(h.baseUrl + hook)).status, 405);
+    assert.strictEqual((await fetch(h.baseUrl + hook, { method: 'POST', body: '{}' })).status, 202);
+    assert.strictEqual((await call('POST', '/api/automations', { name: 'x', steps: ['y'], trigger: { type: 'schedule', cron: 'bad' } })).s, 400);
+
+    // Deleting the project keeps its chats.
+    assert.strictEqual((await call('DELETE', `/api/projects/${p.id}`)).j.ok, true);
+    assert.strictEqual((await call('GET', `/api/conversations/${d.id}`)).j.projectId, null);
+  } finally { await h.close(); }
+}));
+
 function highlightDiffLines(text) {
   return text.split('\n').map(line => {
     if (/^\+/.test(line)) return `${c.green}${line}${c.reset}`;

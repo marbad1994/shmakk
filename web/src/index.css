@@ -1,0 +1,171 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+@import "@xterm/xterm/css/xterm.css";
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+/* touch: — phones and tablets, where there is no hover and fingers need room. */
+@custom-variant touch (@media (pointer: coarse));
+/* standalone: — installed to the home screen / running as an app. */
+@custom-variant standalone (@media (display-mode: standalone));
+
+/* "Phosphor" — warm graphite + terminal green. Tokens are CSS variables so
+   the two themes swap without touching component classes. */
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0e100f;
+  --raised: #171a18;
+  --hover: #1e2220;
+  --sunken: #090b0a;
+  --panel: #121413;
+  --line: #242925;
+  --line-strong: #363d38;
+  --fg: #e7ebe8;
+  --dim: #a2aba5;
+  --faint: #6c756f;
+  --accent: #4af073;
+  --accent-strong: #6ff78f;
+  --accent-ink: #052310;
+  --warn: #f0be4b;
+  --danger: #ff6f6f;
+  --info: #6cb6ff;
+  --violet: #b9a0ff;
+  --shadow-pop: 0 18px 50px rgb(0 0 0 / 0.5), 0 2px 8px rgb(0 0 0 / 0.35);
+  --hl-kw: #ff8fb1; --hl-str: #9be28a; --hl-num: #f0be4b; --hl-fn: #6cb6ff;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f7f6f2;
+  --raised: #ffffff;
+  --hover: #eeede7;
+  --sunken: #f0efe9;
+  --panel: #f1f0ea;
+  --line: #e2e0d8;
+  --line-strong: #cdcac0;
+  --fg: #1a1e1b;
+  --dim: #565e58;
+  --faint: #868d87;
+  --accent: #0f8a3c;
+  --accent-strong: #0b7331;
+  --accent-ink: #ffffff;
+  --warn: #9a6a00;
+  --danger: #c53030;
+  --info: #1f6fc4;
+  --violet: #6b4fd1;
+  --shadow-pop: 0 18px 50px rgb(30 30 20 / 0.16), 0 2px 8px rgb(30 30 20 / 0.08);
+  --hl-kw: #b0246a; --hl-str: #1c7a34; --hl-num: #9a6a00; --hl-fn: #1f6fc4;
+}
+
+@theme inline {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, "Liberation Mono", monospace;
+  --color-bg: var(--bg);
+  --color-raised: var(--raised);
+  --color-hover: var(--hover);
+  --color-sunken: var(--sunken);
+  --color-panel: var(--panel);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-fg: var(--fg);
+  --color-dim: var(--dim);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-ink: var(--accent-ink);
+  --color-warn: var(--warn);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+  --color-violet: var(--violet);
+  --shadow-pop: var(--shadow-pop);
+  --animate-blink: blink 1.15s steps(1) infinite;
+  --animate-rise: rise 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+  --animate-pop: pop 0.16s cubic-bezier(0.2, 0.8, 0.2, 1);
+  --animate-bars: bars 0.9s ease-in-out infinite;
+  --animate-sheet: sheet 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
+  --animate-fade: fade 0.18s ease;
+  @keyframes sheet { from { transform: translateY(100%); } }
+  @keyframes fade { from { opacity: 0; } }
+  @keyframes blink { 50% { opacity: 0; } }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+  @keyframes pop { from { opacity: 0; transform: translateY(6px) scale(0.985); } }
+  @keyframes bars { 0%, 100% { height: 3px; } 50% { height: 11px; } }
+}
+
+@layer base {
+  * { border-color: var(--line); scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+  html, body, #root { height: 100%; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    font-size: 14.5px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: color-mix(in srgb, var(--accent) 35%, transparent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button { cursor: pointer; }
+  /* App chrome shouldn't be selectable or show the iOS callout on long-press. */
+  button, nav, header, footer, [role="tab"] { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  @media (pointer: coarse) {
+    /* 16px inputs stop iOS Safari from zooming the page on focus. */
+    input, textarea, select { font-size: 16px !important; }
+    button:active:not(:disabled), [role="tab"]:active { opacity: 0.72; }
+  }
+  button:disabled { cursor: not-allowed; }
+  kbd {
+    font-family: var(--font-mono); font-size: 10.5px; padding: 1px 5px; border-radius: 5px;
+    border: 1px solid var(--line-strong); color: var(--faint); background: var(--sunken); white-space: nowrap;
+  }
+}
+
+/* Safe areas (notch, home indicator) and the on-screen keyboard.
+   --app-h tracks the *visual* viewport so the composer rides above the keyboard. */
+:root {
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+  --app-h: 100dvh;
+}
+.scroll-touch { -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+.no-scrollbar { scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+
+/* Electron: frameless title area is draggable, controls are not. */
+html.is-desktop .drag { -webkit-app-region: drag; }
+html.is-desktop .drag button, html.is-desktop .drag a, html.is-desktop .drag input, html.is-desktop .no-drag { -webkit-app-region: no-drag; }
+html.is-desktop.is-mac { --titlebar-pad: 72px; }
+
+/* Markdown code highlighting (rehype-highlight → hljs classes). */
+.hljs-comment, .hljs-quote { color: var(--faint); font-style: italic; }
+.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-built_in, .hljs-type { color: var(--hl-kw); }
+.hljs-string, .hljs-attr, .hljs-regexp, .hljs-addition { color: var(--hl-str); }
+.hljs-number, .hljs-symbol, .hljs-bullet, .hljs-meta { color: var(--hl-num); }
+.hljs-title, .hljs-section, .hljs-name, .hljs-function, .hljs-variable { color: var(--hl-fn); }
+.hljs-deletion { color: var(--danger); }
+
+/* ANSI output */
+.ansi-b { font-weight: 700; color: var(--fg); } .ansi-d { opacity: 0.65; } .ansi-u { text-decoration: underline; } .ansi-i { font-style: italic; }
+.ansi-30, .ansi-90 { color: var(--faint); } .ansi-31, .ansi-91 { color: var(--danger); } .ansi-32, .ansi-92 { color: var(--accent); }
+.ansi-33, .ansi-93 { color: var(--warn); } .ansi-34, .ansi-94 { color: var(--info); } .ansi-35, .ansi-95 { color: var(--violet); }
+.ansi-36, .ansi-96 { color: #56c8d8; } .ansi-37, .ansi-97 { color: var(--fg); }
+
+/* Tooltips are labels, not targets: never let one (or its positioning wrapper) swallow a click. */
+[data-radix-popper-content-wrapper]:has(> [data-tip]) { pointer-events: none !important; }
+
+.xterm-viewport { background: transparent !important; }
+.streaming-caret > :last-child::after {
+  content: ""; display: inline-block; width: 7px; height: 1.05em; margin-left: 2px; vertical-align: text-bottom;
+  background: var(--accent); border-radius: 1px; animation: blink 1s steps(1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+}
