@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { socket } from '@/lib/ws';
-import type { Bootstrap, ConvMeta, ConvSnapshot, Features, Item, Provider, ServerMsg, Settings, Status, ViewId } from '@/lib/types';
+import type { AttachedFile, Bootstrap, ConvMeta, ConvSnapshot, Features, Item, Provider, ServerMsg, Settings, Status, ViewId } from '@/lib/types';
 
 const VIEWS: ViewId[] = ['chat', 'github', 'skills', 'memory', 'plan', 'changes', 'recall', 'team', 'mcp', 'activity', 'settings'];
 
@@ -40,16 +40,19 @@ interface AppState {
   folderPickerOpen: boolean;
   keyboardOpen: boolean;
   draft: { text: string; mode: 'ask' | 'shell'; nonce: number } | null;
+  pendingMode: 'chat' | 'code';
 
   init(): Promise<void>;
   setView(v: ViewId): void;
   openConv(id: string): Promise<void>;
   newChat(): void;
-  send(text: string, mode: 'ask' | 'shell'): Promise<void>;
+  send(text: string, mode: 'ask' | 'shell', attachments?: AttachedFile[]): Promise<void>;
   stop(): void;
   answer(askId: string, value: boolean): void;
   renameConv(id: string, title: string): Promise<void>;
   pinConv(id: string, pinned: boolean): Promise<void>;
+  setConvMode(id: string, mode: 'chat' | 'code'): Promise<void>;
+  setMode(mode: 'chat' | 'code'): void;
   deleteConv(id: string): Promise<void>;
   resetConv(): Promise<void>;
   patchSettings(patch: Partial<Settings>): Promise<void>;
@@ -158,6 +161,7 @@ export const useApp = create<AppState>((set, get) => {
     paletteOpen: false,
     folderPickerOpen: false,
     draft: null,
+    pendingMode: 'code',
 
     async init() {
       const boot = await api.get<Bootstrap>('/api/bootstrap');
@@ -201,7 +205,7 @@ export const useApp = create<AppState>((set, get) => {
         set((s) => {
           const runs = { ...s.runs };
           if (snap.running) runs[id] = snap.activity || 'working'; else delete runs[id];
-          return { items: { ...s.items, [id]: snap.items }, runs, loading: false, convs: upsertMeta(s.convs, { ...snap, items: undefined, cwd: undefined } as unknown as ConvMeta) };
+          return { items: { ...s.items, [id]: snap.items }, runs, loading: false, pendingMode: snap.mode, convs: upsertMeta(s.convs, { ...snap, items: undefined, cwd: undefined } as unknown as ConvMeta) };
         });
         // Each conversation belongs to a workspace (cloud sessions have their own
         // clone). Follow it, so the terminal, changes and skills pages match.
@@ -222,16 +226,16 @@ export const useApp = create<AppState>((set, get) => {
       syncHash();
     },
 
-    async send(text, mode) {
+    async send(text, mode, attachments = []) {
       let id = get().activeId;
       if (!id) {
-        const snap = await api.post<ConvSnapshot>('/api/conversations', {});
+        const snap = await api.post<ConvSnapshot>('/api/conversations', { mode: get().pendingMode });
         id = snap.id;
         set((s) => ({ activeId: id, items: { ...s.items, [snap.id]: [] }, convs: upsertMeta(s.convs, snap) }));
         syncHash();
       }
       if ('Notification' in window && Notification.permission === 'default') void Notification.requestPermission();
-      socket.send({ t: 'chat.send', convId: id, text, mode });
+      socket.send({ t: 'chat.send', convId: id, text, mode, attachments });
     },
 
     stop() {
@@ -246,6 +250,13 @@ export const useApp = create<AppState>((set, get) => {
 
     async renameConv(id, title) { await api.patch(`/api/conversations/${id}`, { title }); },
     async pinConv(id, pinned) { await api.patch(`/api/conversations/${id}`, { pinned }); },
+    async setConvMode(id, mode) { await api.patch(`/api/conversations/${id}`, { mode }); },
+    setMode(mode) {
+      // The mode toggle only selects which conversations are listed and what the
+      // next new conversation will be. A loaded conversation keeps its own mode —
+      // the conversation, not the toggle, defines whether it is chat or code.
+      set({ pendingMode: mode });
+    },
     async deleteConv(id) { await api.del(`/api/conversations/${id}`); syncHash(); },
     async resetConv() {
       const id = get().activeId;

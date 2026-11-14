@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import {
-  Activity, Brain, ChevronsUpDown, GitBranch, FileDiff, Folder, ListChecks, MoreHorizontal, PanelLeftClose, Pencil, Pin, PinOff, Plug, Plus, Search,
-  Settings, Sparkles, Trash2, Users, History,
+  Activity, Brain, ChevronsUpDown, GitBranch, FileDiff, Folder, ListChecks, MessageCircle, MoreHorizontal, PanelLeftClose, Pencil, Pin, PinOff, Plug, Plus, Search,
+  Settings, Sparkles, Terminal, Trash2, Users, History,
 } from 'lucide-react';
 import type { ConvMeta, ViewId } from '@/lib/types';
 import { basename, cn, dayBucket, modKey, tildify } from '@/lib/utils';
@@ -32,6 +32,7 @@ function ConvRow({ conv, active, running, onRename }: { conv: ConvMeta; active: 
       <button type="button" aria-current={active || undefined} onClick={() => openConv(conv.id)} className="flex min-w-0 flex-1 items-center gap-2 py-1.5 pl-2.5 pr-1 text-left touch:py-2.5 touch:text-[15px]">
         {running ? <span className="size-[7px] shrink-0 animate-pulse rounded-full bg-accent" aria-label="Running" /> : null}
         {conv.repo ? <GitBranch className="size-3.5 shrink-0 text-violet" aria-label={`GitHub session on ${conv.repo.fullName}`} /> : null}
+        {conv.mode === 'chat' ? <MessageCircle className="size-3.5 shrink-0 text-accent" aria-label="Read-only chat mode" /> : null}
         <span className="truncate">{conv.title}</span>
       </button>
       <DropdownMenu>
@@ -64,20 +65,27 @@ export function Sidebar() {
   const setPalette = useApp((s) => s.setPalette);
   const toggleSidebar = useApp((s) => s.toggleSidebar);
   const renameConv = useApp((s) => s.renameConv);
+  const pendingMode = useApp((s) => s.pendingMode);
+  const setMode = useApp((s) => s.setMode);
   const [renaming, setRenaming] = useState<ConvMeta | null>(null);
   const [title, setTitle] = useState('');
 
+  // The toggle filters the list and sets the mode for the next conversation.
+  // A loaded conversation's mode is fixed at creation, so it never changes here.
+  const mode: 'chat' | 'code' = pendingMode;
+
   const groups = useMemo(() => {
     const out: { label: string; list: ConvMeta[] }[] = [];
-    const pinned = convs.filter((c) => c.pinned);
+    const visible = convs.filter((c) => c.mode === mode);
+    const pinned = visible.filter((c) => c.pinned);
     if (pinned.length) out.push({ label: 'Pinned', list: pinned });
-    for (const c of convs.filter((x) => !x.pinned)) {
+    for (const c of visible.filter((x) => !x.pinned)) {
       const label = dayBucket(c.updatedAt);
       const g = out.find((x) => x.label === label);
       if (g) g.list.push(c); else out.push({ label, list: [c] });
     }
     return out;
-  }, [convs]);
+  }, [convs, mode]);
 
   return (
     <aside aria-label="Navigation" className="flex h-full w-[272px] flex-col border-r border-line bg-panel pb-[var(--sab)] pl-[var(--sal)] pt-[var(--sat)] max-lg:w-[min(320px,86vw)]">
@@ -89,31 +97,49 @@ export function Sidebar() {
       </div>
 
       <div className="grid gap-1 px-2.5 pb-1 pt-1.5">
+        <div role="group" aria-label="Mode" className="grid grid-cols-2 gap-1 rounded-[10px] border border-line bg-raised p-1">
+          <Tip label="Chat mode — read-only" side="right">
+            <button type="button" aria-pressed={mode === 'chat'} onClick={() => void setMode('chat')} className={cn('grid place-items-center rounded-lg py-1.5 text-dim hover:bg-hover hover:text-fg', mode === 'chat' && 'bg-accent/15 text-accent hover:bg-accent/15 hover:text-accent')}>
+              <MessageCircle className="size-4" />
+            </button>
+          </Tip>
+          <Tip label="Code mode — full access" side="right">
+            <button type="button" aria-pressed={mode === 'code'} onClick={() => void setMode('code')} className={cn('grid place-items-center rounded-lg py-1.5 text-dim hover:bg-hover hover:text-fg', mode === 'code' && 'bg-accent/15 text-accent hover:bg-accent/15 hover:text-accent')}>
+              <Terminal className="size-4" />
+            </button>
+          </Tip>
+        </div>
         <button type="button" onClick={newChat} className="flex w-full items-center gap-2.5 rounded-[10px] border border-line bg-raised px-2.5 py-2 text-left font-medium hover:border-accent/40">
           <Plus className="size-4 text-accent" />New chat<kbd className="ml-auto touch:hidden">{modKey} N</kbd>
         </button>
-        <button type="button" aria-current={view === 'github' ? 'page' : undefined} onClick={() => setView('github')} className={cn('flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left text-dim hover:bg-hover hover:text-fg', view === 'github' && 'bg-accent/10 text-accent hover:bg-accent/10 hover:text-accent')}>
-          <GitBranch className="size-4" />GitHub sessions
-        </button>
-        <button type="button" onClick={() => setPalette(true)} className="flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left text-dim hover:bg-hover hover:text-fg">
-          <Search className="size-4" />Search &amp; commands<kbd className="ml-auto touch:hidden">{modKey} K</kbd>
-        </button>
+        {mode === 'code' ? (
+          <>
+            <button type="button" aria-current={view === 'github' ? 'page' : undefined} onClick={() => setView('github')} className={cn('flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left text-dim hover:bg-hover hover:text-fg', view === 'github' && 'bg-accent/10 text-accent hover:bg-accent/10 hover:text-accent')}>
+              <GitBranch className="size-4" />GitHub sessions
+            </button>
+            <button type="button" onClick={() => setPalette(true)} className="flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left text-dim hover:bg-hover hover:text-fg">
+              <Search className="size-4" />Search &amp; commands<kbd className="ml-auto touch:hidden">{modKey} K</kbd>
+            </button>
+          </>
+        ) : null}
       </div>
 
-      <nav aria-label="Workspace tools" className="grid grid-cols-4 gap-1 border-b border-line px-2.5 py-1.5">
-        {NAV.map((n) => (
-          <button
-            key={n.id}
-            type="button"
-            aria-current={view === n.id ? 'page' : undefined}
-            onClick={() => setView(n.id)}
-            className={cn('relative grid justify-items-center gap-0.5 rounded-[10px] px-0.5 pb-1.5 pt-2 text-[10.5px] text-dim touch:pb-2 touch:pt-2.5 touch:text-[11px] hover:bg-hover hover:text-fg [&_svg]:size-[17px]', view === n.id && 'bg-accent/10 text-accent hover:bg-accent/10 hover:text-accent')}
-          >
-            {n.icon}{n.label}
-            {n.id === 'changes' && edits > 0 ? <span className="absolute right-2 top-1 h-[15px] min-w-[15px] rounded-full bg-accent px-1 text-center font-mono text-[9.5px] font-semibold leading-[15px] text-accent-ink">{edits}</span> : null}
-          </button>
-        ))}
-      </nav>
+      {mode === 'code' ? (
+        <nav aria-label="Workspace tools" className="grid grid-cols-4 gap-1 border-b border-line px-2.5 py-1.5">
+          {NAV.map((n) => (
+            <button
+              key={n.id}
+              type="button"
+              aria-current={view === n.id ? 'page' : undefined}
+              onClick={() => setView(n.id)}
+              className={cn('relative grid justify-items-center gap-0.5 rounded-[10px] px-0.5 pb-1.5 pt-2 text-[10.5px] text-dim touch:pb-2 touch:pt-2.5 touch:text-[11px] hover:bg-hover hover:text-fg [&_svg]:size-[17px]', view === n.id && 'bg-accent/10 text-accent hover:bg-accent/10 hover:text-accent')}
+            >
+              {n.icon}{n.label}
+              {n.id === 'changes' && edits > 0 ? <span className="absolute right-2 top-1 h-[15px] min-w-[15px] rounded-full bg-accent px-1 text-center font-mono text-[9.5px] font-semibold leading-[15px] text-accent-ink">{edits}</span> : null}
+            </button>
+          ))}
+        </nav>
+      ) : null}
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2.5 pb-3 pt-1" role="list" aria-label="Conversations">
         {groups.length === 0 ? <p className="px-2 py-4 text-[13px] text-faint">No conversations yet. Everything you ask shmakk shows up here.</p> : null}
@@ -128,14 +154,16 @@ export function Sidebar() {
       </div>
 
       <div className="grid gap-0.5 border-t border-line px-2.5 py-2">
-        <button type="button" onClick={() => void chooseWorkspace()} className="flex w-full items-center gap-2.5 rounded-[10px] p-2 text-left text-dim hover:bg-hover hover:text-fg">
-          <Folder className="size-4 shrink-0" />
-          <span className="grid min-w-0 flex-1 leading-tight">
-            <span className="truncate font-medium text-fg">{basename(workspace)}</span>
-            <span className="truncate font-mono text-[11px] text-faint">{tildify(workspace, home)}</span>
-          </span>
-          <ChevronsUpDown className="size-4 shrink-0" />
-        </button>
+        {mode === 'code' ? (
+          <button type="button" onClick={() => void chooseWorkspace()} className="flex w-full items-center gap-2.5 rounded-[10px] p-2 text-left text-dim hover:bg-hover hover:text-fg">
+            <Folder className="size-4 shrink-0" />
+            <span className="grid min-w-0 flex-1 leading-tight">
+              <span className="truncate font-medium text-fg">{basename(workspace)}</span>
+              <span className="truncate font-mono text-[11px] text-faint">{tildify(workspace, home)}</span>
+            </span>
+            <ChevronsUpDown className="size-4 shrink-0" />
+          </button>
+        ) : null}
         <button type="button" aria-current={view === 'settings' ? 'page' : undefined} onClick={() => setView('settings')} className={cn('flex w-full items-center gap-2.5 rounded-[10px] px-2 py-1.5 text-left text-dim hover:bg-hover hover:text-fg', view === 'settings' && 'bg-accent/10 text-accent')}>
           <Settings className="size-4" />Settings
         </button>

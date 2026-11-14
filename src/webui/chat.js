@@ -16,6 +16,7 @@ const { setMaxListeners } = require('events');
 
 const { correct } = require('../correction');
 const { runAgent, clearTaskJournal } = require('../agent');
+const { CHAT_MODE_TOOLS } = require('../tools');
 const { route: routeToSpecialist } = require('../coordinator');
 const { shouldPlan, generatePlan, savePlan } = require('../planner');
 const { clearIndex } = require('../workspace-index');
@@ -129,8 +130,9 @@ class ChatManager {
   }
 
   // workspace/repo are set for GitHub cloud sessions; plain chats use the
-  // server's current workspace.
-  create({ title, workspace: ws, repo = null } = {}) {
+  // server's current workspace. mode: 'chat' (read-only tools) or 'code'
+  // (full tool access, the default).
+  create({ title, workspace: ws, repo = null, mode = 'code' } = {}) {
     const now = Date.now();
     const workspace = ws || this.ctx.getWorkspace();
     const conv = {
@@ -143,6 +145,7 @@ class ChatManager {
       cwd: workspace,
       preview: '',
       sessionId: null,
+      mode: mode === 'chat' ? 'chat' : 'code',
       repo,
       items: [],
       history: [],
@@ -186,6 +189,7 @@ class ChatManager {
     if (!conv) return null;
     if (typeof patch.title === 'string' && patch.title.trim()) conv.title = patch.title.trim().slice(0, 120);
     if (typeof patch.pinned === 'boolean') conv.pinned = patch.pinned;
+    if (patch.mode === 'chat' || patch.mode === 'code') conv.mode = patch.mode;
     this._persistSoon(conv);
     this.ctx.broadcast({ t: 'conv', conv: { ...store.metaOf(conv), running: !!conv.run } });
     return store.metaOf(conv);
@@ -303,7 +307,7 @@ class ChatManager {
   // ── entry point ─────────────────────────────────────────────────────────
 
   // mode: 'ask' (default) or 'shell'. A leading "$ " also means shell.
-  async send(convId, rawText, { mode = 'ask' } = {}) {
+  async send(convId, rawText, { mode = 'ask', attachments = [] } = {}) {
     const conv = this.get(convId);
     if (!conv) return { ok: false, error: 'conversation not found' };
     if (conv.run) return { ok: false, error: 'a run is already in progress' };
@@ -312,12 +316,14 @@ class ChatManager {
 
     if (/^\$\s+/.test(text)) { mode = 'shell'; text = text.replace(/^\$\s+/, ''); }
 
+    const atts = (Array.isArray(attachments) ? attachments : []).filter((a) => a && typeof a.path === 'string' && a.path);
+
     const ctrl = new AbortController();
     setMaxListeners(0, ctrl.signal);
     conv.run = { ctrl, activity: 'starting' };
     this.ctx.broadcast({ t: 'run', convId: conv.id, running: true, activity: 'starting' });
 
-    this._add(conv, { type: 'user', text, mode });
+    this._add(conv, { type: 'user', text, mode, ...(atts.length ? { attachments: atts } : {}) });
     if (!conv.preview || conv.title === 'New chat') {
       if (conv.title === 'New chat') conv.title = titleFrom(text);
       conv.preview = text.slice(0, 140);
@@ -330,12 +336,19 @@ class ChatManager {
       audit.append({ kind: 'session-start', sessionId: conv.sessionId, workspace: conv.workspace, via: 'web', review: !!this.ctx.settings.review, pid: process.pid });
     }
 
+    // Attachments become readable paths for the agent; the transcript keeps the clean text.
+    const agentText = atts.length
+      ? `${text}\n\n[Attached files — in the workspace, inspect with read_file if needed:]\n${atts.map((a) => `- ${a.path}`).join('\n')}`
+      : text;
+
     // Fire and forget — progress flows through broadcasts.
-    this._run(conv, text, mode, ctrl).catch(() => {});
+    this._run(conv, agentText, mode, ctrl).catch(() => {});
     return { ok: true };
   }
 
   async _run(conv, text, mode, ctrl) {
+    // Chat conversations are read-only: a stray shell request must not execute.
+    if (conv.mode === 'chat' && mode === 'shell') mode = 'ask';
     try {
       const selfCmd = matchSelfCommand(text);
       if (selfCmd.matched && mode !== 'shell') {
@@ -727,6 +740,8 @@ class ChatManager {
     const roots = this.roots(conv);
     const routing = routeToSpecialist(cmd, [...conv.history, { role: 'user', content: cmd }]);
     const agentProfile = settings.profile || routing.profile || 'balanced';
+    const chatMode = conv.mode === 'chat';
+    const allowedTools = chatMode ? CHAT_MODE_TOOLS : null;
     const sink = this._eventSink(conv);
     const write = this._logWriter(conv);
     const agentOpts = {
@@ -739,11 +754,12 @@ class ChatManager {
       colors: false,
       specialistHint: routing.specialistHint,
       mcpManager,
+      allowedTools,
       onEvent: sink,
     };
 
     // ── Team mode ──
-    if (!settings.review && looksMultiDomain(cmd)) {
+    if (!chatMode && !settings.review && looksMultiDomain(cmd)) {
       let teamItem = null;
       let summary = '';
       let handled = false;
@@ -780,7 +796,7 @@ class ChatManager {
     }
 
     // ── Plan-first ──
-    if (!settings.review && shouldPlan(cmd)) {
+    if (!chatMode && !settings.review && shouldPlan(cmd)) {
       this._activity(conv, 'generating plan');
       let plan = null;
       try { plan = await generatePlan(cmd, { signal: ctrl.signal }); }

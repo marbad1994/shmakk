@@ -38,9 +38,15 @@ async function _ensureModel() {
     // Don't spam progress to stdout
     _env.allowLocalModels = false;
 
+    // Quantized whisper-tiny by default (~45MB) — far faster on CPU than the
+    // FP32 whisper-base the code previously loaded. Override via env if needed.
+    // NOTE: dtype must be passed to pipeline() — env.dtype is not read by it.
+    const dtype = process.env.SHMAKK_STT_DTYPE || 'q8';
+
     _instance = await _pipeline(
       'automatic-speech-recognition',
-      'Xenova/whisper-base',
+      process.env.SHMAKK_STT_MODEL || 'Xenova/whisper-tiny',
+      { dtype },
     );
     return _instance;
   })();
@@ -95,6 +101,9 @@ async function transcribe(audioPath, opts = {}) {
 
   const transcriber = await _ensureModel();
 
+  // Give visible feedback — transcription can take a second or two on CPU.
+  process.stderr.write('\r\x1b[36m🎤 transcribing…\x1b[0m');
+
   // Decode WAV to Float32Array — pipeline can't use AudioContext in Node.js.
   // See https://huggingface.co/docs/transformers.js/guides/node-audio-processing
   const audioData = _wavToFloat32(audioPath);
@@ -111,18 +120,18 @@ async function transcribe(audioPath, opts = {}) {
  */
 function isCached() {
   try {
-    // @huggingface/transformers caches in ~/.cache/huggingface by default
-    const hfHome = process.env.HF_HOME
-      || process.env.XDG_CACHE_HOME
-      || path.join(require('os').homedir(), '.cache', 'huggingface');
-
-    // Whisper-tiny has at minimum the config and quantized ONNX models
-    const modelDir = path.join(
-      hfHome,
-      'transformers',
-      'models--Xenova--whisper-base',
+    // @huggingface/transformers caches under <package>/.cache by default.
+    const base = process.env.SHMAKK_HF_CACHE
+      || path.join(
+        path.dirname(path.dirname(require.resolve('@huggingface/transformers'))),
+        '.cache',
+      );
+    const [org, name] = (process.env.SHMAKK_STT_MODEL || 'Xenova/whisper-tiny').split('/');
+    const onnxDir = path.join(base, org, name, 'onnx');
+    return (
+      fs.existsSync(path.join(onnxDir, 'encoder_model.onnx'))
+      || fs.existsSync(path.join(onnxDir, 'encoder_model_quantized.onnx'))
     );
-    return fs.existsSync(modelDir);
   } catch {
     return false;
   }

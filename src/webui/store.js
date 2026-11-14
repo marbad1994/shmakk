@@ -87,6 +87,7 @@ function metaOf(conv) {
     pinned: !!conv.pinned,
     workspace: conv.workspace || null,
     preview: conv.preview || '',
+    mode: conv.mode === 'chat' ? 'chat' : 'code',
     repo: conv.repo || null, // set for GitHub cloud sessions
   };
 }
@@ -113,6 +114,7 @@ function loadConversation(id) {
     const conv = JSON.parse(fs.readFileSync(path.join(conversationsDir(), `${sid}.json`), 'utf8'));
     conv.items = settleItems(Array.isArray(conv.items) ? conv.items : []);
     conv.history = Array.isArray(conv.history) ? conv.history : [];
+    conv.mode = conv.mode === 'chat' ? 'chat' : 'code';
     return conv;
   } catch {
     return null;
@@ -121,10 +123,10 @@ function loadConversation(id) {
 
 function saveConversation(conv) {
   try {
-    const { id, title, createdAt, updatedAt, pinned, workspace, cwd, preview, sessionId, repo, items, history } = conv;
+    const { id, title, createdAt, updatedAt, pinned, workspace, cwd, preview, sessionId, mode, repo, items, history } = conv;
     writeFileAtomic(
       path.join(conversationsDir(), `${id}.json`),
-      JSON.stringify({ id, title, createdAt, updatedAt, pinned, workspace, cwd, preview, sessionId, repo, items, history }),
+      JSON.stringify({ id, title, createdAt, updatedAt, pinned, workspace, cwd, preview, sessionId, mode, repo, items, history }),
     );
   } catch {}
 }

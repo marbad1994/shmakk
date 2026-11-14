@@ -5,7 +5,8 @@ export type AskStatus = 'pending' | 'yes' | 'no' | 'expired';
 
 interface Base { id: string; at: number }
 
-export interface UserItem extends Base { type: 'user'; text: string; mode?: 'ask' | 'shell' }
+export interface AttachedFile { name: string; path: string; size?: number }
+export interface UserItem extends Base { type: 'user'; text: string; mode?: 'ask' | 'shell'; attachments?: AttachedFile[] }
 export interface AssistantItem extends Base {
   type: 'assistant'; text: string; reasoning?: string; streaming?: boolean;
   agent?: string | null; cached?: boolean; interim?: boolean;
@@ -46,7 +47,7 @@ export type Item =
 export interface RepoRef { fullName: string; url: string; private: boolean; baseBranch: string; branch: string; defaultBranch: string; canPush: boolean }
 export interface ConvMeta {
   id: string; title: string; createdAt: number; updatedAt: number; pinned: boolean;
-  workspace: string | null; preview: string; running?: boolean; repo?: RepoRef | null;
+  workspace: string | null; preview: string; mode: 'chat' | 'code'; running?: boolean; repo?: RepoRef | null;
 }
 export interface ConvSnapshot extends ConvMeta { cwd: string; items: Item[]; running: boolean; activity: string | null }
 

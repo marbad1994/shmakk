@@ -2,7 +2,7 @@ import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Collapsible } from 'radix-ui';
 import {
   Brain, Check, ChevronRight, CircleSlash, Copy, FilePen, FilePlus2, FileText, FolderOpen, FolderPlus, Globe, Info,
-  ListChecks, MousePointerClick, Plug, Search, ShieldAlert, ShieldCheck, TerminalSquare, Trash2, TriangleAlert, Users, Volume2, Wand2, X,
+  ListChecks, MousePointerClick, Paperclip, Plug, Search, ShieldAlert, ShieldCheck, TerminalSquare, Trash2, TriangleAlert, Users, Volume2, Wand2, X,
 } from 'lucide-react';
 import type {
   AskItem, AssistantItem, Item, LogItem, NoticeItem, OutputItem, PlanItem, RouteItem, ShellItem, StepItem, TeamItem, ToolItem, UserItem, ViewId,
@@ -22,11 +22,22 @@ import { Diff, diffStats } from './Diff';
 
 function User({ item }: { item: UserItem }) {
   const shell = item.mode === 'shell';
+  const atts = item.attachments;
   return (
     <div className="mt-2 max-w-[86%] self-end">
       <div className={cn('whitespace-pre-wrap break-words rounded-[18px] rounded-br-[5px] border border-line bg-raised px-3.5 py-2', shell && 'border-accent/35 font-mono text-[13px]')}>
         {shell ? <span className="text-accent">$ </span> : null}
         {item.text}
+        {atts && atts.length ? (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5 border-t border-line pt-2">
+            {atts.map((a) => (
+              <span key={a.path} className="inline-flex items-center gap-1 rounded-full border border-line bg-bg px-2 py-0.5 font-mono text-[11px] text-dim">
+                <Paperclip className="size-3" />
+                <span className="max-w-40 truncate">{a.name}</span>
+              </span>
+            ))}
+          </div>
+        ) : null}
       </div>
     </div>
   );

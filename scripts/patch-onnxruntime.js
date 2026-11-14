@@ -12,6 +12,10 @@
  * Fix:
  *   - Rename SONAME of the napi-v3 lib to libkokoro_ort.so.1
  *   - Update the napi-v3 binding.node's NEEDED reference accordingly
+ *
+ * This script must be idempotent AND resilient to npm re-extracting the
+ * package (which restores the original binding.node and libonnxruntime.so.1
+ * while leaving any previously-renamed lib behind).
  */
 
 const { execSync } = require('child_process');
@@ -25,9 +29,26 @@ const KOKORO_ORT_DIR = path.join(
 
 const ORIG_SO = 'libonnxruntime.so.1';
 const NEW_SO = 'libkokoro_ort.so.1';
+const BINDING = 'onnxruntime_binding.node';
 
 function patchelf(...args) {
   return execSync(`patchelf ${args.join(' ')}`, { encoding: 'utf8', stdio: 'pipe' });
+}
+
+function getNeeded(bindingPath) {
+  try {
+    return patchelf('--print-needed', bindingPath).split('\n').map((s) => s.trim());
+  } catch {
+    return [];
+  }
+}
+
+function getSoname(soPath) {
+  try {
+    return patchelf('--print-soname', soPath).trim();
+  } catch {
+    return null;
+  }
 }
 
 function main() {
@@ -49,32 +70,39 @@ function main() {
 
   const soPath = path.join(KOKORO_ORT_DIR, ORIG_SO);
   const newSoPath = path.join(KOKORO_ORT_DIR, NEW_SO);
-  const bindingPath = path.join(KOKORO_ORT_DIR, 'onnxruntime_binding.node');
+  const bindingPath = path.join(KOKORO_ORT_DIR, BINDING);
 
-  // Already patched?
-  if (fs.existsSync(newSoPath)) {
-    // Verify it was done correctly
-    const soname = execSync(`patchelf --print-soname "${newSoPath}"`, { encoding: 'utf8' }).trim();
-    if (soname === NEW_SO) {
-      return; // Already patched, nothing to do
-    }
-    // Otherwise, re-apply from scratch
-    fs.unlinkSync(newSoPath);
+  const bindingPatched = getNeeded(bindingPath).includes(NEW_SO);
+  const libOk = fs.existsSync(newSoPath) && getSoname(newSoPath) === NEW_SO;
+
+  // Fully patched and consistent? Nothing to do.
+  if (bindingPatched && libOk) {
+    return;
   }
 
-  if (!fs.existsSync(soPath)) {
+  // Ensure the renamed library exists with the correct SONAME.
+  // Prefer patching a freshly-extracted original if present; otherwise fix
+  // (or re-create from scratch) the renamed copy.
+  if (fs.existsSync(soPath)) {
+    // Drop any stale renamed copy so rename() can't leave mismatched files.
+    if (fs.existsSync(newSoPath)) {
+      fs.unlinkSync(newSoPath);
+    }
+    patchelf('--set-soname', NEW_SO, soPath);
+    fs.renameSync(soPath, newSoPath);
+  } else if (fs.existsSync(newSoPath)) {
+    // Only the renamed lib exists but its SONAME is wrong — re-apply.
+    patchelf('--set-soname', NEW_SO, newSoPath);
+  } else {
     console.error('[shmakk] Expected onnxruntime library not found:', soPath);
     process.exit(1);
   }
 
-  // 1. Change SONAME of the .so file
-  patchelf('--set-soname', NEW_SO, soPath);
-
-  // 2. Rename the file
-  fs.renameSync(soPath, newSoPath);
-
-  // 3. Update the binding.node's NEEDED reference
-  patchelf('--replace-needed', ORIG_SO, NEW_SO, bindingPath);
+  // Update the binding.node's NEEDED reference if it still points at the
+  // original SONAME.
+  if (!bindingPatched) {
+    patchelf('--replace-needed', ORIG_SO, NEW_SO, bindingPath);
+  }
 
   console.log('[shmakk] Patched kokoro-js onnxruntime SONAME →', NEW_SO);
 }

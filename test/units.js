@@ -1319,6 +1319,24 @@ test('webui chat: self-commands and shell mode run without an LLM', () => withTe
   }
 }));
 
+test('webui chat: chat-mode conversations never execute shell commands', () => withTempHome(async (dir) => {
+  const { ChatManager } = require('../src/webui/chat');
+  const settings = { ...require('../src/webui/store').DEFAULT_SETTINGS };
+  const chat = new ChatManager({ settings, saveSettings() {}, broadcast() {}, mcpManager: null, getWorkspace: () => dir, onProviderChanged() {} });
+  const conv = chat.create({ mode: 'chat' });
+  const idle = () => new Promise((r) => { const t = setInterval(() => { if (!conv.run) { clearInterval(t); r(); } }, 15); });
+  const path = require('path');
+  try {
+    await chat.send(conv.id, 'touch pwned', { mode: 'shell' }); await idle();
+    assert.ok(!fs.existsSync(path.join(dir, 'pwned')), 'explicit shell mode must not execute');
+    assert.ok(!conv.items.some((i) => i.type === 'shell'), 'must not create a shell transcript item');
+    await chat.send(conv.id, '$ touch pwned2'); await idle();
+    assert.ok(!fs.existsSync(path.join(dir, 'pwned2')), '"$ " prefix must not execute in chat mode');
+  } finally {
+    chat.remove(conv.id);
+  }
+}));
+
 test('webui github: repository and branch names are validated', () => {
   const { parseRepo, validBranch } = require('../src/webui/github');
   assert.deepStrictEqual(parseRepo('octo/demo'), { owner: 'octo', repo: 'demo', fullName: 'octo/demo' });

@@ -151,6 +151,12 @@ const TOOLS = [
   }},
 ];
 
+// Tools available in read-only "chat" mode. Everything that can mutate the
+// workspace (writes, edits, deletes, shell, browser interactions) is excluded;
+// web access and long-term memory are kept so a read-only conversation stays
+// useful for questions and research.
+const CHAT_MODE_TOOLS = new Set(['read_file', 'list_dir', 'web_search', 'fetch_url', 'remember']);
+
 // Tool safety classification.
 // 'safe'      → auto mode runs it without asking; review mode asks with [Y/n]
 // 'unsafe'    → both modes ask, defaulting to No  ([y/N])
@@ -226,8 +232,9 @@ function runCmd(cwd, cmd, signal) {
   });
 }
 
-async function dispatchTool(name, args, roots, confirmTool, signal, mcpManager) {
+async function dispatchTool(name, args, roots, confirmTool, signal, mcpManager, allowedTools) {
   if (signal && signal.aborted) return { error: 'aborted' };
+  if (allowedTools && !allowedTools.has(name)) return { error: 'not available in chat mode (read-only)' };
   const safety = classifyTool(name, args, mcpManager);
   if (confirmTool) {
     const ok = await confirmTool({ name, args, safety, description: describeTool(name, args, mcpManager) });
@@ -494,6 +501,7 @@ function parseXmlParamValue(raw) {
 
 module.exports = {
   TOOLS,
+  CHAT_MODE_TOOLS,
   classifyTool,
   describeTool,
   dispatchTool,

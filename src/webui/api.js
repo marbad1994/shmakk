@@ -280,7 +280,7 @@ function createApi(app) {
   // ── conversations ─────────────────────────────────────────────────────
 
   add('GET', '/api/conversations', () => ({ conversations: app.chat.list() }));
-  add('POST', '/api/conversations', ({ body }) => app.chat.snapshot(app.chat.create({ title: body.title }).id));
+  add('POST', '/api/conversations', ({ body }) => app.chat.snapshot(app.chat.create({ title: body.title, mode: body.mode }).id));
   add('GET', '/api/conversations/:id', ({ params }) => {
     const snap = app.chat.snapshot(params.id);
     if (!snap) throw new HttpError(404, 'conversation not found');
@@ -313,12 +313,28 @@ function createApi(app) {
     return { ok: true };
   });
   add('POST', '/api/conversations/:id/messages', async ({ params, body }) => {
-    const r = await app.chat.send(params.id, body.text, { mode: body.mode });
+    const r = await app.chat.send(params.id, body.text, { mode: body.mode, attachments: body.attachments });
     if (!r.ok) throw new HttpError(409, r.error);
     return r;
   });
   add('POST', '/api/conversations/:id/stop', ({ params }) => ({ ok: app.chat.stop(params.id) }));
   add('POST', '/api/conversations/:id/answer', ({ params, body }) => ({ ok: app.chat.answer(params.id, body.askId, body.value) }));
+
+  // ── file attachments ───────────────────────────────────────────────────
+  // The browser uploads a raw body; we stash it in the workspace so the agent
+  // can read it like any other file (read_file is scoped to the workspace).
+  add('POST', '/api/upload', async ({ raw, query }) => {
+    if (!raw || !raw.length) throw new HttpError(400, 'no file data');
+    if (raw.length > 20 * 1024 * 1024) throw new HttpError(413, 'file too large (max 20 MB)');
+    let name = String(query.name || '').replace(/[\\/]/g, '_');
+    name = path.basename(name).slice(0, 120);
+    if (!name || name === '.' || name === '..') name = `file-${Date.now()}`;
+    const dir = path.join(ws(), '.shmakk', 'uploads');
+    fs.mkdirSync(dir, { recursive: true });
+    const dest = path.join(dir, `${Date.now()}-${name}`);
+    fs.writeFileSync(dest, raw);
+    return { name, path: dest, size: raw.length };
+  });
 
   // ── skills ────────────────────────────────────────────────────────────
 

@@ -49,7 +49,7 @@
     "global:install": "npm install -g . && npm run global:setup",
     "global:reinstall": "npm uninstall -g shmakk && npm install -g . && npm run global:setup",
     "setup": "npm install && npm run check && npm run test",
-    "setup:voice": "npm install --include=optional && node src/setup-voice.js",
+    "setup:voice": "SHARP_IGNORE_GLOBAL_LIBVIPS=true npm install --include=optional && node src/setup-voice.js",
     "global:doctor": "node src/global-doctor.js",
     "web": "node bin/shmakk.js --web",
     "desktop": "node bin/shmakk.js --desktop",

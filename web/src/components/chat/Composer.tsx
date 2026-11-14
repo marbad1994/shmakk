@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUp, ChevronDown, Gauge, Mic, ShieldCheck, Square, Volume2, VolumeX, Zap } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { ArrowUp, ChevronDown, Cpu, Mic, Paperclip, Square, Volume2, VolumeX, X } from 'lucide-react';
+import { toast } from 'sonner';
 import { COMMANDS, filterCommands, matchSlash, type Command } from '@/lib/commands';
 import { cn, modKey } from '@/lib/utils';
+import { api } from '@/lib/api';
+import type { AttachedFile } from '@/lib/types';
 import { useApp } from '@/store/app';
 import type { MicState } from '@/hooks/useVoice';
 import { haptic, isTouch } from '@/hooks/useMobile';
@@ -27,20 +31,38 @@ export function Composer({ running, activity, mic, speaking, onMic, onStopSpeaki
   const stop = useApp((s) => s.stop);
   const settings = useApp((s) => s.settings);
   const patchSettings = useApp((s) => s.patchSettings);
-  const profiles = useApp((s) => s.profiles);
+  const provider = useApp((s) => s.provider);
   const draft = useApp((s) => s.draft);
   const activeId = useApp((s) => s.activeId);
+  const conv = useApp((s) => s.convs.find((c) => c.id === s.activeId));
+  const pendingMode = useApp((s) => s.pendingMode);
 
   const [text, setText] = useState('');
   const [mode, setMode] = useState<'ask' | 'shell'>('ask');
   const [sel, setSel] = useState(0);
   const [menuDismissed, setMenuDismissed] = useState(false);
+  const [attachments, setAttachments] = useState<AttachedFile[]>([]);
   const ref = useRef<HTMLTextAreaElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
   const history = useRef<string[]>(loadHistory());
   const histIdx = useRef(-1);
 
+  const models = useQuery({
+    queryKey: ['models', provider.baseUrl, provider.endpoint],
+    queryFn: () => api.get<{ models: string[]; error?: string }>('/api/models'),
+    enabled: provider.configured,
+    staleTime: 60_000,
+  });
+  const switchModel = useCallback((m: string) => {
+    void api.put('/api/provider', { model: m }).then(() => toast.success(`Model → ${m}`)).catch((e) => toast.error((e as Error).message));
+  }, []);
+
+  const convMode: 'chat' | 'code' = conv?.mode ?? pendingMode;
+  const chatMode = convMode === 'chat';
+  const shell = !chatMode && mode === 'shell';
+
   // Slash menu
-  const slash = mode === 'ask' ? matchSlash(text) : null;
+  const slash = !shell ? matchSlash(text) : null;
   const matches = useMemo(() => (slash ? filterCommands(slash.query) : []), [slash?.query]); // eslint-disable-line react-hooks/exhaustive-deps
   const menuOpen = !!slash && !menuDismissed && matches.length > 0;
   useEffect(() => { setSel(0); }, [slash?.query]);
@@ -70,10 +92,22 @@ export function Composer({ running, activity, mic, speaking, onMic, onStopSpeaki
     void cmd.run(arg);
   }, []);
 
+  const pickFiles = useCallback(async (files: FileList | null) => {
+    if (!files?.length) return;
+    for (const f of Array.from(files)) {
+      try {
+        const r = await api.upload<AttachedFile>(`/api/upload?name=${encodeURIComponent(f.name)}`, f, f.type || 'application/octet-stream');
+        setAttachments((prev) => (prev.some((a) => a.path === r.path) ? prev : [...prev, r]));
+      } catch (e) {
+        toast.error(`Upload failed: ${(e as Error).message}`);
+      }
+    }
+  }, []);
+
   const submit = useCallback(() => {
     const value = text.trim();
     if (!value || running) return;
-    if (mode === 'ask') {
+    if (!shell) {
       const m = matchSlash(value);
       if (m) {
         const cmd = COMMANDS.find((c) => c.slash === m.query) || (matches.length === 1 ? matches[0] : undefined);
@@ -86,8 +120,10 @@ export function Composer({ running, activity, mic, speaking, onMic, onStopSpeaki
     setText('');
     setMenuDismissed(false);
     haptic();
-    void send(value, mode);
-  }, [text, running, mode, matches, runCommand, send]);
+    const atts = attachments;
+    setAttachments([]);
+    void send(value, shell ? 'shell' : 'ask', atts);
+  }, [text, running, shell, matches, runCommand, send, attachments]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.nativeEvent.isComposing) return;
@@ -105,7 +141,7 @@ export function Composer({ running, activity, mic, speaking, onMic, onStopSpeaki
     }
     // Phones: Return makes a new line and the send button sends, as in any
     // native messenger. Shell mode still runs on Return — it's a prompt.
-    if (e.key === 'Enter' && !e.shiftKey && (!isTouch() || mode === 'shell')) { e.preventDefault(); submit(); return; }
+    if (e.key === 'Enter' && !e.shiftKey && (!isTouch() || shell)) { e.preventDefault(); submit(); return; }
     if (e.key === 'Escape' && running) { e.preventDefault(); stop(); return; }
     // Shell-style history recall
     if (e.key === 'ArrowUp' && (text === '' || histIdx.current >= 0) && e.currentTarget.selectionStart === 0) {
@@ -122,11 +158,10 @@ export function Composer({ running, activity, mic, speaking, onMic, onStopSpeaki
     setMenuDismissed(false);
     histIdx.current = -1;
     // Typing "$ " at the start flips to shell mode, like a prompt.
-    if (mode === 'ask' && /^\$\s/.test(value)) { setMode('shell'); setText(value.replace(/^\$\s+/, '')); return; }
+    if (!chatMode && mode === 'ask' && /^\$\s/.test(value)) { setMode('shell'); setText(value.replace(/^\$\s+/, '')); return; }
     setText(value);
   };
 
-  const shell = mode === 'shell';
   return (
     <div className="relative shrink-0 px-5.5 pb-3 max-md:px-2 max-md:pb-2">
       <div className="relative mx-auto max-w-[780px]">
@@ -164,6 +199,8 @@ export function Composer({ running, activity, mic, speaking, onMic, onStopSpeaki
           </div>
         ) : null}
 
+        <input ref={fileRef} type="file" multiple hidden onChange={(e) => { void pickFiles(e.target.files); e.target.value = ''; }} />
+
         <div className={cn('rounded-[22px] border border-line-strong bg-raised shadow-[0_8px_30px_rgb(0_0_0/0.18)] transition-[border-color,box-shadow] focus-within:border-accent/45 focus-within:ring-[3px] focus-within:ring-accent/10', shell && 'border-accent/40')}>
           <div className="flex items-start gap-1 px-4 pb-1 pt-3">
             <span className="w-4 shrink-0 select-none font-mono text-[15px] font-bold leading-[1.6] text-accent" aria-hidden>{shell ? '$' : '❯'}</span>
@@ -183,37 +220,48 @@ export function Composer({ running, activity, mic, speaking, onMic, onStopSpeaki
               className={cn('max-h-[40vh] min-h-6 flex-1 resize-none bg-transparent leading-[1.6] outline-none placeholder:text-faint', shell && 'font-mono text-[13.5px] leading-[1.75]')}
             />
           </div>
+          {attachments.length > 0 ? (
+            <div className="flex flex-wrap items-center gap-1.5 px-4 pb-1">
+              {attachments.map((a) => (
+                <span key={a.path} className="inline-flex items-center gap-1 rounded-full border border-line bg-bg px-2 py-0.5 font-mono text-xs text-dim">
+                  <Paperclip className="size-3" />
+                  <span className="max-w-40 truncate">{a.name}</span>
+                  <button type="button" aria-label={`Remove ${a.name}`} onClick={() => setAttachments((prev) => prev.filter((x) => x.path !== a.path))} className="text-faint hover:text-danger">
+                    <X className="size-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          ) : null}
           <div className="flex items-center gap-1.5 px-2.5 pb-2 pt-1">
             <div className="no-scrollbar flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto [mask-image:linear-gradient(to_right,black_calc(100%-16px),transparent)] [&>*]:shrink-0">
-            <Segmented label="Input mode" value={mode} onChange={(m) => { setMode(m); ref.current?.focus(); }} options={[{ value: 'ask', label: 'ask' }, { value: 'shell', label: 'shell' }]} />
+            {!chatMode ? (
+              <Segmented label="Input mode" value={mode} onChange={(m) => { setMode(m); ref.current?.focus(); }} options={[{ value: 'ask', label: 'ask' }, { value: 'shell', label: 'shell' }]} />
+            ) : null}
 
             <DropdownMenu>
-              <Tip label="Profile — how much context and how many tool rounds" side="top">
+              <Tip label="Model" side="top">
                 <DropdownMenuTrigger asChild>
                   <button type="button" className="inline-flex items-center gap-1.5 rounded-full border border-line px-2.5 py-0.5 font-mono text-xs text-dim touch:px-3 touch:py-1.5 touch:text-[13px] hover:border-line-strong hover:bg-hover hover:text-fg">
-                    <Gauge className="size-3.5" />{settings.profile || 'auto'}<ChevronDown className="size-3" />
+                    <Cpu className="size-3.5" />{provider.model || 'model'}<ChevronDown className="size-3" />
                   </button>
                 </DropdownMenuTrigger>
               </Tip>
               <DropdownMenuContent align="start">
-                <DropdownMenuLabel>Profile</DropdownMenuLabel>
-                <DropdownMenuRadioGroup value={settings.profile || 'auto'} onValueChange={(v) => patchSettings({ profile: v === 'auto' ? null : v })}>
-                  <DropdownMenuRadioItem value="auto">auto <span className="text-faint">· picked per task</span></DropdownMenuRadioItem>
-                  {profiles.map((p) => <DropdownMenuRadioItem key={p.name} value={p.name}>{p.name} <span className="text-faint">· {p.maxToolIters} rounds</span></DropdownMenuRadioItem>)}
-                </DropdownMenuRadioGroup>
+                <DropdownMenuLabel>Model</DropdownMenuLabel>
+                {models.data?.models?.length ? (
+                  <DropdownMenuRadioGroup value={provider.model || ''} onValueChange={switchModel}>
+                    {models.data.models.map((m) => <DropdownMenuRadioItem key={m} value={m}>{m}</DropdownMenuRadioItem>)}
+                  </DropdownMenuRadioGroup>
+                ) : (
+                  <div className="px-2.5 py-1.5 text-xs text-faint">{provider.configured ? 'No models listed — use /model' : 'No model configured — set up in Settings'}</div>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
 
-            <Tip label="Review mode — confirm every AI action" side="top">
-              <button type="button" aria-pressed={settings.review} onClick={() => patchSettings({ review: !settings.review })}
-                className={cn('inline-flex items-center gap-1.5 rounded-full border border-line px-2.5 py-0.5 font-mono text-xs text-dim touch:px-3 touch:py-1.5 touch:text-[13px] hover:bg-hover hover:text-fg', settings.review && 'border-accent/40 bg-accent/10 text-accent hover:text-accent')}>
-                <ShieldCheck className="size-3.5" />review
-              </button>
-            </Tip>
-            <Tip label="Auto-accept file writes and edits" side="top">
-              <button type="button" aria-pressed={settings.yesFiles} onClick={() => patchSettings({ yesFiles: !settings.yesFiles })}
-                className={cn('inline-flex items-center gap-1.5 rounded-full border border-line px-2.5 py-0.5 font-mono text-xs text-dim touch:px-3 touch:py-1.5 touch:text-[13px] hover:bg-hover hover:text-fg', settings.yesFiles && 'border-accent/40 bg-accent/10 text-accent hover:text-accent')}>
-                <Zap className="size-3.5" />yes-files
+            <Tip label="Attach files" side="top">
+              <button type="button" aria-label="Attach files" onClick={() => fileRef.current?.click()} className="inline-flex size-6 items-center justify-center rounded-md text-dim hover:bg-hover hover:text-fg touch:size-8">
+                <Paperclip className="size-4" />
               </button>
             </Tip>
 
@@ -246,7 +294,7 @@ export function Composer({ running, activity, mic, speaking, onMic, onStopSpeaki
           </div>
         </div>
         <p className="m-0 pt-1.5 text-center text-[11.5px] text-faint max-md:hidden touch:hidden">
-          <kbd>Enter</kbd> send · <kbd>Shift Enter</kbd> newline · <kbd>/</kbd> commands · <kbd>$</kbd> shell · <kbd>{modKey} K</kbd> palette
+          <kbd>Enter</kbd> send · <kbd>Shift Enter</kbd> newline · <kbd>/</kbd> commands{!chatMode ? <> · <kbd>$</kbd> shell · <kbd>{modKey} K</kbd> palette</> : null}
         </p>
       </div>
     </div>

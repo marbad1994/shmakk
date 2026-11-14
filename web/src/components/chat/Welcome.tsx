@@ -13,16 +13,19 @@ const SUGGESTIONS: { kind: string; text: string; mode: 'ask' | 'shell' }[] = [
 export function Welcome() {
   const workspace = useApp((s) => s.workspace);
   const provider = useApp((s) => s.provider);
+  const pendingMode = useApp((s) => s.pendingMode);
   const setDraft = useApp((s) => s.setDraft);
   const setView = useApp((s) => s.setView);
+  const chatMode = pendingMode === 'chat';
+  const suggestions = chatMode ? SUGGESTIONS.filter((s) => s.mode === 'ask') : SUGGESTIONS;
   return (
     <div className="grid min-h-full place-content-center justify-items-center gap-[18px] p-6 text-center max-md:gap-3.5 max-md:p-4">
       <div className="flex items-center gap-1 font-mono text-[44px] font-bold leading-none text-accent max-md:text-[34px] [text-shadow:0_0_28px_color-mix(in_srgb,var(--accent)_45%,transparent)]" aria-hidden>
         ❯<i className="h-10 w-5 max-md:h-8 max-md:w-4 animate-blink rounded-[2px] bg-accent shadow-[0_0_24px_color-mix(in_srgb,var(--accent)_45%,transparent)]" />
       </div>
-      <h2 className="m-0 text-[26px] font-semibold tracking-tight max-md:text-[21px]">What are we building in <span className="font-mono text-accent">{basename(workspace) || 'here'}</span>?</h2>
+      <h2 className="m-0 text-[26px] font-semibold tracking-tight max-md:text-[21px]">{chatMode ? 'Ask shmakk anything' : <>What are we building in <span className="font-mono text-accent">{basename(workspace) || 'here'}</span>?</>}</h2>
       <p className="m-0 max-w-[520px] text-dim">
-        Ask for a change, run a command, or hand over a whole task. shmakk reads, edits and runs inside your workspace — and asks before anything risky.
+        {chatMode ? 'A read-only chat: shmakk can read files and search the web, but won’t edit or run anything.' : 'Ask for a change, run a command, or hand over a whole task. shmakk reads, edits and runs inside your workspace — and asks before anything risky.'}
       </p>
 
       {!provider.configured ? (
@@ -36,14 +39,16 @@ export function Welcome() {
         </div>
       ) : null}
 
-      <button type="button" onClick={() => setView('github')} className="flex w-full max-w-[640px] items-center gap-3 rounded-2xl border border-line bg-raised px-3.5 py-3 text-left transition-colors hover:border-violet/50">
-        <GitBranch className="size-5 shrink-0 text-violet" />
-        <span className="min-w-0 flex-1"><strong className="block font-semibold">Start from a GitHub repository</strong><span className="text-[13px] text-dim">Clone a repo here and work on it in its own session — push and open a PR when you’re done.</span></span>
-        <ArrowRight className="size-4 shrink-0 text-faint" />
-      </button>
+      {!chatMode ? (
+        <button type="button" onClick={() => setView('github')} className="flex w-full max-w-[640px] items-center gap-3 rounded-2xl border border-line bg-raised px-3.5 py-3 text-left transition-colors hover:border-violet/50">
+          <GitBranch className="size-5 shrink-0 text-violet" />
+          <span className="min-w-0 flex-1"><strong className="block font-semibold">Start from a GitHub repository</strong><span className="text-[13px] text-dim">Clone a repo here and work on it in its own session — push and open a PR when you’re done.</span></span>
+          <ArrowRight className="size-4 shrink-0 text-faint" />
+        </button>
+      ) : null}
 
       <div className="mt-1.5 grid w-full max-w-[640px] grid-cols-2 gap-2.5 max-md:grid-cols-1">
-        {SUGGESTIONS.map((s) => (
+        {suggestions.map((s) => (
           <button
             key={s.text}
             type="button"

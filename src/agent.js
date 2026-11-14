@@ -106,7 +106,7 @@ function highlightCodeBlocks(text, enabled = true) {
 
 // ── Main agent entry point ──────────────────────────────────────────────────
 
-async function runAgent({ input, roots, glossary, confirmTool, write, signal, history = [], profile = 'balanced', colors = true, voiceMode = false, specialistHint = null, mcpManager = null, requireToolUse = false, onEvent = null }) {
+async function runAgent({ input, roots, glossary, confirmTool, write, signal, history = [], profile = 'balanced', colors = true, voiceMode = false, specialistHint = null, mcpManager = null, requireToolUse = false, allowedTools = null, onEvent = null }) {
   // onEvent: optional structured-event sink used by GUI front-ends (web UI).
   // When present, streaming text, tool calls and results are reported as
   // objects instead of being rendered to `write` as terminal text.
@@ -247,7 +247,9 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
     const spinnerLabel = i === 0 ? 'thinking' : 'continuing';
     if (emit) emit({ type: 'status', label: spinnerLabel });
     const stop = emit ? () => {} : startSpinner(write, spinnerLabel);
-    const allTools = mcpManager ? [...TOOLS, ...mcpManager.getToolDefinitions()] : TOOLS;
+    const baseTools = allowedTools ? TOOLS.filter((t) => allowedTools.has(t.function.name)) : TOOLS;
+    const mcpDefs = allowedTools && mcpManager ? mcpManager.getToolDefinitions().filter((d) => allowedTools.has(d.function.name)) : [];
+    const allTools = allowedTools ? baseTools.concat(mcpDefs) : (mcpManager ? [...TOOLS, ...mcpManager.getToolDefinitions()] : TOOLS);
     let stream;
     try {
       // First iteration only: optionally force a tool call so the model can't
@@ -390,7 +392,7 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
       if (canUseCache && toolResultCache.has(cacheKey)) {
         result = toolResultCache.get(cacheKey);
       } else {
-        result = await dispatchTool(c.function.name, args, roots, confirmTool, signal, mcpManager);
+        result = await dispatchTool(c.function.name, args, roots, confirmTool, signal, mcpManager, allowedTools);
         if (canUseCache && !result?.error) toolResultCache.set(cacheKey, result);
         iterProgress = true;
       }

@@ -402,7 +402,7 @@ async function startWebServer(opts = {}) {
       try {
         switch (msg.t) {
           case 'chat.send': {
-            const r = await app.chat.send(msg.convId, msg.text, { mode: msg.mode });
+            const r = await app.chat.send(msg.convId, msg.text, { mode: msg.mode, attachments: msg.attachments });
             if (!r.ok) reply({ t: 'toast', level: 'error', text: r.error });
             break;
           }
