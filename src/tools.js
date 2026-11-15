@@ -7,8 +7,40 @@ const { execFile } = require('child_process');
 const { classifyRunCommand, isSecretPath } = require('./safety');
 const { webSearch, fetchUrl } = require('./web');
 const { dispatchBrowser, classifyBrowserCommand } = require('./browser');
+const { dispatchMobile, classifyMobileCommand } = require('./mobile');
+const { dispatchElectron, classifyElectronCommand } = require('./electron');
 const { recordEdit } = require('./edit-tracker');
+const { isImagePath, mimeForFile, normalizeImage } = require('./images');
 const { appendMemory } = require('./memory');
+const { isMutationTool, hashArgs } = require('./guard');
+const https = require('https');
+const http = require('http');
+const os = require('os');
+
+// Lazy-load SSH (optional — only required when ssh_* tools are called).
+let _ssh = null;
+function _getSSH(roots) {
+  if (_ssh) return _ssh;
+  try { _ssh = require('./ssh'); } catch (e) { return null; }
+  return _ssh;
+}
+
+// Lazy-load TTS (kokoro-js is an optional dep; only required when
+// tts_generate is actually called).
+let _ttsGenerate = null;
+function _getTtsGenerate() {
+  if (_ttsGenerate) return _ttsGenerate;
+  try {
+    ({ generate: _ttsGenerate } = require('./services/tts'));
+  } catch (e) {
+    throw new Error(
+      'TTS dependencies not installed. Run: npm run setup:voice\n' +
+      'Or: npm install --include=optional\n' +
+      `Details: ${e.message}`,
+    );
+  }
+  return _ttsGenerate;
+}
 
 const MAX_FILE_BYTES = 64 * 1024;
 
@@ -52,7 +84,7 @@ function within(roots, p) {
 const TOOLS = [
   { type: 'function', function: {
     name: 'read_file',
-    description: 'Read a UTF-8 file inside the workspace. Supports compact partial reads.',
+    description: 'Read a file inside the workspace. Text files support partial reads (head, tail, grep, imports, exports, symbol). Image files (.png/.jpg/.gif/.webp/.bmp/.svg) are returned as base64 for vision analysis.',
     parameters: {
       type: 'object',
       required: ['path'],
@@ -149,6 +181,147 @@ const TOOLS = [
       },
     },
   }},
+  { type: 'function', function: {
+    name: 'mobile',
+    description: 'Control an Android device/emulator via ADB. Commands: screenshot (capture screen as PNG), click (tap at x,y coordinates), type (input text), swipe (drag from x1,y1 to x2,y2), key (press BACK/HOME/etc), read_page (parse UI hierarchy via uiautomator), list_apps (list installed packages), launch (start app by package name), close (force-stop app), wait (pause in ms). Requires adb on PATH and a connected device.',
+    parameters: {
+      type: 'object',
+      required: ['command'],
+      properties: {
+        command: { type: 'string', enum: ['screenshot', 'click', 'type', 'swipe', 'key', 'read_page', 'list_apps', 'launch', 'close', 'wait'] },
+        x: { type: 'number', description: 'X coordinate for click' },
+        y: { type: 'number', description: 'Y coordinate for click' },
+        x1: { type: 'number', description: 'Start X for swipe' },
+        y1: { type: 'number', description: 'Start Y for swipe' },
+        x2: { type: 'number', description: 'End X for swipe' },
+        y2: { type: 'number', description: 'End Y for swipe' },
+        duration: { type: 'number', description: 'Swipe duration in ms' },
+        text: { type: 'string', description: 'Text to type' },
+        code: { type: 'string', description: 'Key code: BACK, HOME, ENTER, DELETE, MENU, APP_SWITCH, VOLUME_UP, VOLUME_DOWN' },
+        package: { type: 'string', description: 'Android package name (e.g. com.example.app)' },
+        filter: { type: 'string', description: 'Package name filter for list_apps' },
+        ms: { type: 'number', description: 'Milliseconds to wait' },
+      },
+    },
+  }},
+  { type: 'function', function: {
+    name: 'electron',
+    description: 'Control an Electron desktop app via Chrome DevTools Protocol (CDP). Commands: screenshot (capture window as PNG), navigate (go to URL), click (CSS selector), type (fill input), read_page (extract page content, links, forms), evaluate (run JS), select (dropdown), wait (for selector or seconds), scroll (up/down), close (disconnect), connect (attach to a debug port). The Electron app must be running with --remote-debugging-port (default 9222). Requires playwright installed.',
+    parameters: {
+      type: 'object',
+      required: ['command'],
+      properties: {
+        command: { type: 'string', enum: ['screenshot', 'navigate', 'click', 'type', 'read_page', 'evaluate', 'select', 'wait', 'scroll', 'close', 'connect'] },
+        url: { type: 'string', description: 'URL for navigate' },
+        selector: { type: 'string', description: 'CSS selector for click/type/select/wait' },
+        text: { type: 'string', description: 'Text to type or option to select' },
+        code: { type: 'string', description: 'JavaScript for evaluate' },
+        seconds: { type: 'number', description: 'Seconds to wait' },
+        direction: { type: 'string', enum: ['up', 'down'], description: 'Scroll direction' },
+        amount: { type: 'number', description: 'Scroll amount in pixels' },
+        debugPort: { type: 'number', description: 'CDP debug port. Default 9222.' },
+        value: { type: 'string', description: 'Option value for select' },
+        fullPage: { type: 'boolean', description: 'Screenshot full page. Default true.' },
+      },
+    },
+  }},
+  { type: 'function', function: {
+    name: 'image_gen',
+    description: 'Generate an image from a text prompt using OpenAI DALL-E. The image is saved to disk and the file path is returned. Requires SHMAKK_OPENAI_API_KEY env var.',
+    parameters: {
+      type: 'object',
+      required: ['prompt'],
+      properties: {
+        prompt: { type: 'string', description: 'Text description of the image to generate' },
+        outputPath: { type: 'string', description: 'Optional output path. Defaults to a temp file.' },
+        size: { type: 'string', enum: ['1024x1024', '1792x1024', '1024x1792'], description: 'Image size. Defaults to 1024x1024.' },
+        quality: { type: 'string', enum: ['standard', 'hd'], description: 'Quality level. Defaults to standard.' },
+        style: { type: 'string', enum: ['vivid', 'natural'], description: 'Style. Defaults to vivid.' },
+      },
+    },
+  }},
+  { type: 'function', function: {
+    name: 'tts_generate',
+    description: 'Generate speech audio from text using Kokoro TTS (local, no API key needed). Returns the audio file path and voice used.',
+    parameters: {
+      type: 'object',
+      required: ['text'],
+      properties: {
+        text: { type: 'string', description: 'Text to convert to speech' },
+        outputPath: { type: 'string', description: 'Optional WAV output path. Defaults to a temp file.' },
+        voice: { type: 'string', description: 'Voice name. Defaults to af_heart. Use list_voices tool to discover available voices.' },
+        speed: { type: 'number', description: 'Speech speed. Defaults to 1.5.' },
+      },
+    },
+  }},
+  { type: 'function', function: {
+    name: 'video_probe',
+    description: 'Get media file metadata using ffprobe: duration, codec, resolution, frame rate, etc.',
+    parameters: {
+      type: 'object',
+      required: ['path'],
+      properties: {
+        path: { type: 'string', description: 'Path to the media file to probe' },
+      },
+    },
+  }},
+  { type: 'function', function: {
+    name: 'video_compose',
+    description: 'Compose images, audio tracks, and transitions into a video using ffmpeg. Takes a structured timeline of segments and assembles them into a single MP4 file.',
+    parameters: {
+      type: 'object',
+      required: ['segments', 'outputPath'],
+      properties: {
+        segments: {
+          type: 'array',
+          description: 'Array of segment objects. Each segment: { imagePath: string (required), audioPath: string (required), startSec: number, durationSec: number, transition: string|null (fade/crossfade/dissolve/slide_left/slide_right/zoompan) }',
+        },
+        outputPath: { type: 'string', description: 'Output MP4 file path' },
+        width: { type: 'number', description: 'Output video width. Defaults to 1920.' },
+        height: { type: 'number', description: 'Output video height. Defaults to 1080.' },
+        fps: { type: 'number', description: 'Output frame rate. Defaults to 24.' },
+        backgroundColor: { type: 'string', description: 'Background color as hex. Defaults to #000000.' },
+      },
+    },
+  }},
+  { type: 'function', function: {
+    name: 'ssh_run',
+    description: 'Run a shell command on a pre-configured remote host via SSH. Hosts are defined in .shmakk/hosts.json or ~/.config/shmakk/hosts.json. Output is captured.',
+    parameters: {
+      type: 'object',
+      required: ['host', 'cmd'],
+      properties: {
+        host: { type: 'string', description: 'Host alias as defined in hosts.json (e.g. "devbox")' },
+        cmd: { type: 'string', description: 'Shell command to run on the remote host' },
+      },
+    },
+  }},
+  { type: 'function', function: {
+    name: 'ssh_push',
+    description: 'Copy a file from the local workspace to a remote host via SCP. Hosts are defined in .shmakk/hosts.json.',
+    parameters: {
+      type: 'object',
+      required: ['host', 'src', 'dest'],
+      properties: {
+        host: { type: 'string', description: 'Host alias as defined in hosts.json' },
+        src: { type: 'string', description: 'Local file path (relative to workspace or absolute)' },
+        dest: { type: 'string', description: 'Remote destination path (absolute on remote host)' },
+      },
+    },
+  }},
+  { type: 'function', function: {
+    name: 'ssh_pull',
+    description: 'Copy a file from a remote host to the local workspace via SCP. Hosts are defined in .shmakk/hosts.json.',
+    parameters: {
+      type: 'object',
+      required: ['host', 'src', 'dest'],
+      properties: {
+        host: { type: 'string', description: 'Host alias as defined in hosts.json' },
+        src: { type: 'string', description: 'Remote source path (absolute on remote host)' },
+        dest: { type: 'string', description: 'Local destination path (relative to workspace or absolute)' },
+      },
+    },
+  }},
 ];
 
 // Tool safety classification.
@@ -173,7 +346,14 @@ function classifyTool(name, args, mcpManager) {
   if (name === 'run') return classifyRunCommand(args.cmd || '');
   if (name === 'web_search' || name === 'fetch_url') return 'safe';
   if (name === 'browser') return classifyBrowserCommand(args);
+  if (name === 'mobile') return classifyMobileCommand(args);
+  if (name === 'electron') return classifyElectronCommand(args);
   if (name === 'remember') return 'safe';
+  if (name === 'image_gen') return 'unsafe';       // external API call, costs money
+  if (name === 'tts_generate') return 'safe';       // local-only, no network
+  if (name === 'video_probe') return 'safe';        // read-only local metadata
+  if (name === 'video_compose') return 'safe';      // local ffmpeg, reads only workspace files
+  if (name === 'ssh_run' || name === 'ssh_push' || name === 'ssh_pull') return 'unsafe';
   return 'uncertain';
 }
 
@@ -199,6 +379,34 @@ function describeTool(name, args, mcpManager) {
     if (cmd === 'evaluate') return `browser eval JS`;
     return `browser ${cmd}`;
   }
+  if (name === 'mobile') {
+    const cmd = args.command || '';
+    if (cmd === 'screenshot') return 'mobile screenshot';
+    if (cmd === 'click') return `mobile click (${args.x}, ${args.y})`;
+    if (cmd === 'type') return `mobile type "${(args.text || '').slice(0, 40)}"`;
+    if (cmd === 'swipe') return `mobile swipe (${args.x1},${args.y1}) to (${args.x2},${args.y2})`;
+    if (cmd === 'read_page') return 'mobile read page';
+    if (cmd === 'launch') return `mobile launch ${args.package || ''}`;
+    if (cmd === 'close') return `mobile close ${args.package || ''}`;
+    return `mobile ${cmd}`;
+  }
+  if (name === 'electron') {
+    const cmd = args.command || '';
+    if (cmd === 'screenshot') return 'electron screenshot';
+    if (cmd === 'navigate') return `electron navigate ${args.url || ''}`;
+    if (cmd === 'click') return `electron click ${args.selector || ''}`;
+    if (cmd === 'type') return `electron type into ${args.selector || ''}`;
+    if (cmd === 'read_page') return 'electron read page content';
+    if (cmd === 'connect') return `electron connect port ${args.debugPort || 9222}`;
+    return `electron ${cmd}`;
+  }
+  if (name === 'image_gen') return `image_gen: "${(args.prompt || '').slice(0, 80)}" (${args.size || '1024x1024'})`;
+  if (name === 'tts_generate') return `tts_generate: "${(args.text || '').slice(0, 80)}" (voice: ${args.voice || 'af_heart'})`;
+  if (name === 'video_probe') return `video_probe ${args.path || ''}`;
+  if (name === 'video_compose') return `video_compose ${(args.segments || []).length} segments → ${args.outputPath || ''}`;
+  if (name === 'ssh_run') return `ssh_run ${args.host || ''}: ${(args.cmd || '').slice(0, 100)}`;
+  if (name === 'ssh_push') return `ssh_push ${args.src || ''} → ${args.host || ''}:${args.dest || ''}`;
+  if (name === 'ssh_pull') return `ssh_pull ${args.host || ''}:${args.src || ''} → ${args.dest || ''}`;
   return `${name} ${JSON.stringify(args).slice(0, 80)}`;
 }
 
@@ -229,7 +437,23 @@ function runCmd(cwd, cmd, signal) {
 async function dispatchTool(name, args, roots, confirmTool, signal, mcpManager) {
   if (signal && signal.aborted) return { error: 'aborted' };
   const safety = classifyTool(name, args, mcpManager);
-  if (confirmTool) {
+
+  // ── Mutation-tool approval ────────────────────────────────────────────
+  // Every mutation tool MUST have explicit, fresh user approval before
+  // execution.  This check is the runtime enforcement — even if the agent
+  // loop has a bug, the tool refuses to run without valid approval.
+  if (isMutationTool(name)) {
+    if (!confirmTool) return { error: 'mutation tool requires explicit user approval (no confirmTool available)' };
+    const ok = await confirmTool({ name, args, safety, description: describeTool(name, args, mcpManager) });
+    if (!ok) {
+      try {
+        const audit = require('./audit');
+        audit.append({ kind: 'tool-denied', name, argsHash: hashArgs(args) });
+      } catch {}
+      return { error: 'user declined' };
+    }
+  } else if (confirmTool) {
+    // Non-mutation tools: still confirm, but don't enforce the same strictness.
     const ok = await confirmTool({ name, args, safety, description: describeTool(name, args, mcpManager) });
     if (!ok) return { error: 'user declined' };
   }
@@ -243,6 +467,31 @@ async function dispatchTool(name, args, roots, confirmTool, signal, mcpManager) 
     if (!p) return { error: 'path outside workspace' };
     try {
       const buf = fs.readFileSync(p);
+
+      // Image files: return as base64 for vision-capable providers. Formats the
+      // provider cannot read (bmp, tiff, ico, avif, heic, svg) are converted to
+      // png first; if that is impossible the image is described in words only.
+      // Mode-specific sub-reads don't apply to images — always return full.
+      if (isImagePath(p)) {
+        const maxImageBytes = 2 * 1024 * 1024; // 2 MB binary (~2.7 MB base64)
+        const slice = buf.length > maxImageBytes ? buf.subarray(0, maxImageBytes) : buf;
+        const b64 = slice.toString('base64');
+        const normalized = await normalizeImage({
+          name: path.basename(p),
+          mimeType: mimeForFile(p, slice),
+          data: b64,
+          dataLength: b64.length,
+          truncated: buf.length > maxImageBytes,
+        });
+        const notes = [];
+        if (normalized.convertedFrom) notes.push(`converted from ${normalized.convertedFrom}`);
+        if (normalized.unsupported) notes.push(`${normalized.mimeType || 'unknown format'} cannot be shown to the model${normalized.reason ? ` (${normalized.reason})` : ''}`);
+        return {
+          content: `[Image: ${path.basename(p)} — ${buf.length} bytes${buf.length > maxImageBytes ? ' (truncated to 2MB for display)' : ''}${notes.length ? ` — ${notes.join('; ')}` : ''}]`,
+          images: normalized.unsupported ? [] : [normalized],
+        };
+      }
+
       const text = buf.slice(0, MAX_FILE_BYTES).toString('utf8');
       const lines = text.split(/\r?\n/);
       const mode = args.mode || 'full';
@@ -349,6 +598,12 @@ async function dispatchTool(name, args, roots, confirmTool, signal, mcpManager) 
   if (name === 'browser') {
     return await dispatchBrowser(args);
   }
+  if (name === 'mobile') {
+    return await dispatchMobile(args);
+  }
+  if (name === 'electron') {
+    return await dispatchElectron(args);
+  }
   if (name === 'remember') {
     const r = appendMemory({
       category: args.category,
@@ -359,6 +614,344 @@ async function dispatchTool(name, args, roots, confirmTool, signal, mcpManager) 
     return r.ok
       ? { ok: true, saved_to: r.path, line: r.line }
       : { error: r.error };
+  }
+  if (name === 'image_gen') {
+    const apiKey = process.env.SHMAKK_OPENAI_API_KEY;
+    if (!apiKey) return { error: 'SHMAKK_OPENAI_API_KEY env var is not set' };
+    const prompt = String(args.prompt || '').trim();
+    if (!prompt) return { error: 'prompt is required' };
+    const size = args.size || '1024x1024';
+    const quality = args.quality || 'standard';
+    const style = args.style || 'vivid';
+    const outputPath = args.outputPath || path.join(os.tmpdir(), `shmakk-img-${Date.now()}.png`);
+
+    const body = JSON.stringify({
+      model: 'dall-e-3',
+      prompt,
+      n: 1,
+      size,
+      quality,
+      style,
+      response_format: 'b64_json',
+    });
+
+    const postData = await new Promise((resolve, reject) => {
+      const url = new URL('https://api.openai.com/v1/images/generations');
+      const req = https.request({
+        hostname: url.hostname,
+        path: url.pathname,
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        timeout: 120000,
+      }, (res) => {
+        let data = '';
+        res.on('data', (chunk) => { data += chunk; });
+        res.on('end', () => {
+          try {
+            const json = JSON.parse(data);
+            if (res.statusCode >= 400) {
+              reject(new Error(`OpenAI API error ${res.statusCode}: ${(json.error && json.error.message) || data.slice(0, 200)}`));
+              return;
+            }
+            resolve(json);
+          } catch (e) {
+            reject(new Error(`Failed to parse OpenAI response: ${data.slice(0, 200)}`));
+          }
+        });
+      });
+      req.on('error', reject);
+      req.on('timeout', () => { req.destroy(); reject(new Error('OpenAI API request timed out after 120s')); });
+      req.write(body);
+      req.end();
+    });
+
+    const b64 = postData.data && postData.data[0] && postData.data[0].b64_json;
+    if (!b64) return { error: 'No image data in OpenAI response' };
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    fs.writeFileSync(outputPath, Buffer.from(b64, 'base64'));
+    recordEdit({ filePath: outputPath, oldContent: null, newContent: `[binary image ${(b64.length * 0.75) | 0} bytes]`, tool: 'image_gen' });
+    return {
+      ok: true,
+      imagePath: outputPath,
+      prompt,
+      size,
+      revised_prompt: postData.data[0].revised_prompt || prompt,
+      images: [{
+        mimeType: 'image/png',
+        data: b64,
+        dataLength: b64.length,
+        truncated: false,
+      }],
+    };
+  }
+  if (name === 'tts_generate') {
+    const text = String(args.text || '').trim();
+    if (!text) return { error: 'text is required' };
+    const outputPath = args.outputPath || path.join(os.tmpdir(), `shmakk-tts-${Date.now()}.wav`);
+    const opts = {};
+    if (args.voice) opts.voice = args.voice;
+    if (args.speed !== undefined) opts.speed = Number(args.speed);
+    opts.outputPath = outputPath;
+
+    try {
+      const ttsFn = _getTtsGenerate();
+      const result = await ttsFn(text, opts);
+      fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+      return {
+        ok: true,
+        audioPath: result.audioPath,
+        voice: result.voice,
+        textLength: text.length,
+      };
+    } catch (e) {
+      return { error: `TTS generation failed: ${e.message}` };
+    }
+  }
+  if (name === 'video_probe') {
+    const p = within(roots, args.path);
+    if (!p) return { error: 'path outside workspace' };
+    if (!fs.existsSync(p)) return { error: `file not found: ${p}` };
+
+    const result = await new Promise((resolve) => {
+      const child = execFile('ffprobe', [
+        '-v', 'quiet',
+        '-print_format', 'json',
+        '-show_format',
+        '-show_streams',
+        p,
+      ], { timeout: 30000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+        if (err) {
+          const msg = (stderr || '').toString().trim() || err.message;
+          resolve({ error: `ffprobe failed: ${msg}` });
+          return;
+        }
+        try {
+          const data = JSON.parse(stdout);
+          // Extract a clean summary
+          const summary = { path: p };
+          if (data.format) {
+            summary.format = data.format.format_name;
+            summary.durationSec = parseFloat(data.format.duration) || null;
+            summary.sizeBytes = parseInt(data.format.size, 10) || null;
+            summary.bitRate = parseInt(data.format.bit_rate, 10) || null;
+          }
+          if (data.streams) {
+            summary.streams = data.streams.map((s) => ({
+              index: s.index,
+              codec_type: s.codec_type,
+              codec_name: s.codec_name,
+              width: s.width || null,
+              height: s.height || null,
+              r_frame_rate: s.r_frame_rate || null,
+              sample_rate: s.sample_rate || null,
+              channels: s.channels || null,
+              duration_ts: s.duration_ts || null,
+            }));
+          }
+          resolve({ ok: true, ...summary, raw: data });
+        } catch (e) {
+          resolve({ error: `Failed to parse ffprobe output: ${e.message}` });
+        }
+      });
+      if (signal) {
+        const onAbort = () => { try { child.kill('SIGINT'); } catch {} };
+        signal.addEventListener('abort', onAbort, { once: true });
+      }
+    });
+    return result;
+  }
+  if (name === 'video_compose') {
+    const segments = args.segments || [];
+    if (!Array.isArray(segments) || segments.length === 0) {
+      return { error: 'segments must be a non-empty array' };
+    }
+    const outputPath = args.outputPath;
+    if (!outputPath) return { error: 'outputPath is required' };
+
+    // Validate all input files exist
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      if (!seg.imagePath) return { error: `segment[${i}]: imagePath is required` };
+      if (!seg.audioPath) return { error: `segment[${i}]: audioPath is required` };
+      const imgPath = within(roots, seg.imagePath);
+      const audPath = within(roots, seg.audioPath);
+      if (!imgPath) return { error: `segment[${i}]: imagePath outside workspace` };
+      if (!audPath) return { error: `segment[${i}]: audioPath outside workspace` };
+      if (!fs.existsSync(imgPath)) return { error: `segment[${i}]: imagePath not found: ${seg.imagePath}` };
+      if (!fs.existsSync(audPath)) return { error: `segment[${i}]: audioPath not found: ${seg.audioPath}` };
+    }
+
+    const width = args.width || 1920;
+    const height = args.height || 1080;
+    const fps = args.fps || 24;
+    const bgColor = args.backgroundColor || '#000000';
+
+    // First pass: probe each audio segment for its actual duration.
+    // Fall back to segment.durationSec if ffprobe is unavailable.
+    let segmentDurations = [];
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      const audPath = within(roots, seg.audioPath);
+      if (seg.durationSec && seg.durationSec > 0) {
+        segmentDurations.push({ ...seg, resolvedSec: seg.durationSec, audPath });
+        continue;
+      }
+      try {
+        const probeOut = await new Promise((resolve) => {
+          execFile('ffprobe', [
+            '-v', 'quiet',
+            '-print_format', 'json',
+            '-show_format',
+            audPath,
+          ], { timeout: 10000, maxBuffer: 256 * 1024 }, (err, stdout) => {
+            if (err) { resolve(null); return; }
+            try { resolve(JSON.parse(stdout)); } catch { resolve(null); }
+          });
+        });
+        const dur = probeOut && probeOut.format && probeOut.format.duration
+          ? parseFloat(probeOut.format.duration) : 3;
+        segmentDurations.push({ ...seg, resolvedSec: dur, audPath });
+      } catch {
+        segmentDurations.push({ ...seg, resolvedSec: seg.durationSec || 3, audPath });
+      }
+    }
+
+    // Build filter_complex: for each segment, scale/zoom the image to fill,
+    // concatenate with transitions.
+    const filterParts = [];
+    let totalDuration = 0;
+    const trimPairs = [];
+
+    // Build per-segment video inputs
+    for (let i = 0; i < segmentDurations.length; i++) {
+      const seg = segmentDurations[i];
+      const dur = seg.resolvedSec;
+      const imgPath = within(roots, seg.imagePath);
+      const trans = seg.transition || null;
+
+      // Each image looped for its duration, scaled to fill.
+      filterParts.push(`[${i}:v]loop=loop=-1:size=${Math.ceil(dur * fps)},trim=duration=${dur},setpts=PTS-STARTPTS,scale=${width}:${height}:force_original_aspect_ratio=crop,crop=${width}:${height},setsar=1[v${i}]`);
+
+      if (trans === 'fade' || trans === 'crossfade' || trans === 'dissolve') {
+        // Fade in at start, except first segment
+        if (i === 0) {
+          filterParts.push(`[v${i}]fade=t=in:st=0:d=0.5,fade=t=out:st=${dur - 0.5}:d=0.5[fv${i}]`);
+        } else {
+          filterParts.push(`[v${i}]fade=t=in:st=0:d=0.5,fade=t=out:st=${dur - 0.5}:d=0.5[fv${i}]`);
+        }
+        trimPairs.push(`[fv${i}]`);
+      } else if (trans === 'zoompan') {
+        filterParts.push(`[v${i}]zoompan=z='min(zoom+0.0015,1.5)':d=${Math.ceil(dur * fps)}:s=${width}x${height}[fv${i}]`);
+        trimPairs.push(`[fv${i}]`);
+      } else if (trans === 'slide_left') {
+        // Slide in from right
+        const steps = Math.ceil(dur * fps);
+        filterParts.push(`[v${i}]trim=duration=${dur},setpts=PTS-STARTPTS,format=rgba,fade=t=in:st=0:d=0.3:alpha=1,overlay=x='min(W-(W/2)*(t/${dur}),W)':y=0:format=auto,setsar=1,trim=duration=${dur}[fv${i}]`);
+        trimPairs.push(`[fv${i}]`);
+      } else if (trans === 'slide_right') {
+        filterParts.push(`[v${i}]trim=duration=${dur},setpts=PTS-STARTPTS,format=rgba,fade=t=in:st=0:d=0.3:alpha=1,setsar=1,trim=duration=${dur}[fv${i}]`);
+        trimPairs.push(`[fv${i}]`);
+      } else {
+        // No transition
+        trimPairs.push(`[v${i}]`);
+      }
+      totalDuration += dur;
+    }
+
+    // Concatenate all video segments
+    const concatInputs = trimPairs.join('');
+    filterParts.push(`${concatInputs}concat=n=${segmentDurations.length}:v=1:a=0[outv]`);
+
+    // Build audio inputs: concat all audio files
+    const audioInputs = [];
+    for (let i = 0; i < segmentDurations.length; i++) {
+      const seg = segmentDurations[i];
+      // Input index for the audio: total image inputs + i
+      const audioIdx = segments.length + i;
+      audioInputs.push(`[${audioIdx}:a]`);
+    }
+    filterParts.push(`${audioInputs.join('')}concat=n=${segmentDurations.length}:v=0:a=1[outa]`);
+
+    const filterComplex = filterParts.join(';');
+
+    // Build ffmpeg args
+    const ffmpegArgs = ['-y'];
+    // Image inputs
+    for (const seg of segmentDurations) {
+      ffmpegArgs.push('-loop', '1', '-i', within(roots, seg.imagePath));
+    }
+    // Audio inputs
+    for (const seg of segmentDurations) {
+      ffmpegArgs.push('-i', seg.audPath);
+    }
+    ffmpegArgs.push(
+      '-filter_complex', filterComplex,
+      '-map', '[outv]',
+      '-map', '[outa]',
+      '-c:v', 'libx264',
+      '-preset', 'medium',
+      '-crf', '23',
+      '-pix_fmt', 'yuv420p',
+      '-c:a', 'aac',
+      '-b:a', '192k',
+      '-shortest',
+      '-t', String(totalDuration),
+      outputPath,
+    );
+
+    fs.mkdirSync(path.dirname(path.resolve(roots[0], outputPath)), { recursive: true });
+
+    const composeResult = await new Promise((resolve) => {
+      const child = execFile('ffmpeg', ffmpegArgs, {
+        cwd: roots[0],
+        timeout: 300000,   // 5 min timeout for video encoding
+        maxBuffer: 512 * 1024,
+      }, (err, stdout, stderr) => {
+        if (err) {
+          const msg = (stderr || '').toString().split('\n').slice(-5).join('\n') || err.message;
+          resolve({ error: `ffmpeg compose failed: ${msg}` });
+          return;
+        }
+        resolve({ ok: true, outputPath, durationSec: totalDuration, segmentCount: segments.length });
+      });
+      if (signal) {
+        const onAbort = () => { try { child.kill('SIGINT'); } catch {} };
+        signal.addEventListener('abort', onAbort, { once: true });
+      }
+    });
+    return composeResult;
+  }
+  if (name === 'ssh_run') {
+    const ssh = _getSSH(roots);
+    if (!ssh) return { error: 'SSH module not available' };
+    const cfg = ssh.loadHostConfig(roots[0]);
+    const entry = ssh.resolveHost(cfg, args.host);
+    if (!entry) return { error: 'host not configured: ' + args.host + '. Define it in .shmakk/hosts.json or ~/.config/shmakk/hosts.json' };
+    return await ssh.sshRun(entry, args.cmd, signal);
+  }
+  if (name === 'ssh_push') {
+    const ssh = _getSSH(roots);
+    if (!ssh) return { error: 'SSH module not available' };
+    const cfg = ssh.loadHostConfig(roots[0]);
+    const entry = ssh.resolveHost(cfg, args.host);
+    if (!entry) return { error: 'host not configured: ' + args.host };
+    const p = within(roots, args.src);
+    if (!p) return { error: 'src path outside workspace' };
+    if (!fs.existsSync(p)) return { error: 'src not found: ' + args.src };
+    return await ssh.sshTransfer(entry, p, args.dest, 'push', signal);
+  }
+  if (name === 'ssh_pull') {
+    const ssh = _getSSH(roots);
+    if (!ssh) return { error: 'SSH module not available' };
+    const cfg = ssh.loadHostConfig(roots[0]);
+    const entry = ssh.resolveHost(cfg, args.host);
+    if (!entry) return { error: 'host not configured: ' + args.host };
+    const p = within(roots, args.dest);
+    if (!p) return { error: 'dest path outside workspace' };
+    return await ssh.sshTransfer(entry, args.src, p, 'pull', signal);
   }
   return { error: `unknown tool: ${name}` };
 }

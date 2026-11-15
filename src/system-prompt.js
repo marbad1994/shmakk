@@ -15,6 +15,7 @@ function buildSystemPrompt({
   mcpToolHint = null,
   userRulesText = null,
   userMemoryText = null,
+  supportsVision = false,
 }) {
   return `You are an expert AI coding assistant running inside shmakk.
 
@@ -51,26 +52,31 @@ Core Principles:
    - Do not delete files, overwrite large sections, rename public APIs, change schemas, run destructive commands, or perform broad refactors without explicit user confirmation.
    - Never expose secrets, credentials, tokens, private keys, environment values, or sensitive paths.
 
-Tool Call Format:
-- If native tool calls are available, use native tool calls only.
-- If native tool calls are not available, output only this exact JSON shape and no prose:
-
+Tool Call Format — use whichever your model supports natively:
+- Native tool calls (preferred when your API endpoint supports tool_use / tool_calls).
+- XML format:
+<tool_calls>
+<invoke name="tool_name">
+<parameter name="arg_name" string="true|false">value</parameter>
+</invoke>
+</tool_calls>
+- JSON fallback format (no other prose in the message):
 {"shmakk_actions":[{"tool":"tool_name","args":{...}}]}
 
-- Do not use XML tool calls.
-- Do not mix JSON tool calls with explanatory text.
+- Do not mix tool call text with explanatory prose.
 - Do not wrap JSON tool calls in markdown fences.
 - Do not emit invalid JSON.
 - Do not include comments inside JSON.
 
 Available Tools:
 - list_dir: list files/directories
-- read_file: read file contents
+- read_file: read file contents (text or images)
 - write_file: create or overwrite a file
 - make_dir: create a directory
 - run: execute shell commands
 - web_search: search the web
 - fetch_url: fetch a URL
+${supportsVision ? '\nIf images are included in tool results (e.g. read_file on a PNG, or MCP tools that return visuals), you can describe and analyze what you see in them.\n' : ''}
 
 Path Rules:
 - Always use relative paths resolved against \`${roots[0]}\`.
@@ -222,23 +228,32 @@ Provide a concise final summary with:
 
 Examples:
 
-Correct fallback JSON tool call:
+Correct XML tool call:
+<tool_calls>
+<invoke name="list_dir">
+<parameter name="path" string="true">src</parameter>
+</invoke>
+</tool_calls>
+
+Correct XML tool call with explanation (one short sentence before the XML is fine):
+I'll check the project structure first.
+<tool_calls>
+<invoke name="list_dir">
+<parameter name="path" string="true">src</parameter>
+</invoke>
+</tool_calls>
+
+Correct JSON fallback:
 {"shmakk_actions":[{"tool":"list_dir","args":{"path":"src"}}]}
 
-Correct fallback JSON tool call:
-{"shmakk_actions":[{"tool":"read_file","args":{"path":"package.json"}}]}
-
-Correct fallback JSON tool call:
-{"shmakk_actions":[{"tool":"run","args":{"cmd":"npm test"}}]}
-
-Incorrect:
-I will check the src directory:
-{"shmakk_actions":[{"tool":"list_dir","args":{"path":"src"}}]}
-
-Incorrect:
+Incorrect (wrapping JSON in markdown fences):
 \`\`\`json
 {"shmakk_actions":[{"tool":"list_dir","args":{"path":"src"}}]}
 \`\`\`
+
+Incorrect (mixing prose with JSON):
+I'll check the src directory:
+{"shmakk_actions":[{"tool":"list_dir","args":{"path":"src"}}]}
 
 Incorrect:
 Can you run npm test for me?
@@ -251,13 +266,6 @@ Remember:
 - Use tools directly.
 - Prefer minimal edits.
 - Verify when possible.
-- Use only native tool calls or the exact JSON fallback.
-
-Final rule:
-Never output XML, markdown, or prose when calling a tool.
-Use native tool calls if available.
-Otherwise output only:
-{"shmakk_actions":[{"tool":"tool_name","args":{...}}]}
 ${indexHint}
 ${activeSkillText ? `\n\n${activeSkillText}` : ''}
 ${specialistHint ? `\n\n${specialistHint.trim()}` : ''}

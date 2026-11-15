@@ -25,6 +25,7 @@ const { createMCPManager } = require('../mcp-client');
 const { createProjects } = require('./projects');
 const { createAutomations } = require('./automations');
 const design = require('./design');
+const { injectInspector } = require('./inspector');
 const endpoints = require('../endpoints');
 const sessionSearch = require('../session-search');
 
@@ -321,6 +322,13 @@ async function startWebServer(opts = {}) {
       const [, , convId, sig, ...rest] = pathname.split('/');
       const hit = design.resolveArtifact(app.artifactSecret, convId, sig, rest.join('/'));
       if (!hit || (req.method !== 'GET' && req.method !== 'HEAD')) return send(res, 404, 'not found');
+      const inspect = url.searchParams.get('inspect') === '1';
+      if (inspect && hit.type.startsWith('text/html')) {
+        const html = injectInspector(fs.readFileSync(hit.file, 'utf8'));
+        const data = Buffer.from(html, 'utf8');
+        res.writeHead(200, { 'content-type': hit.type, 'content-length': data.length, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'content-security-policy': design.ARTIFACT_CSP, 'referrer-policy': 'no-referrer' });
+        return res.end(data);
+      }
       return fs.readFile(hit.file, (err, data) => {
         if (err) return send(res, 404, 'not found');
         res.writeHead(200, { 'content-type': hit.type, 'content-length': data.length, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'content-security-policy': design.ARTIFACT_CSP, 'referrer-policy': 'no-referrer' });

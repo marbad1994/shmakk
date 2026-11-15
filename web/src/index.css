@@ -150,6 +150,11 @@ html.is-desktop.is-mac { --titlebar-pad: 72px; }
 .hljs-number, .hljs-symbol, .hljs-bullet, .hljs-meta { color: var(--hl-num); }
 .hljs-title, .hljs-section, .hljs-name, .hljs-function, .hljs-variable { color: var(--hl-fn); }
 .hljs-deletion { color: var(--danger); }
+/* HTML/CSS tokens (used by the design code viewer). */
+.hljs-tag, .hljs-selector-pseudo { color: var(--hl-kw); }
+.hljs-punctuation, .hljs-operator { color: var(--faint); }
+.hljs-property, .hljs-selector-class, .hljs-selector-id, .hljs-params, .hljs-template-variable { color: var(--hl-fn); }
+.hljs-attribute, .hljs-doctag { color: var(--hl-num); }
 
 /* ANSI output */
 .ansi-b { font-weight: 700; color: var(--fg); } .ansi-d { opacity: 0.65; } .ansi-u { text-decoration: underline; } .ansi-i { font-style: italic; }

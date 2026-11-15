@@ -1,4 +1,4 @@
-const pty = require('node-pty');
+const pty = require('@lydell/node-pty');
 const { EventEmitter } = require('events');
 const { detectShell } = require('./shell');
 const { configureForShell } = require('./hooks');
@@ -13,8 +13,8 @@ function getSize() {
 
 const VOICE_HOTKEY = 0x0f; // Ctrl+O — triggers voice recording
 
-function startSession({ debug = false, voiceEnabled = false } = {}) {
-  const shell = detectShell();
+function startSession({ debug = false, voiceEnabled = false, stsEnabled = false, shellOverride = null, extraEnv = {}, cleanup = null } = {}) {
+  const shell = detectShell(shellOverride);
   const cfg = configureForShell(shell.name);
   const { cols, rows } = getSize();
 
@@ -28,10 +28,11 @@ function startSession({ debug = false, voiceEnabled = false } = {}) {
     cwd: process.cwd(),
     // SHMAKK_PID lets `shmakk --status/--exit/--restart` find us from
     // inside the inner shell.
-    env: { ...process.env, SHMAKK: '1', SHMAKK_PID: String(process.pid), ...cfg.env },
+    env: { ...process.env, SHMAKK: '1', SHMAKK_PID: String(process.pid), ...cfg.env, ...extraEnv },
   });
 
   const ev = new EventEmitter();
+  let voiceHotkeyEnabled = !!(voiceEnabled || stsEnabled);
   // Stack of stdin handlers: top of stack receives data. Null at bottom
   // means "relay to child PTY".
   const stdinStack = [];
@@ -47,17 +48,17 @@ function startSession({ debug = false, voiceEnabled = false } = {}) {
   stdin.resume();
 
   const onStdin = (data) => {
-    const h = topHandler();
-    if (h) return h(data);
-
     // Voice hotkey detection — only when voice is enabled
-    if (voiceEnabled) {
+    if (voiceHotkeyEnabled) {
       const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
       if (buf.length === 1 && buf[0] === VOICE_HOTKEY) {
         ev.emit('voice');
         return;
       }
     }
+
+    const h = topHandler();
+    if (h) return h(data);
 
     const cleaned = filterStdin(Buffer.isBuffer(data) ? data : Buffer.from(data));
     if (cleaned.length) child.write(cleaned);
@@ -82,6 +83,7 @@ function startSession({ debug = false, voiceEnabled = false } = {}) {
       if (stdin.isTTY) { try { stdin.setRawMode(wasRaw); } catch {} }
       stdin.pause();
       cfg.cleanup();
+      if (cleanup) cleanup();
       resolve({ exitCode: exitCode ?? 0, signal });
     });
   });
@@ -90,6 +92,9 @@ function startSession({ debug = false, voiceEnabled = false } = {}) {
     ev,
     stdoutWrite: (s) => stdout.write(s),
     childWrite: (s) => child.write(s),
+    setVoiceEnabled(v) {
+      voiceHotkeyEnabled = !!v;
+    },
     // Push a handler; returns a release fn that pops it. Stacked so nested
     // captures (e.g. ask() inside an AI tap) don't wipe the outer handler.
     captureStdin(handler) {

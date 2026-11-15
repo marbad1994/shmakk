@@ -39,7 +39,7 @@ function SettingsDialog({ project, open, onOpenChange }: { project: Project; ope
           <DialogBody>
             <Field label="Name" htmlFor="ps-name"><Input id="ps-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
             <Field label="Description" htmlFor="ps-desc"><Input id="ps-desc" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
-            <Field label="Instructions" htmlFor="ps-inst" hint="Always followed by every chat in the project — brand voice, tech stack, do’s and don’ts.">
+            <Field label="System prompt" htmlFor="ps-inst" hint="Prepended to every chat in this project, after your global prompt: brand voice, tech stack, do’s and don’ts.">
               <Textarea id="ps-inst" value={form.instructions} onChange={(e) => setForm({ ...form, instructions: e.target.value })} className="min-h-32 font-sans" placeholder="We use TypeScript and Tailwind. Tone: warm and plain-spoken. Never touch the billing module." />
             </Field>
             <Field label="Workspace folder (optional)" htmlFor="ps-ws" hint={`Code and Cowork chats in this project start here${home ? `, e.g. ${tildify(`${home}/code/site`, home)}` : ''}. Leave empty to use the current workspace.`}>
@@ -99,7 +99,7 @@ export function ProjectView() {
           <span className="text-[13.5px] text-dim">
             {project.shareContext
               ? 'Every chat here can see what the others decided and made — a Code chat can read the designs, a Cowork task knows what was built.'
-              : 'Each chat only knows the project’s instructions. Nothing said or made in one chat reaches another.'}
+              : 'Each chat only knows the project’s system prompt. Nothing said or made in one chat reaches another.'}
           </span>
         </span>
         <Switch checked={project.shareContext} onCheckedChange={(v) => share.mutate(v)} aria-label="Share context between chats" />
@@ -118,7 +118,7 @@ export function ProjectView() {
       </Section>
 
       {project.instructions ? (
-        <Section title="Instructions"><p className="m-0 line-clamp-4 whitespace-pre-wrap rounded-2xl border border-line bg-raised px-4 py-3 text-[13.5px] text-dim">{project.instructions}</p></Section>
+        <Section title="System prompt"><p className="m-0 line-clamp-4 whitespace-pre-wrap rounded-2xl border border-line bg-raised px-4 py-3 text-[13.5px] text-dim">{project.instructions}</p></Section>
       ) : null}
 
       <Section title={`Chats · ${conversations.length}`}>

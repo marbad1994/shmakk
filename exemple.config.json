@@ -1,8 +1,22 @@
 {
-    "deepseek-pro": {
-        "host": "https://api.deepseek.com/v1",
-        "headers": "",
-        "model": "deepseek-v4-pro",
-        "apiKey": "MY API KEY"
+  "main": "gpt5-codex",
+  "models": {
+    "gpt5-codex": {
+      "provider": "codex",
+      "model": "gpt-5-codex",
+      "api_key": "OPENAI_API_KEY"
+    },
+    "openai-compatible-local": {
+      "provider": "openai-compatible",
+      "base_url": "http://127.0.0.1:1234/v1",
+      "model": "qwen/qwen3.5-9b",
+      "api_key": "not-needed",
+      "headers": ""
+    },
+    "claude-sonnet": {
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-5-20250929",
+      "api_key": "ANTHROPIC_API_KEY"
     }
+  }
 }

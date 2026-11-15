@@ -1,0 +1,124 @@
+- generic [ref=f1e2]:
+  - generic [ref=f1e3]:
+    - link "Skip to message box" [ref=f1e4] [cursor=pointer]:
+      - /url: "#composer-input"
+    - complementary "Navigation" [ref=f1e6]:
+      - generic [ref=f1e7]:
+        - button "shmakk, new chat" [ref=f1e8] [cursor=pointer]:
+          - generic [aria-hidden] [ref=f1e9]: ❯
+          - text: shmakk
+        - button "Hide sidebar" [ref=f1e11] [cursor=pointer]
+      - tablist "Mode" [ref=f1e12]:
+        - tab "Chat" [ref=f1e13] [cursor=pointer]
+        - tab "Code" [selected] [ref=f1e16] [cursor=pointer]
+        - tab "Design" [ref=f1e21] [cursor=pointer]
+        - tab "Cowork" [ref=f1e28] [cursor=pointer]
+      - button "New session" [ref=f1e383] [cursor=pointer]
+      - generic [ref=f1e37]:
+        - generic [ref=f1e38]:
+          - generic [ref=f1e39]: Projects
+          - button "New project" [ref=f1e40] [cursor=pointer]
+        - list "Code conversations" [ref=f1e42]:
+          - generic [ref=f1e384]:
+            - generic [ref=f1e385]: Older
+            - listitem [ref=f1e386]:
+              - button [ref=f1e387] [cursor=pointer]
+              - button "Options for undefined" [ref=f1e388] [cursor=pointer]
+            - listitem [ref=f1e393]:
+              - button [ref=f1e394] [cursor=pointer]
+              - button "Options for undefined" [ref=f1e395] [cursor=pointer]
+      - generic [ref=f1e61]:
+        - button "Account menu, tmp" [ref=f1e62] [cursor=pointer]:
+          - generic [aria-hidden] [ref=f1e63]: t
+          - generic [ref=f1e64]:
+            - generic [ref=f1e65]: tmp
+            - generic [ref=f1e66]: ws
+        - button "Settings" [ref=f1e68] [cursor=pointer]
+    - generic [ref=f1e72]:
+      - banner [ref=f1e73]:
+        - heading [level=1] [ref=f1e400]:
+          - generic "Code mode" [ref=f1e401]
+          - text: New session
+        - button "Reset conversation context" [ref=f1e406] [cursor=pointer]
+        - button "Toggle terminal" [ref=f1e407] [cursor=pointer]
+        - button "Toggle inspector" [ref=f1e82] [cursor=pointer]
+      - generic [ref=f1e83]:
+        - main [ref=f1e84]:
+          - generic [ref=f1e85]:
+            - generic [ref=f1e293]:
+              - heading "What are we building in ws?" [level=2] [ref=f1e412]
+              - paragraph [ref=f1e300]: Ask for a change, run a command, or hand over a whole task. shmakk reads, edits and runs inside your workspace — and asks before anything risky.
+              - generic [ref=f1e301]:
+                - generic [ref=f1e305]:
+                  - strong [ref=f1e306]: Connect a model to get started
+                  - text: Add an OpenAI-compatible base URL, key and model.
+                - button "Open settings" [ref=f1e307] [cursor=pointer]
+              - button [ref=f1e413] [cursor=pointer]:
+                - generic [ref=f1e418]:
+                  - strong [ref=f1e419]: Start from a GitHub repository
+                  - text: Clone a repo here and work on it in its own session — push and open a PR when you’re done.
+              - generic [ref=f1e317]:
+                - button "understand Give me a tour of this codebase — entry points, structure, and how to run it" [ref=f1e422] [cursor=pointer]:
+                  - generic [ref=f1e423]: understand
+                  - generic [ref=f1e424]: Give me a tour of this codebase — entry points, structure, and how to run it
+                - button "fix Run the tests and fix whatever is failing" [ref=f1e425] [cursor=pointer]:
+                  - generic [ref=f1e426]: fix
+                  - generic [ref=f1e427]: Run the tests and fix whatever is failing
+                - button "shell $ git status" [ref=f1e428] [cursor=pointer]:
+                  - generic [ref=f1e429]: shell
+                  - generic [ref=f1e430]: $ git status
+                - button "review Review my uncommitted changes for bugs and risky edits" [ref=f1e431] [cursor=pointer]:
+                  - generic [ref=f1e432]: review
+                  - generic [ref=f1e433]: Review my uncommitted changes for bugs and risky edits
+            - generic [ref=f1e333]:
+              - generic [ref=f1e334]:
+                - generic [aria-hidden] [ref=f1e335]: ❯
+                - textbox "Message shmakk" [active] [ref=f1e336]:
+                  - /placeholder: Ask shmakk anything — / for commands
+              - generic [ref=f1e337]:
+                - generic [ref=f1e338]:
+                  - radiogroup "Input mode" [ref=f1e434]:
+                    - radio "ask" [checked] [ref=f1e435] [cursor=pointer]
+                    - radio "shell" [ref=f1e436] [cursor=pointer]
+                  - button "test-model" [ref=f1e437] [cursor=pointer]
+                - button "Attach files" [ref=f1e348] [cursor=pointer]
+                - button "Read replies aloud" [ref=f1e349] [cursor=pointer]
+                - button "Voice input" [ref=f1e350] [cursor=pointer]
+                - button "Send" [disabled] [ref=f1e351]
+        - complementary "Inspector":
+          - generic [ref=f1e148]:
+            - tablist "Inspector panes":
+              - tab "Browser" [selected] [ref=f1e149] [cursor=pointer]
+              - tab "Changes" [ref=f1e153] [cursor=pointer]
+              - tab "Plan" [ref=f1e156] [cursor=pointer]
+            - button "Hide inspector" [ref=f1e160] [cursor=pointer]
+          - generic:
+            - generic:
+              - generic [ref=f1e161]:
+                - generic:
+                  - textbox "Preview URL" [ref=f1e162]:
+                    - /placeholder: http://localhost:5173
+                    - text: http://localhost:5173
+                  - button "Open address" [ref=f1e163] [cursor=pointer]
+                - button "Reload preview" [ref=f1e164] [cursor=pointer]
+                - button "Open in a new tab" [ref=f1e165] [cursor=pointer]
+              - generic [ref=f1e166]:
+                - generic:
+                  - button ":5173" [ref=f1e167] [cursor=pointer]
+                  - button ":3000" [ref=f1e168] [cursor=pointer]
+                  - button ":8080" [ref=f1e169] [cursor=pointer]
+                - radiogroup "Preview size" [ref=f1e170]:
+                  - radio "desktop" [checked] [ref=f1e171] [cursor=pointer]
+                  - radio "tablet" [ref=f1e174] [cursor=pointer]
+                  - radio "phone" [ref=f1e177] [cursor=pointer]
+              - generic:
+                - generic:
+                  - iframe
+                - generic [ref=f1e180]:
+                  - generic: Nothing answered at http://localhost:5173
+                  - paragraph: Start your dev server, or point this pane at the port it prints. Reload once it is up.
+                  - button "Try again" [ref=f1e187] [cursor=pointer]
+              - generic [ref=f1e188]:
+                - generic: Chromium preview. Browser automation is unavailable (Playwright not found).
+                - button "Ask the agent to inspect this page" [ref=f1e189] [cursor=pointer]
+  - region "Notifications alt+T"

@@ -217,6 +217,38 @@ const WORKFLOWS = {
       },
     ],
   },
+
+  // ── Hybrid workflows (pipeline with parallel sub-stages) ─────────────────
+
+  'video-production': {
+    id: 'video-production',
+    description: 'Produce a video: script → voiceover + visuals → composite',
+    topology: 'pipeline',
+    triggers: [
+      /\b(create|make|produce|generate|render)\s+(a\s+)?video\b/i,
+      /\bvideo\s+(production|editing|creation|demo|explainer)\b/i,
+      /\b(voice.?over|narration)\s+.*\bvideo\b/i,
+      /\b(composite|assemble|stitch)\s+.*\b(video|mp4|clip)\b/i,
+    ],
+    steps: [
+      {
+        role: 'script',
+        task: 'Turn the user prompt into a timed JSON storyboard. Output an array of segments, each with: startTime (seconds), endTime (seconds), narration (text for TTS), visualDesc (prompt for image generation). Total duration must match the user request. For: {input}',
+      },
+      {
+        role: 'voice',
+        task: 'Generate TTS audio files for each segment from the narration text in the script output. Use tts_generate tool. Return per-segment audio file paths.',
+      },
+      {
+        role: 'visual',
+        task: 'Generate images for each segment from the visualDesc in the script output. Use image_gen tool. Return per-segment image file paths.',
+      },
+      {
+        role: 'compositor',
+        task: 'Assemble the final video from the per-segment audio and image files using video_compose, then concatenate segments with video_concat. Apply transitions, fit images to duration, mix audio tracks. Output a single .mp4 file.',
+      },
+    ],
+  },
 };
 
 function listWorkflows() {

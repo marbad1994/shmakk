@@ -80,13 +80,44 @@ const SELF_COMMANDS = [
     action: 'show-plan',
   },
 
-  // ── Session ──
+  // ── Agent overview ──
   {
-    patterns: [/^(?:shmakk\s+)?status$/i],
+    patterns: [
+      /^(?:show\s+)?(?:agent\s+)?overview$/i,
+      /^what\s+(?:agents?|specialists?)\s+(?:are|is)\s+(?:working|running|active)[\s?]*$/i,
+      /^who\s+(?:is\s+)?working[\s?]*$/i,
+      /^team\s+(?:status|overview)$/i,
+    ],
+    action: 'agent-overview',
+  },
+  // "agent skills" — show skills used by agents
+  {
+    patterns: [
+      /^agent\s+skills?$/i,
+      /^(?:show\s+)?agent\s+skills?$/i,
+    ],
+    action: 'agent-skills',
+  },
+  // "agent <role|id>" — drill into a specific agent
+  {
+    patterns: [
+      /^agent\s+(\S[\s\S]*)$/i,
+      /^show\s+agent\s+(\S[\s\S]*)$/i,
+      /^(?:detail|inspect|follow)\s+agent\s+(\S[\s\S]*)$/i,
+    ],
+    action: 'agent-detail',
+    needsArg: true,
+  },
+
+  // ── Session ──
+  // NOTE: Bare "status", "stats" etc. are NOT intercepted — they may be
+  // real shell commands. Use /status, /stats, shmakk status, etc. instead.
+  {
+    patterns: [/^status$/i],
     action: 'status',
   },
   {
-    patterns: [/^(?:show\s+)?stats$/i, /^session\s+stats$/i],
+    patterns: [/^stats$/i, /^session\s+stats$/i],
     action: 'stats',
   },
   {
@@ -135,8 +166,8 @@ const SELF_COMMANDS = [
   },
   {
     patterns: [
-      /^(?:show\s+)?last\s+sessions?$/i,
-      /^recent\s+sessions?$/i,
+      /^(?:show\s+)?(?:last\s+|recent\s+)?sessions?$/i,
+      /^sessions?$/i,
     ],
     action: 'last-sessions',
   },
@@ -291,6 +322,22 @@ const SELF_COMMANDS = [
     action: 'disable-yes-files',
   },
 
+  // ── Notify ──
+  {
+    patterns: [
+      /^(?:enable|turn\s+on)\s+notify$/i,
+      /^notify\s+on$/i,
+    ],
+    action: 'enable-notify',
+  },
+  {
+    patterns: [
+      /^(?:disable|turn\s+off|no)\s+notify$/i,
+      /^notify\s+off$/i,
+    ],
+    action: 'disable-notify',
+  },
+
   // ── Colors ──
   {
     patterns: [
@@ -323,6 +370,64 @@ const SELF_COMMANDS = [
     action: 'disable-debug',
   },
 
+  // ── Voice modes ──
+  {
+    patterns: [
+      /^(?:enable|turn\s+on|start)\s+stt$/i,
+      /^stt\s+on$/i,
+      /^(?:enable|turn\s+on|start)\s+speech[-\s]?to[-\s]?text$/i,
+      /^(?:enable|turn\s+on|start)\s+voice(?:\s+input)?$/i,
+      /^voice(?:\s+input)?\s+on$/i,
+    ],
+    action: 'enable-stt',
+  },
+  {
+    patterns: [
+      /^(?:disable|turn\s+off|stop)\s+stt$/i,
+      /^stt\s+off$/i,
+      /^(?:disable|turn\s+off|stop)\s+speech[-\s]?to[-\s]?text$/i,
+      /^(?:disable|turn\s+off|stop)\s+voice(?:\s+input)?$/i,
+      /^voice(?:\s+input)?\s+off$/i,
+    ],
+    action: 'disable-stt',
+  },
+  {
+    patterns: [
+      /^(?:enable|turn\s+on|start)\s+tts$/i,
+      /^tts\s+on$/i,
+      /^(?:enable|turn\s+on|start)\s+text[-\s]?to[-\s]?speech$/i,
+      /^(?:enable|turn\s+on|start)\s+spoken\s+responses?$/i,
+    ],
+    action: 'enable-tts',
+  },
+  {
+    patterns: [
+      /^(?:disable|turn\s+off|stop)\s+tts$/i,
+      /^tts\s+off$/i,
+      /^(?:disable|turn\s+off|stop)\s+text[-\s]?to[-\s]?speech$/i,
+      /^(?:disable|turn\s+off|stop)\s+spoken\s+responses?$/i,
+    ],
+    action: 'disable-tts',
+  },
+  {
+    patterns: [
+      /^(?:enable|turn\s+on|start)\s+sts$/i,
+      /^sts\s+on$/i,
+      /^(?:enable|turn\s+on|start)\s+speech[-\s]?to[-\s]?speech$/i,
+      /^(?:enable|turn\s+on|start)\s+always[-\s]?on\s+voice$/i,
+    ],
+    action: 'enable-sts',
+  },
+  {
+    patterns: [
+      /^(?:disable|turn\s+off|stop)\s+sts$/i,
+      /^sts\s+off$/i,
+      /^(?:disable|turn\s+off|stop)\s+speech[-\s]?to[-\s]?speech$/i,
+      /^(?:disable|turn\s+off|stop)\s+always[-\s]?on\s+voice$/i,
+    ],
+    action: 'disable-sts',
+  },
+
   // ── Profile ──
   {
     patterns: [
@@ -346,6 +451,18 @@ const SELF_COMMANDS = [
     confirm: true,
   },
 
+  // ── Workspace consolidation ──
+  {
+    patterns: [
+      /^consolidate\s+workspace$/i,
+      /^merge\s+workspace$/i,
+      /^merge\s+\.shmakk$/i,
+      /^consolidate\s+\.shmakk$/i,
+    ],
+    action: 'consolidate-workspace',
+    confirm: true,
+  },
+
   // ── Edit review ──
   {
     patterns: [
@@ -355,22 +472,105 @@ const SELF_COMMANDS = [
     ],
     action: 'review-edits',
   },
+
+  // ── Sidebar (meta / out-of-band query) ──
+  // "Sidebar: what files did you touch?" runs the agent with full context
+  // but the query and response are never added to conversation history.
+  // Use this for meta-questions, status checks, and side-channel queries.
+  {
+    patterns: [
+      /^Sidebar:\s*(.+)$/i,
+      /^sidebar\s+(.+)$/i,
+    ],
+    action: 'sidebar-query',
+    needsArg: true,
+  },
+
+  // ── Vibedit ──
+  // Visual editing workflow: screenshot running app → vision LLM analysis
+  // → structured functional description → PM team delegation.
+  // Accepts a natural language request (e.g. "make the header blue").
+  {
+    patterns: [
+      /^\/?vibedit\s+(.+)$/i,
+      /^shmakk\s+vibedit\s+(.+)$/i,
+    ],
+    action: 'vibedit',
+    needsArg: true,
+  },
+
+  // ── Vibedit Electron ──
+  // Visual editing overlay connected to a live Electron desktop app via CDP.
+  {
+    patterns: [
+      /^\/?vibedit[\s-]electron\s*(.*)$/i,
+      /^shmakk\s+vibedit[\s-]electron\s*(.*)$/i,
+      /^\/?ve\s*(.*)$/i,
+    ],
+    action: 'vibedit-electron',
+    needsArg: true,
+  },
 ];
+
+// Self-command prefixes accepted by the shell:
+//   /cmd          — e.g. /status, /sessions, /compact
+//   shmakk cmd    — e.g. shmakk status, shmakk show sessions
+// Bare words like "status" are NOT intercepted (they go to the shell).
+const SELF_PREFIX_RE = /^\/(.+)$/;
+const SHMAKK_PREFIX_RE = /^shmakk\s+(.+)$/i;
+
+function hasSelfCommandPrefix(input) {
+  const text = String(input || '').trim();
+  return SELF_PREFIX_RE.test(text) || SHMAKK_PREFIX_RE.test(text);
+}
+
+function stripSelfCommandPrefix(input) {
+  const text = String(input || '').trim();
+  let m = SELF_PREFIX_RE.exec(text);
+  if (m) return m[1].trim();
+  m = SHMAKK_PREFIX_RE.exec(text);
+  if (m) return m[1].trim();
+  return text;
+}
 
 function matchSelfCommand(input) {
   const text = String(input || '').trim();
   if (!text) return { matched: false };
 
-  for (const entry of SELF_COMMANDS) {
-    for (const pattern of entry.patterns) {
-      const m = pattern.exec(text);
-      if (m) {
-        return {
-          matched: true,
-          action: entry.action,
-          arg: entry.needsArg && m[1] ? m[1].trim() : null,
-          confirm: !!entry.confirm,
-        };
+  // Try matching with prefix stripped first (for /status, shmakk status, etc.)
+  const stripped = stripSelfCommandPrefix(text);
+  if (stripped !== text) {
+    for (const entry of SELF_COMMANDS) {
+      for (const pattern of entry.patterns) {
+        const m = pattern.exec(stripped);
+        if (m) {
+          return {
+            matched: true,
+            action: entry.action,
+            arg: entry.needsArg && m[1] ? m[1].trim() : null,
+            confirm: !!entry.confirm,
+          };
+        }
+      }
+    }
+    return { matched: false };
+  }
+
+  // Multi-word natural-language commands (no prefix needed).
+  // Single bare words are NOT matched — they could be real shell commands.
+  const wordCount = text.split(/\s+/).length;
+  if (wordCount >= 2) {
+    for (const entry of SELF_COMMANDS) {
+      for (const pattern of entry.patterns) {
+        const m = pattern.exec(text);
+        if (m) {
+          return {
+            matched: true,
+            action: entry.action,
+            arg: entry.needsArg && m[1] ? m[1].trim() : null,
+            confirm: !!entry.confirm,
+          };
+        }
       }
     }
   }
@@ -380,6 +580,9 @@ function matchSelfCommand(input) {
 
 // ctx is optional: { opts, HELP, setColors }
 function executeSelfCommand(match, write, ctx = {}) {
+  // Update terminal tab title so self-command activity is visible from other tabs
+  const label = match.action.replace(/-/g, ' ');
+  write(`\x1b]0;${label} — shmakk\x07`);
   const ctl = require('./control');
   const opts = ctx.opts || {};
 
@@ -387,7 +590,7 @@ function executeSelfCommand(match, write, ctx = {}) {
 
     // ── Help ──
     case 'show-help': {
-      const helpText = ctx.HELP || '[shmakk] help text not available';
+      const helpText = ctx.HELP_SESSION_SUMMARY || ctx.HELP_SUMMARY || ctx.HELP || '[shmakk] help text not available';
       write(helpText.replace(/\n/g, '\r\n'));
       break;
     }
@@ -404,6 +607,70 @@ function executeSelfCommand(match, write, ctx = {}) {
     // ── Plan ──
     case 'show-plan':     ctl.showPlan(); break;
 
+    // ── Agent overview ──
+    case 'agent-overview': {
+      const overview = require('./agent-overview');
+      const agents = overview.getAll();
+      const lines = overview.formatOverview(agents);
+      for (const line of lines) write(line + '\r\n');
+      break;
+    }
+    case 'agent-detail': {
+      const overview = require('./agent-overview');
+      const query = (match.arg || '').trim();
+      // Try exact id match first, then role match
+      let agent = overview.get(query);
+      if (!agent) {
+        const byRole = overview.findByRole(query);
+        if (byRole.length === 1) {
+          agent = byRole[0];
+        } else if (byRole.length > 1) {
+          write(`\x1b[36m[shmakk]\x1b[0m ${byRole.length} agents match "\x1b[1m${query}\x1b[0m":\r\n`);
+          for (const a of byRole) {
+            const icon = overview.statusIcon(a.status);
+            write(`  ${icon} \x1b[36m${a.id}\x1b[0m  \x1b[2m${a.role} · ${a.status}\x1b[0m\r\n`);
+          }
+          write(`\r\n\x1b[2mUse "agent <id>" to drill into a specific one.\x1b[0m\r\n`);
+          break;
+        }
+      }
+      if (!agent) {
+        write(`\x1b[33m[shmakk] no agent found matching "\x1b[1m${query}\x1b[0m"\r\n`);
+        write(`\x1b[2mTry "agent overview" to see all agents.\x1b[0m\r\n`);
+        break;
+      }
+      const lines = overview.formatAgentDetail(agent);
+      for (const line of lines) write(line + '\r\n');
+      break;
+    }
+    case 'agent-skills': {
+      const overview = require('./agent-overview');
+      const agents = overview.getAll();
+      if (!agents.length) {
+        write('\x1b[2mNo agents registered.\x1b[0m\r\n');
+        break;
+      }
+      const skillMap = new Map();
+      for (const a of agents) {
+        if (!a.skill) continue;
+        if (!skillMap.has(a.skill)) {
+          skillMap.set(a.skill, { skill: a.skill, source: a.skillSource, agents: [] });
+        }
+        skillMap.get(a.skill).agents.push(a.role);
+      }
+      if (!skillMap.size) {
+        write('\x1b[2mNo skills used by agents (all using roster hints).\x1b[0m\r\n');
+        break;
+      }
+      write(`\x1b[1mAgent Skills\x1b[0m\r\n\r\n`);
+      for (const [name, info] of skillMap) {
+        const roles = [...new Set(info.agents)].join(', ');
+        write(`  \x1b[36m${name}\x1b[0m  \x1b[2mused by: ${roles}\x1b[0m\r\n`);
+        if (info.source) write(`    \x1b[2msource: ${info.source}\x1b[0m\r\n`);
+      }
+      break;
+    }
+
     // ── Session ──
     case 'status':        ctl.status(); break;
     case 'stats':         ctl.stats(); break;
@@ -411,6 +678,7 @@ function executeSelfCommand(match, write, ctx = {}) {
     case 'mcp-status':    ctl.mcpStatus(); break;
     case 'compact':       ctl.compactContext(); break;
     case 'reset':         ctl.resetConversation(); break;
+    case 'consolidate-workspace': ctl.consolidateWorkspace(); break;
 
     case 'show-rules': {
       const { loadRules, rulesStatus } = require('./rules');
@@ -637,10 +905,10 @@ function executeSelfCommand(match, write, ctx = {}) {
       const list = listEndpoints(opts.workspace || process.cwd());
       const current = getCurrentEndpointName();
       if (!list.length) {
-        write('[shmakk] no endpoints configured in ~/.config/shmakk/endpoints.js\r\n');
+        write('[shmakk] no endpoints configured in ~/.config/shmakk/endpoints.json\r\n');
         break;
       }
-      write('[shmakk] available endpoints:\r\n');
+      write('[shmakk] available model endpoints:\r\n');
       for (const ep of list) {
         const marker = ep === current ? ' \x1b[1m*\x1b[0m ' : '   ';
         write(`${marker}${ep}\r\n`);
@@ -697,6 +965,18 @@ function executeSelfCommand(match, write, ctx = {}) {
       break;
     }
 
+    // ── Notify ──
+    case 'enable-notify': {
+      if (ctx.opts) ctx.opts.notify = true;
+      write('[shmakk] desktop notifications enabled\r\n');
+      break;
+    }
+    case 'disable-notify': {
+      if (ctx.opts) ctx.opts.notify = false;
+      write('[shmakk] desktop notifications disabled\r\n');
+      break;
+    }
+
     // ── Colors ──
     case 'enable-colors': {
       if (ctx.opts) ctx.opts.colors = true;
@@ -720,6 +1000,63 @@ function executeSelfCommand(match, write, ctx = {}) {
     case 'disable-debug': {
       if (ctx.opts) ctx.opts.debug = false;
       write('[shmakk] debug mode off\r\n');
+      break;
+    }
+
+    // ── Voice modes ──
+    case 'enable-stt': {
+      if (ctx.setVoiceMode) ctx.setVoiceMode('stt', true);
+      else {
+        if (ctx.opts) {
+          ctx.opts.stt = true;
+          ctx.opts.tts = false;
+          ctx.opts.sts = false;
+          ctx.opts.voice = true;
+        }
+      }
+      write('[shmakk] STT enabled — press Ctrl+O for voice input\r\n');
+      break;
+    }
+    case 'disable-stt': {
+      if (ctx.setVoiceMode) ctx.setVoiceMode('stt', false);
+      else {
+        if (ctx.opts) { ctx.opts.stt = false; ctx.opts.voice = !!ctx.opts.sts; }
+      }
+      write('[shmakk] STT disabled\r\n');
+      break;
+    }
+    case 'enable-tts': {
+      if (ctx.setVoiceMode) ctx.setVoiceMode('tts', true);
+      else if (ctx.opts) {
+        ctx.opts.stt = false;
+        ctx.opts.tts = true;
+        ctx.opts.sts = false;
+        ctx.opts.voice = false;
+      }
+      write('[shmakk] TTS enabled — agent replies will be spoken\r\n');
+      break;
+    }
+    case 'disable-tts': {
+      if (ctx.setVoiceMode) ctx.setVoiceMode('tts', false);
+      else if (ctx.opts) ctx.opts.tts = false;
+      write('[shmakk] TTS disabled\r\n');
+      break;
+    }
+    case 'enable-sts': {
+      if (ctx.setVoiceMode) ctx.setVoiceMode('sts', true);
+      else if (ctx.opts) {
+        ctx.opts.stt = false;
+        ctx.opts.tts = false;
+        ctx.opts.sts = true;
+        ctx.opts.voice = true;
+      }
+      write('[shmakk] STS enabled — always-on speech-to-speech started\r\n');
+      break;
+    }
+    case 'disable-sts': {
+      if (ctx.setVoiceMode) ctx.setVoiceMode('sts', false);
+      else if (ctx.opts) { ctx.opts.sts = false; ctx.opts.stt = false; ctx.opts.tts = false; ctx.opts.voice = false; }
+      write('[shmakk] STS disabled\r\n');
       break;
     }
 
@@ -752,6 +1089,8 @@ function executeSelfCommand(match, write, ctx = {}) {
     default:
       write(`[shmakk] unknown self-command: ${match.action}\r\n`);
   }
+  // Clear terminal title — shell will restore normal title on next prompt
+  write('\x1b]0;\x07');
 }
 
-module.exports = { matchSelfCommand, executeSelfCommand, SELF_COMMANDS };
+module.exports = { matchSelfCommand, executeSelfCommand, hasSelfCommandPrefix, stripSelfCommandPrefix, SELF_COMMANDS };

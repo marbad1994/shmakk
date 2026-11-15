@@ -184,13 +184,23 @@ async function screenshot(args) {
     const name = `screenshot-${Date.now()}.png`;
     const filePath = path.join(SCREENSHOT_DIR, name);
     await p.screenshot({ path: filePath, fullPage: false });
+
+    const buf = fs.readFileSync(filePath);
+    const b64 = buf.toString('base64');
     const stats = fs.statSync(filePath);
+
     return {
       ok: true,
       path: filePath,
       size: stats.size,
       url: p.url(),
       title: await p.title(),
+      images: [{
+        mimeType: 'image/png',
+        data: b64,
+        dataLength: b64.length,
+        truncated: false,
+      }],
     };
   } catch (e) {
     return { error: `screenshot failed: ${e.message}` };

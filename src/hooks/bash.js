@@ -3,6 +3,21 @@ const os = require('os');
 const path = require('path');
 
 const INIT = `
+# Source login scripts first (equivalent to bash -l).
+# When --rcfile is used, bash skips the normal login sequence, so we must
+# replicate it manually. Order matters: profile.d → /etc/profile, then
+# first found of: ~/.bash_profile, ~/.bash_login, ~/.profile, ~/.bashrc.
+[ -d /etc/profile.d ] && for f in /etc/profile.d/*.sh; do [ -r "$f" ] && . "$f"; done
+[ -f /etc/profile ] && . /etc/profile
+if [ -f "$HOME/.bash_profile" ]; then
+    . "$HOME/.bash_profile"
+elif [ -f "$HOME/.bash_login" ]; then
+    . "$HOME/.bash_login"
+elif [ -f "$HOME/.profile" ]; then
+    . "$HOME/.profile"
+fi
+# Then interactive rc files (these may be already sourced above, but
+# sourcing twice is harmless for well-behaved scripts).
 [ -f /etc/bash.bashrc ] && . /etc/bash.bashrc
 [ -f "$HOME/.bashrc" ] && . "$HOME/.bashrc"
 
@@ -13,13 +28,13 @@ __shmakk_preexec() {
     [ "$BASH_COMMAND" = "$PROMPT_COMMAND" ] && return
     __shmakk_armed=
     local cmd
-    cmd=$(printf '%s' "$BASH_COMMAND" | base64 -w0 2>/dev/null || printf '%s' "$BASH_COMMAND" | base64)
+    cmd=$(printf '%s' "$BASH_COMMAND" | base64 -w0 2>/dev/null || base64 -b 0 2>/dev/null || base64 | tr -d '\n')
     printf '\\e]6973;B;%s\\a' "$cmd"
 }
 __shmakk_precmd() {
     local ec=$?
     local p
-    p=$(printf '%s' "$PWD" | base64 -w0 2>/dev/null || printf '%s' "$PWD" | base64)
+    p=$(printf '%s' "$PWD" | base64 -w0 2>/dev/null || base64 -b 0 2>/dev/null || base64 | tr -d '\n')
     printf '\\e]6973;C;%s\\a' "$ec"
     printf '\\e]6973;D;%s\\a' "$p"
     __shmakk_armed=1

@@ -3,9 +3,9 @@ import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { socket } from '@/lib/ws';
 import { queryClient } from '@/lib/query';
-import type { AttachmentRef, Bootstrap, ConvMeta, ConvSnapshot, Features, Item, Mode, Project, Provider, ServerMsg, Settings, Status, ViewId } from '@/lib/types';
+import type { AttachmentRef, Bootstrap, ConvMeta, ConvSnapshot, DocPane, Features, Item, Mode, Project, Provider, ServerMsg, Settings, Status, ViewId } from '@/lib/types';
 
-const VIEWS: ViewId[] = ['chat', 'automations', 'github', 'skills', 'memory', 'plan', 'changes', 'recall', 'team', 'mcp', 'activity', 'settings'];
+const VIEWS: ViewId[] = ['chat', 'automations', 'github', 'skills', 'memory', 'plan', 'changes', 'recall', 'team', 'mcp', 'activity', 'artefacts', 'settings'];
 
 function readHash(): { view: ViewId; conv: string | null; project: string | null } {
   const h = location.hash.replace(/^#\/?/, '');
@@ -17,6 +17,43 @@ function readHash(): { view: ViewId; conv: string | null; project: string | null
 
 const MODE_IDS: Mode[] = ['chat', 'code', 'design', 'cowork'];
 const savedMode = (): Mode => { const m = localStorage.getItem('shmakk.mode') as Mode | null; return m && MODE_IDS.includes(m) ? m : 'code'; };
+const PANES: DocPane[] = ['browser', 'changes', 'plan'];
+const savedPane = (): DocPane => { const p = localStorage.getItem('shmakk.rightPane') as DocPane | null; return p && PANES.includes(p) ? p : 'browser'; };
+
+// Inspector width: a comfortable default, clamped so the chat never collapses.
+export const RIGHT_MIN = 300;
+export const rightMax = () => Math.max(RIGHT_MIN, Math.min(760, window.innerWidth - 380));
+export const clampRight = (w: number) => Math.round(Math.max(RIGHT_MIN, Math.min(rightMax(), w)));
+const savedWidth = (): number => {
+  const n = Number(localStorage.getItem('shmakk.rightWidth'));
+  return clampRight(Number.isFinite(n) && n > 0 ? n : Math.min(560, Math.max(400, window.innerWidth * 0.32)));
+};
+
+/**
+ * The inspector is per session: opening "Changes" in one chat must not follow
+ * you into the next. A session without an entry of its own starts from the
+ * pre-per-session preference, so upgrading does not reset anyone's layout.
+ */
+export type RightState = { open: boolean; pane: DocPane };
+const RIGHT_KEY = 'shmakk.rightByConv';
+export const rightScope = (convId: string | null) => convId ?? '';
+
+const legacyRight = (): RightState => ({ open: localStorage.getItem('shmakk.right') === '1', pane: savedPane() });
+
+function loadRight(): Record<string, RightState> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(RIGHT_KEY) || '{}') as Record<string, Partial<RightState> | null>;
+    const out: Record<string, RightState> = {};
+    for (const [k, v] of Object.entries(raw)) {
+      if (v && typeof v.open === 'boolean' && PANES.includes(v.pane as DocPane)) out[k] = { open: v.open, pane: v.pane as DocPane };
+    }
+    return out;
+  } catch { return {}; }
+}
+
+function persistRight(map: Record<string, RightState>) {
+  try { localStorage.setItem(RIGHT_KEY, JSON.stringify(map)); } catch { /* private mode / quota */ }
+}
 
 interface AppState {
   ready: boolean;
@@ -47,13 +84,20 @@ interface AppState {
 
   sidebarOpen: boolean;
   dockOpen: boolean;
+  rightOpen: boolean;               // projection of the active session's inspector
+  rightPane: DocPane;
+  rightMap: Record<string, RightState>;  // per-session inspector state, keyed by conv id ('' = draft)
+  rightDefault: RightState;         // what a session that was never touched starts with
+  rightWidth: number;               // inspector width in px, drag-resizable, shared by all sessions
   paletteOpen: boolean;
+  settingsOpen: boolean;
   folderPickerOpen: boolean;
   keyboardOpen: boolean;
   draft: { text: string; mode: 'ask' | 'shell'; nonce: number } | null;
 
   init(): Promise<void>;
   setView(v: ViewId): void;
+  openSettings(open?: boolean): void;
   setMode(m: Mode): void;
   openProject(id: string): void;
   refreshProjects(): Promise<void>;
@@ -71,8 +115,12 @@ interface AppState {
   refreshStatus(): Promise<void>;
   setWorkspace(path: string): Promise<void>;
   setDraft(text: string, mode?: 'ask' | 'shell'): void;
+  clearDraft(): void;
   toggleSidebar(open?: boolean): void;
   toggleDock(open?: boolean): void;
+  toggleRight(open?: boolean): void;
+  setRightPane(pane: DocPane): void;
+  setRightWidth(width: number, persist?: boolean): void;
   setPalette(open: boolean): void;
   setFolderPicker(open: boolean): void;
   setKeyboard(open: boolean): void;
@@ -130,7 +178,11 @@ export const useApp = create<AppState>((set, get) => {
         set((s) => {
           const items = { ...s.items };
           delete items[msg.id];
-          return { convs: s.convs.filter((c) => c.id !== msg.id), items, activeId: s.activeId === msg.id ? null : s.activeId };
+          // Forget the session's inspector state so ids are not kept forever.
+          const rightMap = { ...s.rightMap };
+          delete rightMap[msg.id];
+          persistRight(rightMap);
+          return { convs: s.convs.filter((c) => c.id !== msg.id), items, rightMap, activeId: s.activeId === msg.id ? null : s.activeId };
         });
         break;
       case 'settings': set({ settings: msg.settings }); break;
@@ -139,6 +191,7 @@ export const useApp = create<AppState>((set, get) => {
       case 'status.changed': void get().refreshStatus(); break;
       case 'projects.changed': void get().refreshProjects(); void queryClient.invalidateQueries({ queryKey: ['project'] }); break;
       case 'automations.changed': void queryClient.invalidateQueries({ queryKey: ['automations'] }); break;
+      case 'artefacts.changed': void queryClient.invalidateQueries({ queryKey: ['artefacts'] }); break;
       case 'automation.finished': {
         const open = { label: 'Open', onClick: () => void get().openConv(msg.convId) };
         if (msg.status === 'ok') toast.success(`${msg.name} finished`, { action: open });
@@ -158,6 +211,10 @@ export const useApp = create<AppState>((set, get) => {
     const target = view === 'chat' ? (activeId ? `#/c/${activeId}` : '#/') : view === 'project' && projectId ? `#/p/${projectId}` : `#/${view}`;
     if (location.hash !== target) history.replaceState(null, '', target);
   }
+
+  const rightMap = loadRight();
+  const rightDefault = legacyRight();
+  const draftRight = rightMap[rightScope(null)] ?? rightDefault;
 
   return {
     ready: false,
@@ -186,7 +243,13 @@ export const useApp = create<AppState>((set, get) => {
     sidebarOpen: window.innerWidth >= 1024 && localStorage.getItem('shmakk.sidebar') !== '0',
     keyboardOpen: false,
     dockOpen: false,
+    rightOpen: draftRight.open,
+    rightPane: draftRight.pane,
+    rightMap,
+    rightDefault,
+    rightWidth: savedWidth(),
     paletteOpen: false,
+    settingsOpen: false,
     folderPickerOpen: false,
     draft: null,
 
@@ -208,20 +271,34 @@ export const useApp = create<AppState>((set, get) => {
       });
       socket.connect();
       const { view, conv, project } = readHash();
-      set({ view: view === 'project' && !boot.projects.some((p) => p.id === project) ? 'chat' : view, projectId: project });
+      // Settings is a modal, not a screen: remember the intention, stay on the chat.
+      const openingSettings = view === 'settings';
+      set({
+        view: openingSettings ? 'chat' : view === 'project' && !boot.projects.some((p) => p.id === project) ? 'chat' : view,
+        projectId: project,
+        settingsOpen: openingSettings,
+      });
       if (conv && boot.conversations.some((c) => c.id === conv)) await get().openConv(conv);
       window.addEventListener('hashchange', () => {
         const h = readHash();
         if (h.conv && h.conv !== get().activeId) void get().openConv(h.conv);
         else if (h.project) get().openProject(h.project);
+        else if (h.view === 'settings') get().openSettings(true);
         else if (h.view !== get().view) set({ view: h.view });
       });
     },
 
     setView(view) {
+      // The settings screen is gone; its view id now opens the settings modal.
+      if (view === 'settings') { get().openSettings(true); return; }
       set({ view });
       if (window.innerWidth < 1024) set({ sidebarOpen: false });
       syncHash();
+    },
+
+    openSettings(open = true) {
+      set({ settingsOpen: open, ...(open && window.innerWidth < 1024 ? { sidebarOpen: false } : {}) });
+      if (!open) syncHash();
     },
 
     setMode(mode) {
@@ -277,7 +354,12 @@ export const useApp = create<AppState>((set, get) => {
 
     newChat(opts = {}) {
       if (opts.mode && opts.mode !== get().mode) { localStorage.setItem('shmakk.mode', opts.mode); set({ mode: opts.mode }); }
-      set({ view: 'chat', activeId: null, pendingProjectId: opts.projectId ?? null });
+      // A fresh draft starts from the layout you are looking at, then owns it.
+      const { rightOpen, rightPane, rightMap } = get();
+      const draft = { open: rightOpen, pane: rightPane };
+      const nextRight = { ...rightMap, [rightScope(null)]: draft };
+      persistRight(nextRight);
+      set({ view: 'chat', activeId: null, pendingProjectId: opts.projectId ?? null, rightMap: nextRight });
       if (window.innerWidth < 1024) set({ sidebarOpen: false });
       syncHash();
     },
@@ -287,7 +369,13 @@ export const useApp = create<AppState>((set, get) => {
       if (!id) {
         const snap = await api.post<ConvSnapshot>('/api/conversations', { mode: get().mode, projectId: get().pendingProjectId });
         id = snap.id;
-        set((s) => ({ activeId: id, pendingProjectId: null, items: { ...s.items, [snap.id]: [] }, convs: upsertMeta(s.convs, snap) }));
+        set((s) => {
+          // The draft became a real session: its inspector setup comes along.
+          const draft = s.rightMap[rightScope(null)];
+          const rightMap = draft ? { ...s.rightMap, [snap.id]: draft } : s.rightMap;
+          if (rightMap !== s.rightMap) persistRight(rightMap);
+          return { activeId: id, pendingProjectId: null, items: { ...s.items, [snap.id]: [] }, convs: upsertMeta(s.convs, snap), rightMap };
+        });
         if (snap.projectId) { void get().refreshProjects(); void queryClient.invalidateQueries({ queryKey: ['project'] }); }
         syncHash();
       }
@@ -334,12 +422,36 @@ export const useApp = create<AppState>((set, get) => {
     },
 
     setDraft(text, mode = 'ask') { set({ draft: { text, mode, nonce: Date.now() }, view: 'chat' }); syncHash(); },
+    clearDraft() { if (get().draft) set({ draft: null }); },
     toggleSidebar(open) {
       const next = open ?? !get().sidebarOpen;
       if (window.innerWidth >= 1024) localStorage.setItem('shmakk.sidebar', next ? '1' : '0');
       set({ sidebarOpen: next });
     },
     toggleDock(open) { set({ dockOpen: open ?? !get().dockOpen }); },
+    toggleRight(open) {
+      set((s) => {
+        const key = rightScope(s.activeId);
+        const next = { ...(s.rightMap[key] ?? s.rightDefault), open: open ?? !(s.rightMap[key] ?? s.rightDefault).open };
+        const map = { ...s.rightMap, [key]: next };
+        persistRight(map);
+        return { rightMap: map, rightOpen: next.open, rightPane: next.pane };
+      });
+    },
+    setRightPane(rightPane) {
+      set((s) => {
+        const key = rightScope(s.activeId);
+        const next = { ...(s.rightMap[key] ?? s.rightDefault), pane: rightPane, open: true };
+        const map = { ...s.rightMap, [key]: next };
+        persistRight(map);
+        return { rightMap: map, rightOpen: true, rightPane };
+      });
+    },
+    setRightWidth(width, persist = false) {
+      const w = clampRight(width);
+      if (persist) localStorage.setItem('shmakk.rightWidth', String(w));
+      set({ rightWidth: w });
+    },
     setPalette(open) { set({ paletteOpen: open }); },
     setFolderPicker(open) { set({ folderPickerOpen: open }); },
     setKeyboard(open) { set({ keyboardOpen: open }); },
@@ -357,6 +469,14 @@ export const useApp = create<AppState>((set, get) => {
       void get().refreshStatus();
     },
   };
+});
+
+// Switching sessions swaps in that session's inspector state. Doing it here
+// means every path that changes activeId (open, new chat, delete) is covered.
+useApp.subscribe((s, prev) => {
+  if (s.activeId === prev.activeId) return;
+  const next = s.rightMap[rightScope(s.activeId)] ?? s.rightDefault;
+  if (next.open !== s.rightOpen || next.pane !== s.rightPane) useApp.setState({ rightOpen: next.open, rightPane: next.pane });
 });
 
 /** Pick a workspace: native dialog in the desktop app, in-app browser otherwise. */

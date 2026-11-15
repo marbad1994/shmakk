@@ -1,6 +1,7 @@
-const { parseArgs, HELP } = require('./cli');
+const { parseArgs, HELP, resolveHelp } = require('./cli');
 const { normalizeProfile, resolveProfile } = require('./profiles');
 const { applyEndpoint, getCurrentEndpoint, getCurrentEndpointName } = require('./endpoints');
+const { ensureModelRuntime } = require('./llm');
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
@@ -23,6 +24,17 @@ function findGitRoot(cwd = process.cwd()) {
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
 
+  if (opts.vimAi) {
+    const { runAi } = require('./vim');
+    process.exit(await runAi(opts.vimAi));
+  }
+
+  if (opts.vimEditor) {
+    const { runEditor } = require('./vim');
+    const realEditor = opts.vimReal || opts.vimEditor;
+    process.exit(runEditor(realEditor, opts.unknown));
+  }
+
   // Auto-detect git repo root as workspace if not explicitly set.
   // This keeps .shmakk state centralized at repo root instead of scattered.
   if (!opts.workspace) {
@@ -32,13 +44,18 @@ async function main() {
     }
   }
 
-  // Apply named endpoint preset from ~/.config/shmakk/endpoints.js before
+  if (opts.modelRecommendation) {
+    process.env.SHMAKK_MODEL_RECOMMENDATION = '1';
+  }
+
+  // Apply named model preset from ~/.config/shmakk/endpoints.json before
   // any other module reads SHMAKK_* environment variables.
   if (opts.endpoint) {
-    const configDir = path.join(require('os').homedir(), '.config', 'shmakk', 'endpoints.js');
+    const configDir = path.join(require('os').homedir(), '.config', 'shmakk', 'endpoints.json');
     if (!applyEndpoint(opts.endpoint, opts.workspace || process.cwd())) {
       process.stderr.write(`[shmakk] endpoint "${opts.endpoint}" not found in ${configDir}\n`);
     }
+    await ensureModelRuntime();
   }
 
   if (opts.colors !== null) {
@@ -50,8 +67,26 @@ async function main() {
     opts.colors = v === 'true';
   }
 
+  if (opts.markdown !== null) {
+    const v = String(opts.markdown).toLowerCase();
+    if (v !== 'true' && v !== 'false') {
+      process.stderr.write('[shmakk] invalid --markdown. Use: true|false\n');
+      process.exit(2);
+    }
+    opts.markdown = v === 'true';
+  }
+
+  if (opts.browserDaemon) {
+    const { main: runBrowserDaemon } = require('./cli/browserDaemon');
+    process.exit(await runBrowserDaemon([
+      'browser-daemon',
+      ...(opts.browserDaemonPort ? ['--port', String(opts.browserDaemonPort)] : []),
+      ...(opts.help ? ['--help'] : []),
+    ]));
+  }
+
   if (opts.help) {
-    process.stdout.write(HELP);
+    process.stdout.write(resolveHelp(opts.helpCategory));
     process.exit(0);
   }
 
@@ -80,15 +115,20 @@ async function main() {
       shell: process.env.SHELL,
       term: process.env.TERM,
       endpoint: activeEndpointName || opts.endpoint || null,
+      fastEndpoint: require('./endpoints').getModelRegistry(opts.workspace || process.cwd()).fast || null,
       baseUrl: activeEndpoint?.base_url || process.env.SHMAKK_BASE_URL || null,
       apiKey: activeEndpoint?.api_key ? (activeEndpoint.api_key.slice(0, 8) + '...' + activeEndpoint.api_key.slice(-4)) : null,
       model: activeEndpoint?.model || process.env.SHMAKK_MODEL || null,
       models: activeEndpoint?.models || process.env.SHMAKK_MODELS || process.env.SHMAKK_REGISTRY || null,
+      provider: activeEndpoint?.provider || process.env.SHMAKK_PROVIDER || null,
+      modelRecommendation: process.env.SHMAKK_MODEL_RECOMMENDATION === '1',
+      registry: activeEndpoint?.registry || process.env.SHMAKK_REGISTRY || null,
       profile: profile.name,
       colors: opts.colors,
       stt: opts.stt,
       tts: opts.tts,
       sts: opts.sts,
+      vim: opts.vim,
     };
     process.stdout.write(JSON.stringify(cfg, null, 2) + '\n');
     process.exit(0);
@@ -120,7 +160,7 @@ async function main() {
     process.exit(0);
   }
 
-  if (opts.status || opts.stats || opts.compact || opts.loadSkill || opts.installSkill || opts.listSkills || opts.skillStatus || opts.unloadSkill || opts.resumeStatus || opts.showPlan || opts.mcpStatus || opts.exitNow || opts.restart || opts.reset || opts.profileSet) {
+  if (opts.status || opts.stats || opts.compact || opts.loadSkill || opts.installSkill || opts.listSkills || opts.skillStatus || opts.unloadSkill || opts.resumeStatus || opts.showPlan || opts.mcpStatus || opts.consolidateWorkspace || opts.exitNow || opts.restart || opts.reset || opts.profileSet) {
     const ctl = require('./control');
     if (opts.status) process.exit(ctl.status());
     if (opts.stats) process.exit(ctl.stats());
@@ -133,6 +173,7 @@ async function main() {
     if (opts.resumeStatus) process.exit(ctl.resumeStatus());
     if (opts.showPlan) process.exit(ctl.showPlan());
     if (opts.mcpStatus) process.exit(ctl.mcpStatus());
+    if (opts.consolidateWorkspace) process.exit(ctl.consolidateWorkspace());
     if (opts.exitNow) process.exit(ctl.exitParent());
     if (opts.restart) process.exit(ctl.restartParent());
     if (opts.reset) process.exit(ctl.resetConversation());
@@ -210,6 +251,15 @@ async function main() {
   if (opts.ttsVoice) process.env.SHMAKK_TTS_VOICE = opts.ttsVoice;
 
   const { start } = require('./orchestrator');
+
+  // Refuse to nest sessions: launching shmakk inside shmakk would
+  // create a recursive PTY tree with no benefit.
+  if (process.env.SHMAKK === '1') {
+    process.stderr.write('[shmakk] already inside an shmakk session (SHMAKK=1).\n');
+    process.stderr.write('[shmakk] use --help to see in-session commands, or exit the current session first.\n');
+    process.exit(1);
+  }
+
   const exitCode = await start(opts);
   process.exit(exitCode);
 }

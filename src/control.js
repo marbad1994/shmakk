@@ -439,4 +439,276 @@ function mcpStatus() {
   return 0;
 }
 
-module.exports = { status, exitParent, restartParent, resetConversation, setProfileAndRestart, profileSignalPath, resumeStatus, compactContext, stats, loadSkill, listSkills, listSkillCategories, findSkills, skillStatus, unloadSkill, installSkill, showPlan, mcpStatus };
+function consolidateWorkspace() {
+  const fs = require('fs');
+  const path = require('path');
+
+  const cwd = process.cwd();
+  const rootShmakk = path.join(cwd, '.shmakk');
+  const rootSkills = path.join(rootShmakk, 'skills');
+  const rootState = path.join(rootShmakk, 'state');
+
+  // Ensure root .shmakk dirs exist
+  fs.mkdirSync(rootShmakk, { recursive: true });
+  fs.mkdirSync(rootSkills, { recursive: true });
+  fs.mkdirSync(rootState, { recursive: true });
+
+  // Find all nested .shmakk dirs (skip root itself, skip node_modules)
+  const nested = [];
+  function walk(dir, depth) {
+    if (depth > 50) return; // safety limit
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (!e.isDirectory()) continue;
+      if (e.name === 'node_modules' || e.name === '.git') continue;
+      const full = path.join(dir, e.name);
+      if (e.name === '.shmakk' && depth > 0) {
+        nested.push(full);
+      } else if (!e.name.startsWith('.')) {
+        walk(full, depth + 1);
+      }
+    }
+  }
+  walk(cwd, 0);
+
+  if (!nested.length) {
+    process.stdout.write('shmakk: no nested .shmakk directories found to consolidate\n');
+    return 1;
+  }
+
+  process.stdout.write(`shmakk: found ${nested.length} nested .shmakk director${nested.length > 1 ? 'ies' : 'y'}\n`);
+
+  let mergedSkills = 0;
+  let mergedMemory = 0;
+  let mergedRules = 0;
+  let mergedMcp = 0;
+  let mergedHosts = 0;
+  let mergedState = 0;
+
+  // Helper: read file if exists
+  const read = (p) => { try { return fs.readFileSync(p, 'utf8'); } catch { return null; } };
+
+  // Helper: read JSON if exists
+  const readJSON = (p) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; } };
+
+  // Helper: write JSON
+  const writeJSON = (p, obj) => fs.writeFileSync(p, JSON.stringify(obj, null, 2) + '\n');
+
+  // Helper: append line-deduplicated content (for memory.md, rules.md)
+  function mergeLines(rootFile, nestedFile) {
+    const rootContent = read(rootFile) || '';
+    const rootLines = new Set(rootContent.split('\n').map(l => l.trim()).filter(Boolean));
+    const nestedContent = read(nestedFile);
+    if (!nestedContent) return 0;
+    const newLines = nestedContent.split('\n')
+      .map(l => l.trim())
+      .filter(l => Boolean(l) && !rootLines.has(l));
+    if (!newLines.length) return 0;
+    const append = (rootContent.endsWith('\n') ? '' : '\n') + newLines.join('\n') + '\n';
+    fs.appendFileSync(rootFile, append);
+    return newLines.length;
+  }
+
+  // Helper: merge JSON objects shallowly (root wins)
+  function mergeJSON(rootFile, nestedFile) {
+    const root = readJSON(rootFile) || {};
+    const nested = readJSON(nestedFile);
+    if (!nested) return 0;
+    let added = 0;
+    for (const [k, v] of Object.entries(nested)) {
+      if (!(k in root)) { root[k] = v; added++; }
+    }
+    if (added > 0) writeJSON(rootFile, root);
+    return added;
+  }
+
+  for (const nsm of nested) {
+    const rel = path.relative(cwd, path.dirname(nsm)) || '(root)';
+    process.stdout.write(`  merging ${rel}/.shmakk/\n`);
+
+    // memory.md
+    const memRoot = path.join(rootShmakk, 'memory.md');
+    const memNested = path.join(nsm, 'memory.md');
+    const memAdded = mergeLines(memRoot, memNested);
+    if (memAdded) process.stdout.write(`    memory.md: +${memAdded} line(s)\n`);
+    mergedMemory += memAdded;
+
+    // rules.md
+    const rulesRoot = path.join(rootShmakk, 'rules.md');
+    const rulesNested = path.join(nsm, 'rules.md');
+    const rulesAdded = mergeLines(rulesRoot, rulesNested);
+    if (rulesAdded) process.stdout.write(`    rules.md: +${rulesAdded} line(s)\n`);
+    mergedRules += rulesAdded;
+
+    // skills/*.md
+    const skillsNested = path.join(nsm, 'skills');
+    if (fs.existsSync(skillsNested)) {
+      let entries;
+      try { entries = fs.readdirSync(skillsNested, { withFileTypes: true }); } catch { entries = []; }
+      for (const e of entries) {
+        if (e.isFile() && e.name.endsWith('.md')) {
+          const dst = path.join(rootSkills, e.name);
+          if (!fs.existsSync(dst)) {
+            fs.copyFileSync(path.join(skillsNested, e.name), dst);
+            process.stdout.write(`    skills/${e.name}: copied\n`);
+            mergedSkills++;
+          }
+        } else if (e.isDirectory()) {
+          const skillFile = path.join(skillsNested, e.name, 'SKILL.md');
+          const dstDir = path.join(rootSkills, e.name);
+          const dstFile = path.join(dstDir, 'SKILL.md');
+          if (fs.existsSync(skillFile) && !fs.existsSync(dstFile)) {
+            fs.mkdirSync(dstDir, { recursive: true });
+            fs.copyFileSync(skillFile, dstFile);
+            // Also copy sibling files if any
+            let subEntries;
+            try { subEntries = fs.readdirSync(path.join(skillsNested, e.name)); } catch { subEntries = []; }
+            for (const se of subEntries) {
+              const srcSub = path.join(skillsNested, e.name, se);
+              const dstSub = path.join(dstDir, se);
+              if (se !== 'SKILL.md' && !fs.existsSync(dstSub)) {
+                try { fs.copyFileSync(srcSub, dstSub); } catch {}
+              }
+            }
+            process.stdout.write(`    skills/${e.name}/: copied\n`);
+            mergedSkills++;
+          }
+        }
+      }
+    }
+
+    // mcp.json
+    const mcpRoot = path.join(rootShmakk, 'mcp.json');
+    const mcpNested = path.join(nsm, 'mcp.json');
+    const mcpRootObj = readJSON(mcpRoot) || {};
+    const mcpNestedObj = readJSON(mcpNested);
+    if (mcpNestedObj?.mcpServers) {
+      if (!mcpRootObj.mcpServers) mcpRootObj.mcpServers = {};
+      let added = 0;
+      for (const [k, v] of Object.entries(mcpNestedObj.mcpServers)) {
+        if (!(k in mcpRootObj.mcpServers)) {
+          mcpRootObj.mcpServers[k] = v;
+          added++;
+        }
+      }
+      if (added) {
+        writeJSON(mcpRoot, mcpRootObj);
+        process.stdout.write(`    mcp.json: +${added} server(s)\n`);
+        mergedMcp += added;
+      }
+    }
+
+    // hosts.json
+    const hostsRoot = path.join(rootShmakk, 'hosts.json');
+    const hostsNested = path.join(nsm, 'hosts.json');
+    const hAdded = mergeJSON(hostsRoot, hostsNested);
+    if (hAdded) {
+      process.stdout.write(`    hosts.json: +${hAdded} host(s)\n`);
+      mergedHosts += hAdded;
+    }
+
+    // state/* — merge/copy all state files from nested into root
+    const stateNested = path.join(nsm, 'state');
+    if (fs.existsSync(stateNested)) {
+      let stateEntries;
+      try { stateEntries = fs.readdirSync(stateNested, { withFileTypes: true }); } catch { stateEntries = []; }
+      for (const se of stateEntries) {
+        if (!se.isFile()) continue;
+        const src = path.join(stateNested, se.name);
+        const dst = path.join(rootState, se.name);
+
+        // command-freq.json: merge maps, root wins
+        if (se.name === 'command-freq.json') {
+          const rootObj = readJSON(dst) || {};
+          const nestedObj = readJSON(src);
+          if (nestedObj) {
+            let added = 0;
+            for (const [k, v] of Object.entries(nestedObj)) {
+              if (!(k in rootObj)) { rootObj[k] = v; added++; }
+            }
+            if (added) {
+              writeJSON(dst, rootObj);
+              process.stdout.write(`    state/${se.name}: +${added} command(s)\n`);
+              mergedState += added;
+            }
+          }
+          continue;
+        }
+
+        // task-journal.json: merge arrays deduped by id
+        if (se.name === 'task-journal.json') {
+          const rootArr = readJSON(dst) || [];
+          const nestedArr = readJSON(src);
+          if (Array.isArray(nestedArr) && nestedArr.length) {
+            const rootIds = new Set(rootArr.map(e => e.id || JSON.stringify(e)));
+            const newEntries = nestedArr.filter(e => !rootIds.has(e.id || JSON.stringify(e)));
+            if (newEntries.length) {
+              rootArr.push(...newEntries);
+              writeJSON(dst, rootArr);
+              process.stdout.write(`    state/${se.name}: +${newEntries.length} task(s)\n`);
+              mergedState += newEntries.length;
+            }
+          }
+          continue;
+        }
+
+        // Any other JSON file: shallow merge, root wins
+        if (se.name.endsWith('.json')) {
+          const rootObj = readJSON(dst) || {};
+          const nestedObj = readJSON(src);
+          if (nestedObj && typeof nestedObj === 'object') {
+            let added = 0;
+            if (Array.isArray(nestedObj)) {
+              const rootJson = JSON.stringify(rootObj);
+              for (const item of nestedObj) {
+                if (rootJson.indexOf(JSON.stringify(item)) === -1) {
+                  rootObj.push(item);
+                  added++;
+                }
+              }
+            } else {
+              for (const [k, v] of Object.entries(nestedObj)) {
+                if (!(k in rootObj)) { rootObj[k] = v; added++; }
+              }
+            }
+            if (added) {
+              writeJSON(dst, rootObj);
+              process.stdout.write(`    state/${se.name}: +${added} entry(ies)\n`);
+              mergedState += added;
+            }
+          }
+          continue;
+        }
+
+        // Non-JSON files: copy if not already in root
+        if (!fs.existsSync(dst)) {
+          fs.copyFileSync(src, dst);
+          process.stdout.write(`    state/${se.name}: copied\n`);
+          mergedState++;
+        }
+      }
+    }
+  }
+
+  // Remove nested .shmakk dirs after successful merge
+  for (const nsm of nested) {
+    try { fs.rmSync(nsm, { recursive: true, force: true }); } catch {}
+  }
+
+  // Summary
+  const total = mergedMemory + mergedRules + mergedSkills + mergedMcp + mergedHosts + mergedState;
+  process.stdout.write('\nshmakk: consolidation complete\n');
+  process.stdout.write(`  memory:      ${mergedMemory} line(s)\n`);
+  process.stdout.write(`  rules:       ${mergedRules} line(s)\n`);
+  process.stdout.write(`  skills:      ${mergedSkills} file(s)\n`);
+  process.stdout.write(`  mcp.json:    ${mergedMcp} server(s)\n`);
+  process.stdout.write(`  hosts.json:  ${mergedHosts} host(s)\n`);
+  process.stdout.write(`  state:       ${mergedState} entry(ies)\n`);
+  process.stdout.write(`  total merged: ${total}\n`);
+  process.stdout.write(`\nshmakk: removed ${nested.length} nested .shmakk director${nested.length > 1 ? 'ies' : 'y'}\n`);
+
+  return 0;
+}
+
+module.exports = { status, exitParent, restartParent, resetConversation, setProfileAndRestart, profileSignalPath, resumeStatus, compactContext, stats, loadSkill, listSkills, listSkillCategories, findSkills, skillStatus, unloadSkill, installSkill, showPlan, mcpStatus, consolidateWorkspace };

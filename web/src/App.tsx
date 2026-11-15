@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { Eraser, FolderKanban, Menu, PanelLeft, SquarePen, SquareTerminal } from 'lucide-react';
 import { PROJECT_COLORS, modeInfo } from '@/lib/modes';
 import { useDrawerSwipe, useIsMobile, useVisualViewport } from '@/hooks/useMobile';
@@ -10,10 +10,11 @@ import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/misc';
 import { Tip } from '@/components/ui/tooltip';
 import { Sidebar } from '@/components/layout/Sidebar';
-import { StatusBar } from '@/components/layout/StatusBar';
 import { CommandPalette } from '@/components/layout/CommandPalette';
 import { FolderPicker } from '@/components/layout/FolderPicker';
+import { PANES, RightDock } from '@/components/layout/RightDock';
 import { ChatView } from '@/components/chat/ChatView';
+import { HeaderSlotContext } from '@/components/layout/header-slot';
 
 // Secondary screens and the terminal (xterm) load on demand.
 const ProjectView = lazy(() => import('@/views/Project').then((m) => ({ default: m.ProjectView })));
@@ -27,12 +28,13 @@ const RecallView = lazy(() => import('@/views/Recall').then((m) => ({ default: m
 const TeamView = lazy(() => import('@/views/Team').then((m) => ({ default: m.TeamView })));
 const McpView = lazy(() => import('@/views/Mcp').then((m) => ({ default: m.McpView })));
 const ActivityView = lazy(() => import('@/views/Activity').then((m) => ({ default: m.ActivityView })));
-const SettingsView = lazy(() => import('@/views/Settings').then((m) => ({ default: m.SettingsView })));
+const ArtefactsView = lazy(() => import('@/views/Artefacts').then((m) => ({ default: m.ArtefactsView })));
+const SettingsDialog = lazy(() => import('@/views/Settings').then((m) => ({ default: m.SettingsDialog })));
 const TerminalDock = lazy(() => import('@/components/layout/TerminalDock').then((m) => ({ default: m.TerminalDock })));
 
 const TITLES: Record<ViewId, string> = {
   chat: 'New chat', project: 'Project', automations: 'Automations', github: 'GitHub sessions', skills: 'Skills', memory: 'Memory & rules', plan: 'Plan & resume', changes: 'Changes',
-  recall: 'Session recall', team: 'Agents & workflows', mcp: 'MCP servers', activity: 'Activity', settings: 'Settings',
+  recall: 'Session recall', team: 'Agents & workflows', mcp: 'MCP servers', activity: 'Activity', artefacts: 'Artefacts', settings: 'Settings',
 };
 
 function View({ view }: { view: ViewId }) {
@@ -48,7 +50,7 @@ function View({ view }: { view: ViewId }) {
     case 'team': return <TeamView />;
     case 'mcp': return <McpView />;
     case 'activity': return <ActivityView />;
-    case 'settings': return <SettingsView />;
+    case 'artefacts': return <ArtefactsView />;
     default: return <ChatView />;
   }
 }
@@ -62,6 +64,7 @@ function useGlobalShortcuts() {
       else if (mod && e.key.toLowerCase() === 'b') { e.preventDefault(); s.toggleSidebar(); }
       else if (mod && e.key.toLowerCase() === 'n' && !e.shiftKey) { e.preventDefault(); s.newChat(); }
       else if (e.ctrlKey && e.key === '`') { e.preventDefault(); s.toggleDock(); }
+      else if (mod && e.key.toLowerCase() === 'i' && !e.shiftKey) { e.preventDefault(); s.toggleRight(); }
       else if (mod && e.key === ',') { e.preventDefault(); s.setView('settings'); }
     };
     window.addEventListener('keydown', onKey);
@@ -85,6 +88,12 @@ export function App() {
   const toggleSidebar = useApp((s) => s.toggleSidebar);
   const toggleDock = useApp((s) => s.toggleDock);
   const dockOpen = useApp((s) => s.dockOpen);
+  const rightOpen = useApp((s) => s.rightOpen);
+  const rightPane = useApp((s) => s.rightPane);
+  const toggleRight = useApp((s) => s.toggleRight);
+  const setRightPane = useApp((s) => s.setRightPane);
+  const settingsOpen = useApp((s) => s.settingsOpen);
+  const openSettings = useApp((s) => s.openSettings);
   const resetConv = useApp((s) => s.resetConv);
   const active = useApp((s) => s.convs.find((c) => c.id === s.activeId));
   const running = useApp((s) => (s.activeId ? s.activeId in s.runs : false));
@@ -96,6 +105,9 @@ export function App() {
   const pendingProjectId = useApp((s) => s.pendingProjectId);
   const chatProject = projects.find((p) => p.id === (active ? active.projectId : pendingProjectId));
   const agentic = mode === 'code' || mode === 'cowork';
+  // Design chats put their preview toolbar in the header instead of the inspector tabs.
+  const design = view === 'chat' && (active?.mode ?? mode) === 'design';
+  const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null);
   const title = view === 'chat' ? active?.title || modeInfo(mode).newLabel : view === 'project' ? viewedProject?.name || 'Project' : TITLES[view];
   useEffect(() => { document.title = `${title} — shmakk`; }, [title]);
 
@@ -112,6 +124,7 @@ export function App() {
   }
 
   return (
+    <HeaderSlotContext.Provider value={headerSlot}>
     <div className="flex overflow-hidden" style={{ height: 'var(--app-h)' }}>
       <a href="#composer-input" className="absolute -left-[999px] top-2 z-[100] rounded-lg bg-accent px-2.5 py-1.5 text-accent-ink focus:left-2">Skip to message box</a>
 
@@ -145,7 +158,7 @@ export function App() {
               </button>
             </Tip>
           ) : null}
-          {view === 'chat' && active && agentic && !mobile ? (
+          {view === 'chat' && active && agentic && !mobile && !design ? (
             <Tip label="Reset context — clear AI history for this chat"><Button variant="ghost" size="icon" aria-label="Reset conversation context" disabled={running} onClick={() => void resetConv()}><Eraser /></Button></Tip>
           ) : null}
           {mobile ? (
@@ -153,21 +166,48 @@ export function App() {
           ) : !agentic ? null : (
             <Tip label={<>Terminal <kbd>Ctrl `</kbd></>}><Button variant="ghost" size="icon" aria-label="Toggle terminal" aria-pressed={dockOpen} onClick={() => toggleDock()} className={dockOpen ? 'bg-accent/10 text-accent' : undefined}><SquareTerminal /></Button></Tip>
           )}
+          {design && !mobile ? (
+            <div ref={setHeaderSlot} className="flex min-w-0 shrink items-center justify-end gap-1.5 overflow-hidden" aria-label="Design preview controls" />
+          ) : null}
+          {view === 'chat' && !design ? (
+            <div role="group" aria-label="Inspector panels" className="flex items-center gap-0.5 rounded-lg border border-line p-0.5">
+              {PANES.map((p) => {
+                const on = rightOpen && rightPane === p.id;
+                return (
+                  <Tip key={p.id} label={p.label}>
+                    <Button
+                      variant="ghost" size="icon-sm" aria-label={p.label} aria-pressed={on}
+                      onClick={() => (on ? toggleRight(false) : setRightPane(p.id))}
+                      className={on ? 'bg-accent/10 text-accent' : undefined}
+                    >
+                      {p.icon}
+                    </Button>
+                  </Tip>
+                );
+              })}
+            </div>
+          ) : null}
         </header>
 
-        <main className={cn('flex min-h-0 flex-1 flex-col pl-[var(--sal)] pr-[var(--sar)]', mobile && dockOpen && 'hidden')}>
-          <Suspense fallback={<div className="grid flex-1 place-items-center"><Spinner className="size-5" /></div>}>
-            <View view={view} />
-          </Suspense>
-        </main>
+        <div className="flex min-h-0 flex-1">
+          <main className={cn('flex min-h-0 min-w-0 flex-1 flex-col pl-[var(--sal)] pr-[var(--sar)]', mobile && dockOpen && 'hidden')}>
+            <Suspense fallback={<div className="grid flex-1 place-items-center"><Spinner className="size-5" /></div>}>
+              <View view={view} />
+            </Suspense>
+          </main>
+          <RightDock />
+        </div>
         <Suspense fallback={null}><TerminalDock /></Suspense>
-        <StatusBar />
         {/* The tab bar steps aside while typing, exactly like native chat apps. */}
         {keyboardOpen ? null : <MobileNav />}
       </div>
 
       <CommandPalette />
       <FolderPicker />
+      {settingsOpen ? (
+        <Suspense fallback={null}><SettingsDialog open onOpenChange={(o) => openSettings(o)} /></Suspense>
+      ) : null}
     </div>
+    </HeaderSlotContext.Provider>
   );
 }

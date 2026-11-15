@@ -4,6 +4,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { execFile } = require('child_process');
 
 const skills = require('../skills');
 const memory = require('../memory');
@@ -27,6 +28,7 @@ const { createGitHub, GitHubError } = require('./github');
 const design = require('./design');
 const { AutomationError } = require('./automations');
 const store = require('./store');
+const artefacts = require('./artefacts');
 
 class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -86,24 +88,51 @@ function createApi(app) {
   const github = createGitHub({ settings: app.settings, saveSettings: app.saveSettings });
   app.github = github;
 
-  function modelsList() {
-    const raw = (endpoints.getCurrentEndpoint()?.models
-      || endpoints.getCurrentEndpoint()?.registry
-      || process.env.SHMAKK_MODELS
-      || process.env.SHMAKK_REGISTRY
-      || '');
-    return String(raw).split(',').map((m) => m.trim()).filter(Boolean);
+  function envModelList() {
+    return String(process.env.SHMAKK_MODELS || process.env.SHMAKK_REGISTRY || '')
+      .split(',').map((m) => m.trim()).filter(Boolean);
+  }
+
+  // The model registry is ~/.config/shmakk/endpoints.json: every entry in it is
+  // a model the user can pick. Its data is the source of truth for the model
+  // selectors; plain SHMAKK_* env vars are only the fallback.
+  function registryModels() {
+    let registry = null;
+    try { registry = endpoints.getModelRegistry(ws()); } catch { registry = null; }
+    const all = (registry && registry.models) || {};
+    const names = [registry && registry.main, ...Object.keys(all)]
+      .filter((n, i, arr) => n && all[n] && arr.indexOf(n) === i);
+    return names.map((name) => {
+      const cfg = all[name];
+      return {
+        name,
+        model: cfg.model || name,
+        provider: cfg.provider || null,
+        vision: !!cfg.vision,
+        hasApiKey: !!cfg.api_key,
+        default: name === (registry.main || null),
+        fast: name === (registry.fast || null),
+      };
+    });
   }
 
   function providerInfo() {
     const active = endpoints.getCurrentEndpoint();
+    const registry = registryModels();
+    // Endpoints can list the models they expose as a comma-separated string.
+    const endpointList = String(active?.models || active?.registry || '')
+      .split(',').map((m) => m.trim()).filter(Boolean);
     const key = active?.api_key || process.env.SHMAKK_API_KEY || '';
-    const model = process.env.SHMAKK_MODEL || active?.model || '';
-    const modelList = active?.models || active?.registry || process.env.SHMAKK_MODELS || process.env.SHMAKK_REGISTRY || '';
-    // Models the user can pick per space, sourced from the endpoint's model list
-    // (~/.config/shmakk/endpoints.js). Default model first, then the listed models.
+    const model = active?.model || process.env.SHMAKK_MODEL || '';
+    // Selectable models: the active model, then everything the registry (or, in
+    // its absence, the endpoint list / the environment) says exists.
     const models = [];
-    for (const m of [model, ...modelsList()]) if (m && !models.includes(m)) models.push(m);
+    const push = (m) => { const v = String(m || '').trim(); if (v && !models.includes(v)) models.push(v); };
+    push(model);
+    for (const entry of registry) push(entry.model);
+    endpointList.forEach(push);
+    if (!registry.length && !endpointList.length) envModelList().forEach(push);
+    if (!models.length) push(process.env.SHMAKK_MODEL);
     return {
       configured: llm.isConfigured(),
       endpoint: endpoints.getCurrentEndpointName(),
@@ -113,8 +142,10 @@ function createApi(app) {
       apiKeyMasked: maskKey(key),
       hasApiKey: !!key,
       headers: active?.headers || process.env.SHMAKK_HEADERS || '',
-      modelList,
+      modelList: endpointList.join(', ') || envModelList().join(', '),
       models,
+      registry,
+      modelsSource: registry.length ? 'registry' : endpointList.length ? 'endpoint' : 'env',
     };
   }
   app.providerInfo = providerInfo;
@@ -221,6 +252,7 @@ function createApi(app) {
     }
     if ('ttsVoice' in body) app.settings.ttsVoice = body.ttsVoice ? String(body.ttsVoice).slice(0, 60) : null;
     if ('voiceLanguage' in body) app.settings.voiceLanguage = body.voiceLanguage ? String(body.voiceLanguage).slice(0, 20) : null;
+    if ('systemPrompt' in body) app.settings.systemPrompt = typeof body.systemPrompt === 'string' ? body.systemPrompt.slice(0, 20000) : '';
     if (body.modelByMode && typeof body.modelByMode === 'object') {
       const cur = app.settings.modelByMode || {};
       const next = { ...cur };
@@ -355,6 +387,70 @@ function createApi(app) {
   });
   add('POST', '/api/conversations/:id/stop', ({ params }) => ({ ok: app.chat.stop(params.id) }));
   add('POST', '/api/conversations/:id/answer', ({ params, body }) => ({ ok: app.chat.answer(params.id, body.askId, body.value) }));
+
+  // ── artefacts ──────────────────────────────────────────────────────────
+  // Files the AI made outside the project, listed across every workspace.
+
+  add('GET', '/api/artefacts', ({ query }) => ({
+    artefacts: artefacts.list({ q: query.q, mode: query.mode }),
+  }));
+  add('POST', '/api/artefacts', ({ body }) => {
+    const b = body || {};
+    let art;
+    if (b.path) {
+      let abs = String(b.path);
+      if (!path.isAbsolute(abs) && b.convId) {
+        const conv = app.chat.get(b.convId);
+        if (conv) abs = path.join(app.chat.roots(conv)[0], abs);
+      }
+      art = artefacts.fromFile(abs, { name: b.name, mode: b.mode, convId: b.convId || null, workspace: b.workspace || null, note: b.note });
+    } else if (typeof b.content === 'string') {
+      art = artefacts.create({ name: b.name, content: b.content, mimeType: b.mimeType, mode: b.mode, convId: b.convId || null, workspace: b.workspace || null, note: b.note });
+    } else {
+      throw new HttpError(400, 'provide path or content');
+    }
+    app.broadcast({ t: 'artefacts.changed' });
+    return art;
+  });
+  add('GET', '/api/artefacts/:id', ({ params }) => {
+    const a = artefacts.get(params.id);
+    if (!a) throw new HttpError(404, 'artefact not found');
+    return a;
+  });
+  add('PATCH', '/api/artefacts/:id', ({ params, body }) => {
+    const a = artefacts.update(params.id, body || {});
+    if (!a) throw new HttpError(404, 'artefact not found');
+    app.broadcast({ t: 'artefacts.changed' });
+    return a;
+  });
+  add('DELETE', '/api/artefacts/:id', ({ params }) => {
+    const ok = artefacts.remove(params.id);
+    app.broadcast({ t: 'artefacts.changed' });
+    return { ok };
+  });
+  add('POST', '/api/artefacts/:id/open', ({ params }) => {
+    const a = artefacts.get(params.id);
+    if (!a) throw new HttpError(404, 'artefact not found');
+    const p = a.path;
+    if (!p || !fs.existsSync(p)) throw new HttpError(404, 'the file no longer exists on disk');
+    const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : 'xdg-open';
+    const args = process.platform === 'win32' ? ['/c', 'start', '', p] : [p];
+    try { execFile(opener, args, { stdio: 'ignore' }, () => {}); } catch {}
+    return { ok: true };
+  });
+  add('POST', '/api/artefacts/:id/discuss', async ({ params, body }) => {
+    const a = artefacts.get(params.id);
+    if (!a) throw new HttpError(404, 'artefact not found');
+    const text = String((body && body.text) || '').trim();
+    if (!text) throw new HttpError(400, 'ask something about the file');
+    const conv = app.chat.create({ mode: 'chat', title: a.name });
+    const attachment = { name: a.name, size: a.size, mimeType: a.mimeType };
+    if (a.binary && /^image\//.test(a.mimeType)) attachment.data = a.content;
+    else attachment.content = a.content || '';
+    const r = await app.chat.send(conv.id, text, { mode: 'ask', attachments: [attachment] });
+    if (!r.ok) throw new HttpError(409, r.error);
+    return app.chat.snapshot(conv.id);
+  });
 
   // ── skills ────────────────────────────────────────────────────────────
 
@@ -699,6 +795,31 @@ function createApi(app) {
     if (conv.run) throw new HttpError(409, 'wait for the current run to finish');
     if (!design.restore(design.ensureDir(conv.id), body.version)) throw new HttpError(404, 'version not found');
     app.broadcast({ t: 'design.changed', convId: conv.id });
+    return { ok: true };
+  });
+  add('PUT', '/api/design/:id/file', ({ params, body }) => {
+    const conv = designConv(params.id);
+    if (conv.run) throw new HttpError(409, 'wait for the current run to finish');
+    if (!design.writeFile(design.ensureDir(conv.id), String(body.path || ''), String(body.content ?? ''))) {
+      throw new HttpError(404, 'file not found');
+    }
+    return { ok: true };
+  });
+  add('POST', '/api/design/:id/snapshot', ({ params }) => {
+    const conv = designConv(params.id);
+    if (conv.run) throw new HttpError(409, 'wait for the current run to finish');
+    const v = design.snapshot(design.ensureDir(conv.id), 'edited in the canvas');
+    if (v) app.broadcast({ t: 'design.changed', convId: conv.id });
+    return { ok: true, version: v && v.n };
+  });
+  add('POST', '/api/design/:id/ai', async ({ params, body }) => {
+    const conv = designConv(params.id);
+    if (conv.run) throw new HttpError(409, 'wait for the current run to finish');
+    const prompt = String(body.prompt || '').trim();
+    if (!prompt) throw new HttpError(400, 'empty prompt');
+    const el = body.element && typeof body.element === 'object' ? body.element : null;
+    const r = await app.chat.send(conv.id, prompt, { mode: 'ask', hint: design.elementEditHint(String(body.file || ''), el) });
+    if (!r.ok) throw new HttpError(409, r.error);
     return { ok: true };
   });
 

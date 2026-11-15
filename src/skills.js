@@ -50,13 +50,14 @@ function candidatePaths(name, cwd = process.cwd()) {
 
   // The global skills directory is now organized into category subdirectories.
   // Scan all subdirs at startup so `load skill <name>` finds it regardless of
-  // which category folder it lives in.
+  // which category folder it lives in. Also check for directory skills.
   const globalSubdirHits = [];
   try {
     if (fs.existsSync(globalRoot)) {
       for (const entry of fs.readdirSync(globalRoot, { withFileTypes: true })) {
         if (entry.isDirectory()) {
           globalSubdirHits.push(path.join(globalRoot, entry.name, `${n}.md`));
+          globalSubdirHits.push(path.join(globalRoot, entry.name, n, 'SKILL.md'));
         }
       }
     }
@@ -79,6 +80,7 @@ function candidatePaths(name, cwd = process.cwd()) {
     path.join(home, '.codex', 'skills', n, 'SKILL.md'),
     // Global config — flat layout + category subdirectories
     path.join(globalRoot, `${n}.md`),
+    path.join(globalRoot, n, 'SKILL.md'),
     ...globalSubdirHits,
     // Package-bundled fallback (last resort)
     path.join(__dirname, '..', 'skills', `${n}.md`),
@@ -130,6 +132,80 @@ function ensureDirs(cwd = process.cwd()) {
 
 function sha256(s) {
   return require('crypto').createHash('sha256').update(String(s || ''), 'utf8').digest('hex');
+}
+
+// Detect whether a candidate path is a directory skill (SKILL.md inside a named directory).
+// Returns { dir, name } or null.
+function detectDirectorySkill(candidatePath) {
+  if (path.basename(candidatePath) !== 'SKILL.md') return null;
+  const dir = path.dirname(candidatePath);
+  const name = path.basename(dir);
+  if (!name || name === '.' || name === '..') return null;
+  return { dir, name: safeName(name) };
+}
+
+// Walk a skill directory, returning an array of { relPath, absPath, size } for all files.
+// Skips common ignored patterns: node_modules, .git, __pycache__, .DS_Store, *.tmp.
+function walkSkillDir(dirPath) {
+  const files = [];
+  const ignored = new Set(['node_modules', '.git', '__pycache__', '.DS_Store']);
+  function walk(current, relBase) {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      if (entry.name.startsWith('.') && entry.name !== '.gitkeep') continue;
+      if (ignored.has(entry.name)) continue;
+      const abs = path.join(current, entry.name);
+      const rel = relBase ? `${relBase}/${entry.name}` : entry.name;
+      if (entry.isFile()) {
+        try {
+          files.push({ relPath: rel, absPath: abs, size: fs.statSync(abs).size });
+        } catch {}
+      } else if (entry.isDirectory()) {
+        walk(abs, rel);
+      }
+    }
+  }
+  try { walk(dirPath, ''); } catch {}
+  return files.sort((a, b) => String(a.relPath).localeCompare(String(b.relPath)));
+}
+
+// Copy a directory tree recursively. Overwrites destination.
+function copyDirRecursive(src, dest) {
+  fs.mkdirSync(dest, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const srcPath = path.join(src, entry.name);
+    const destPath = path.join(dest, entry.name);
+    if (entry.isDirectory()) {
+      copyDirRecursive(srcPath, destPath);
+    } else {
+      fs.copyFileSync(srcPath, destPath);
+    }
+  }
+}
+
+// Get the maximum mtime across all files in a directory (for cache invalidation).
+function collectDirMtime(dirPath) {
+  let maxMtime = 0;
+  function walk(current) {
+    try {
+      for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+        const abs = path.join(current, entry.name);
+        if (entry.isFile()) {
+          try { maxMtime = Math.max(maxMtime, fs.statSync(abs).mtimeMs); } catch {}
+        } else if (entry.isDirectory() && !entry.name.startsWith('.')) {
+          walk(abs);
+        }
+      }
+    } catch {}
+  }
+  walk(dirPath);
+  return maxMtime || 0;
+}
+
+// Read the SKILL.md content from a directory skill.
+function readDirSkillMd(dirPath) {
+  const mdPath = path.join(dirPath, 'SKILL.md');
+  if (!fs.existsSync(mdPath)) return null;
+  return fs.readFileSync(mdPath, 'utf8');
 }
 
 function parseFrontmatter(raw) {
@@ -201,6 +277,53 @@ function loadSkillToWorkspace(name, cwd = process.cwd()) {
     };
   }
 
+  const dirSkill = detectDirectorySkill(found);
+
+  if (dirSkill) {
+    // ── Directory skill (multiple files) ──
+    const raw = readDirSkillMd(dirSkill.dir);
+    if (!raw) return { ok: false, error: `directory skill missing SKILL.md: ${dirSkill.dir}` };
+    const validation = validateSkill(raw, found);
+    if (!validation.ok) {
+      return { ok: false, error: `skill failed validation: ${validation.issues.join('; ')}` };
+    }
+
+    ensureDirs(cwd);
+    const destDir = path.join(skillsDir(cwd), validation.normalizedName);
+    // Only remove/copy if source and destination differ
+    if (path.resolve(dirSkill.dir) !== path.resolve(destDir)) {
+      try { fs.rmSync(destDir, { recursive: true, force: true }); } catch {}
+      copyDirRecursive(dirSkill.dir, destDir);
+    }
+
+    const manifest = walkSkillDir(destDir);
+    const totalBytes = manifest.reduce((sum, f) => sum + f.size, 0);
+    const checksum = sha256(manifest.map((f) => `${f.relPath}:${f.size}`).join('\n'));
+
+    const registry = loadRegistry(cwd);
+    registry.skills[validation.normalizedName] = {
+      name: validation.normalizedName,
+      version: validation.version,
+      source: dirSkill.dir,
+      localPath: destDir,
+      type: 'directory',
+      checksum,
+      bytes: totalBytes,
+      files: manifest.map((f) => ({ rel: f.relPath, size: f.size })),
+      loadedAt: new Date().toISOString(),
+      active: true,
+    };
+
+    for (const k of Object.keys(registry.skills)) {
+      if (k !== validation.normalizedName) registry.skills[k].active = false;
+    }
+    saveRegistry(cwd, registry);
+    fs.writeFileSync(activeSkillPath(cwd), JSON.stringify(registry.skills[validation.normalizedName], null, 2));
+
+    return { ok: true, name: validation.normalizedName, source: dirSkill.dir, localPath: destDir, version: validation.version, type: 'directory' };
+  }
+
+  // ── Single-file skill ──
   const raw = fs.readFileSync(found, 'utf8');
   const validation = validateSkill(raw, found);
   if (!validation.ok) {
@@ -218,6 +341,7 @@ function loadSkillToWorkspace(name, cwd = process.cwd()) {
     version: validation.version,
     source: found,
     localPath: localSkillPath,
+    type: 'file',
     checksum,
     bytes: Buffer.byteLength(validation.raw, 'utf8'),
     loadedAt: new Date().toISOString(),
@@ -270,7 +394,12 @@ function readActiveSkill(cwd = process.cwd()) {
     if (!fs.existsSync(p)) return null;
     const meta = JSON.parse(fs.readFileSync(p, 'utf8'));
     if (!meta || !meta.localPath || !fs.existsSync(meta.localPath)) return null;
-    const content = fs.readFileSync(meta.localPath, 'utf8');
+    let content;
+    if (meta.type === 'directory') {
+      content = readDirSkillMd(meta.localPath);
+    } else {
+      content = fs.readFileSync(meta.localPath, 'utf8');
+    }
     return { ...meta, content };
   } catch {
     return null;
@@ -289,12 +418,43 @@ function renderActiveSkillForPrompt(cwd = process.cwd(), maxBytes = DEFAULT_REND
     return '';
   }
   let mtime = 0;
-  try { mtime = fs.statSync(skill.localPath).mtimeMs; } catch {}
+  if (skill.type === 'directory') {
+    try { mtime = collectDirMtime(skill.localPath); } catch {}
+  } else {
+    try { mtime = fs.statSync(skill.localPath).mtimeMs; } catch {}
+  }
   const cacheKey = `${cwd}|${skill.localPath}|${mtime}|${maxBytes}`;
   if (_skillPromptCache.key === cacheKey) return _skillPromptCache.value;
 
-  const body = String(skill.content || '').slice(0, Math.max(1000, Number(maxBytes) || DEFAULT_RENDER_BYTES));
-  const prompt = `Active loaded skill (${skill.name}${skill.version ? ` v${skill.version}` : ''}) instructions:\n${body}`;
+  const maxB = Math.max(1000, Number(maxBytes) || DEFAULT_RENDER_BYTES);
+
+  let prompt;
+  if (skill.type === 'directory' && Array.isArray(skill.files) && skill.files.length > 0) {
+    // Build a manifest section then the SKILL.md content
+    const nonMdFiles = skill.files.filter((f) => f.rel !== 'SKILL.md');
+    let manifest = '';
+    if (nonMdFiles.length > 0) {
+      // Budget ~20% of maxBytes for manifest, 80% for SKILL.md content
+      const manifestBudget = Math.max(200, Math.floor(maxB * 0.2));
+      // Build list entries — no snippets by default to save tokens
+      manifest = 'Compact relevant subgraph for this skill:\n';
+      for (const f of nonMdFiles) {
+        const entry = `- ${f.rel} [role=file] size=${f.size}\n`;
+        if (Buffer.byteLength(manifest + entry, 'utf8') > manifestBudget) {
+          manifest += `- ...${nonMdFiles.length - nonMdFiles.indexOf(f)} more files not shown\n`;
+          break;
+        }
+        manifest += entry;
+      }
+    }
+    const bodyBudget = Math.max(600, maxB - Buffer.byteLength(manifest, 'utf8'));
+    const body = String(skill.content || '').slice(0, bodyBudget);
+    prompt = `Active loaded skill (${skill.name}${skill.version ? ` v${skill.version}` : ''}) instructions:\n\n${manifest}\n---\n${body}`;
+  } else {
+    const body = String(skill.content || '').slice(0, maxB);
+    prompt = `Active loaded skill (${skill.name}${skill.version ? ` v${skill.version}` : ''}) instructions:\n${body}`;
+  }
+
   _skillPromptCache.key = cacheKey;
   _skillPromptCache.value = prompt;
   return prompt;
@@ -328,7 +488,7 @@ function unloadSkill(name, cwd = process.cwd()) {
   if (!entry) return { ok: false, error: `skill not found in registry: ${n}` };
   delete registry.skills[n];
   if (entry.localPath) {
-    try { fs.rmSync(entry.localPath, { force: true }); } catch {}
+    try { fs.rmSync(entry.localPath, { recursive: true, force: true }); } catch {}
   }
   const active = readActiveSkill(cwd);
   if (active && safeName(active.name) === n) {
@@ -341,13 +501,17 @@ function unloadSkill(name, cwd = process.cwd()) {
 function skillStatus(cwd = process.cwd()) {
   const active = readActiveSkill(cwd);
   const all = listSkills(cwd);
+  const activeBytes = active && active.bytes ? active.bytes
+    : (active && active.type === 'directory' ? (walkSkillDir(active.localPath).reduce((s, f) => s + f.size, 0))
+    : Buffer.byteLength(String(active?.content || ''), 'utf8'));
   return {
     active: active ? {
       name: active.name,
       version: active.version || '1',
       source: active.source,
+      type: active.type || 'file',
       loadedAt: active.loadedAt,
-      bytes: active.bytes || Buffer.byteLength(String(active.content || ''), 'utf8'),
+      bytes: activeBytes,
     } : null,
     total: all.length,
   };
@@ -392,6 +556,31 @@ async function installSkillFromUrl(url, cwd = process.cwd()) {
     }
   }
 
+  // Check if this is a GitHub tree URL that points to a directory skill.
+  // If so, download all files and create a directory skill.
+  let ghDir = null;
+  try {
+    const gu = new URL(u.href);
+    if (/^(www\.)?github\.com$/i.test(gu.host)) {
+      const parts = gu.pathname.split('/').filter(Boolean);
+      if (parts.length >= 5 && parts[2] === 'tree') {
+        const owner = parts[0];
+        const repo = parts[1];
+        const ref = parts[3];
+        const relPath = parts.slice(4).join('/');
+        // Only treat as directory if the path doesn't end with .md
+        if (!/\.(md|markdown)$/i.test(relPath)) {
+          ghDir = { owner, repo, ref, relPath };
+        }
+      }
+    }
+  } catch {}
+
+  if (ghDir) {
+    // Download all files from GitHub directory and create a directory skill
+    return _installDirectorySkillFromGitHub(ghDir, cwd);
+  }
+
   const resolvedUrl = await resolveGitHubUrl(u.href);
   let finalUrl;
   try { finalUrl = new URL(resolvedUrl); } catch { finalUrl = u; }
@@ -409,6 +598,84 @@ async function installSkillFromUrl(url, cwd = process.cwd()) {
 
   const derived = safeName(path.basename(finalUrl.pathname || '', path.extname(finalUrl.pathname || '')) || 'downloaded-skill');
   return importSkillContent(text, finalUrl.href, cwd, derived);
+}
+
+// Download all files from a GitHub directory and create a directory skill locally.
+async function _installDirectorySkillFromGitHub(ghDir, cwd) {
+  async function fetchGitHubDir(apiUrl) {
+    const resp = await fetch(apiUrl, { headers: { 'user-agent': 'shmakk-skill-installer/1.0' } });
+    if (!resp.ok) throw new Error(`GitHub API error ${resp.status}`);
+    return resp.json();
+  }
+
+  async function downloadAll(dirPath) {
+    const api = `https://api.github.com/repos/${ghDir.owner}/${ghDir.repo}/contents/${dirPath}?ref=${encodeURIComponent(ghDir.ref)}`;
+    const entries = await fetchGitHubDir(api);
+    if (!Array.isArray(entries)) throw new Error('not a directory');
+    const files = [];
+    for (const entry of entries) {
+      if (entry.type === 'file' && entry.download_url) {
+        const resp = await fetch(entry.download_url, { headers: { 'user-agent': 'shmakk-skill-installer/1.0' } });
+        if (resp.ok) {
+          files.push({ path: entry.name, content: await resp.text(), size: entry.size || 0 });
+        }
+      } else if (entry.type === 'dir') {
+        // Skip nested subdirs for simplicity; only one level deep
+      }
+    }
+    return files;
+  }
+
+  try {
+    const files = await downloadAll(ghDir.relPath);
+
+    // Find SKILL.md
+    const skillMd = files.find((f) => f.path === 'SKILL.md');
+    if (!skillMd) return { ok: false, error: 'no SKILL.md found in GitHub directory' };
+
+    const validation = validateSkill(skillMd.content, `${ghDir.owner}/${ghDir.repo}/${ghDir.relPath}/SKILL.md`);
+    if (!validation.ok) {
+      return { ok: false, error: `skill failed validation: ${validation.issues.join('; ')}` };
+    }
+
+    ensureDirs(cwd);
+    const destDir = path.join(skillsDir(cwd), validation.normalizedName);
+    try { fs.rmSync(destDir, { recursive: true, force: true }); } catch {}
+    fs.mkdirSync(destDir, { recursive: true });
+
+    const manifest = [];
+    for (const file of files) {
+      const destPath = path.join(destDir, file.path);
+      fs.writeFileSync(destPath, file.content, 'utf8');
+      manifest.push({ rel: file.path, size: Buffer.byteLength(file.content, 'utf8') });
+    }
+
+    const totalBytes = manifest.reduce((sum, f) => sum + f.size, 0);
+    const checksum = sha256(manifest.map((f) => `${f.rel}:${f.size}`).join('\n'));
+
+    const registry = loadRegistry(cwd);
+    registry.skills[validation.normalizedName] = {
+      name: validation.normalizedName,
+      version: validation.version,
+      source: `https://github.com/${ghDir.owner}/${ghDir.repo}/tree/${ghDir.ref}/${ghDir.relPath}`,
+      localPath: destDir,
+      type: 'directory',
+      checksum,
+      bytes: totalBytes,
+      files: manifest,
+      loadedAt: new Date().toISOString(),
+      active: true,
+    };
+    for (const k of Object.keys(registry.skills)) {
+      if (k !== validation.normalizedName) registry.skills[k].active = false;
+    }
+    saveRegistry(cwd, registry);
+    fs.writeFileSync(activeSkillPath(cwd), JSON.stringify(registry.skills[validation.normalizedName], null, 2));
+
+    return { ok: true, name: validation.normalizedName, source: `https://github.com/${ghDir.owner}/${ghDir.repo}/tree/${ghDir.ref}/${ghDir.relPath}`, localPath: destDir, version: validation.version, type: 'directory' };
+  } catch (e) {
+    return { ok: false, error: `failed to download directory skill: ${e.message}` };
+  }
 }
 
 // ── Global skill management (stored in ~/.config/shmakk) ──
@@ -440,6 +707,45 @@ function loadSkillGlobally(name) {
     };
   }
 
+  const dirSkill = detectDirectorySkill(found);
+
+  if (dirSkill) {
+    const raw = readDirSkillMd(dirSkill.dir);
+    if (!raw) return { ok: false, error: `directory skill missing SKILL.md: ${dirSkill.dir}` };
+    const validation = validateSkill(raw, found);
+    if (!validation.ok) {
+      return { ok: false, error: `skill failed validation: ${validation.issues.join('; ')}` };
+    }
+
+    ensureGlobalDirs();
+    const destDir = path.join(globalSkillsDir(), validation.normalizedName);
+    if (path.resolve(dirSkill.dir) !== path.resolve(destDir)) {
+      try { fs.rmSync(destDir, { recursive: true, force: true }); } catch {}
+      copyDirRecursive(dirSkill.dir, destDir);
+    }
+
+    const manifest = walkSkillDir(destDir);
+    const totalBytes = manifest.reduce((sum, f) => sum + f.size, 0);
+    const checksum = sha256(manifest.map((f) => `${f.relPath}:${f.size}`).join('\n'));
+
+    const registry = loadGlobalRegistry();
+    registry.skills[validation.normalizedName] = {
+      name: validation.normalizedName,
+      version: validation.version,
+      source: dirSkill.dir,
+      localPath: destDir,
+      type: 'directory',
+      checksum,
+      bytes: totalBytes,
+      files: manifest.map((f) => ({ rel: f.relPath, size: f.size })),
+      registeredAt: new Date().toISOString(),
+      active: false,
+    };
+    saveGlobalRegistry(registry);
+
+    return { ok: true, name: validation.normalizedName, source: dirSkill.dir, localPath: destDir, version: validation.version, type: 'directory' };
+  }
+
   const raw = fs.readFileSync(found, 'utf8');
   const validation = validateSkill(raw, found);
   if (!validation.ok) {
@@ -460,6 +766,7 @@ function loadSkillGlobally(name) {
     version: validation.version,
     source: found,
     localPath: localSkillPath,
+    type: 'file',
     checksum,
     bytes: Buffer.byteLength(validation.raw, 'utf8'),
     registeredAt: new Date().toISOString(),
@@ -533,6 +840,25 @@ async function installSkillFromUrlGlobally(url) {
     }
   }
 
+  // GitHub tree URL → directory skill?
+  let ghDir = null;
+  try {
+    const gu = new URL(u.href);
+    if (/^(www\.)?github\.com$/i.test(gu.host)) {
+      const parts = gu.pathname.split('/').filter(Boolean);
+      if (parts.length >= 5 && parts[2] === 'tree') {
+        const relPath = parts.slice(4).join('/');
+        if (!/\.(md|markdown)$/i.test(relPath)) {
+          ghDir = { owner: parts[0], repo: parts[1], ref: parts[3], relPath };
+        }
+      }
+    }
+  } catch {}
+
+  if (ghDir) {
+    return _installDirectorySkillFromGitHubToGlobal(ghDir);
+  }
+
   const resolvedUrl = await resolveGitHubUrl(u.href);
   let finalUrl;
   try { finalUrl = new URL(resolvedUrl); } catch { finalUrl = u; }
@@ -552,6 +878,76 @@ async function installSkillFromUrlGlobally(url) {
   return importGlobalSkillContent(text, finalUrl.href, derived);
 }
 
+// Shared GitHub directory download logic for global installs.
+async function _installDirectorySkillFromGitHubToGlobal(ghDir) {
+  async function fetchGitHubDir(apiUrl) {
+    const resp = await fetch(apiUrl, { headers: { 'user-agent': 'shmakk-skill-installer/1.0' } });
+    if (!resp.ok) throw new Error(`GitHub API error ${resp.status}`);
+    return resp.json();
+  }
+
+  async function downloadAll(dirPath) {
+    const api = `https://api.github.com/repos/${ghDir.owner}/${ghDir.repo}/contents/${dirPath}?ref=${encodeURIComponent(ghDir.ref)}`;
+    const entries = await fetchGitHubDir(api);
+    if (!Array.isArray(entries)) throw new Error('not a directory');
+    const files = [];
+    for (const entry of entries) {
+      if (entry.type === 'file' && entry.download_url) {
+        const resp = await fetch(entry.download_url, { headers: { 'user-agent': 'shmakk-skill-installer/1.0' } });
+        if (resp.ok) {
+          files.push({ path: entry.name, content: await resp.text(), size: entry.size || 0 });
+        }
+      }
+    }
+    return files;
+  }
+
+  try {
+    const files = await downloadAll(ghDir.relPath);
+    const skillMd = files.find((f) => f.path === 'SKILL.md');
+    if (!skillMd) return { ok: false, error: 'no SKILL.md found in GitHub directory' };
+
+    const validation = validateSkill(skillMd.content, `${ghDir.owner}/${ghDir.repo}/${ghDir.relPath}/SKILL.md`);
+    if (!validation.ok) {
+      return { ok: false, error: `skill failed validation: ${validation.issues.join('; ')}` };
+    }
+
+    ensureGlobalDirs();
+    const destDir = path.join(globalSkillsDir(), validation.normalizedName);
+    try { fs.rmSync(destDir, { recursive: true, force: true }); } catch {}
+    fs.mkdirSync(destDir, { recursive: true });
+
+    const manifest = [];
+    for (const file of files) {
+      const destPath = path.join(destDir, file.path);
+      fs.writeFileSync(destPath, file.content, 'utf8');
+      manifest.push({ rel: file.path, size: Buffer.byteLength(file.content, 'utf8') });
+    }
+
+    const totalBytes = manifest.reduce((sum, f) => sum + f.size, 0);
+    const checksum = sha256(manifest.map((f) => `${f.rel}:${f.size}`).join('\n'));
+
+    const registry = loadGlobalRegistry();
+    registry.skills[validation.normalizedName] = {
+      name: validation.normalizedName,
+      version: validation.version,
+      source: `https://github.com/${ghDir.owner}/${ghDir.repo}/tree/${ghDir.ref}/${ghDir.relPath}`,
+      localPath: destDir,
+      type: 'directory',
+      checksum,
+      bytes: totalBytes,
+      files: manifest,
+      registeredAt: new Date().toISOString(),
+      active: false,
+    };
+    saveGlobalRegistry(registry);
+
+    return { ok: true, name: validation.normalizedName, source: `https://github.com/${ghDir.owner}/${ghDir.repo}/tree/${ghDir.ref}/${ghDir.relPath}`, localPath: destDir, version: validation.version, type: 'directory' };
+  } catch (e) {
+    return { ok: false, error: `failed to download directory skill: ${e.message}` };
+  }
+}
+
 function unloadSkillGlobally(name) {
   const n = safeName(name);
   const registry = loadGlobalRegistry();
@@ -559,7 +955,7 @@ function unloadSkillGlobally(name) {
   if (!entry) return { ok: false, error: `skill not found in registry: ${n}` };
   delete registry.skills[n];
   if (entry.localPath) {
-    try { fs.rmSync(entry.localPath, { force: true }); } catch {}
+    try { fs.rmSync(entry.localPath, { recursive: true, force: true }); } catch {}
   }
   const active = readActiveSkillGlobally();
   if (active && safeName(active.name) === n) {
@@ -575,7 +971,12 @@ function readActiveSkillGlobally() {
     if (!fs.existsSync(p)) return null;
     const meta = JSON.parse(fs.readFileSync(p, 'utf8'));
     if (!meta || !meta.localPath || !fs.existsSync(meta.localPath)) return null;
-    const content = fs.readFileSync(meta.localPath, 'utf8');
+    let content;
+    if (meta.type === 'directory') {
+      content = readDirSkillMd(meta.localPath);
+    } else {
+      content = fs.readFileSync(meta.localPath, 'utf8');
+    }
     return { ...meta, content };
   } catch {
     return null;
@@ -589,17 +990,29 @@ function _scanSkillsDir(dir) {
   const found = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (entry.isFile() && entry.name.endsWith('.md')) {
-      found.push({ skillPath: path.join(dir, entry.name), subdir: null });
+      found.push({ skillPath: path.join(dir, entry.name), subdir: null, dirSkill: false });
     } else if (entry.isDirectory()) {
-      // One level deep — category subdirectory
+      // Check for SKILL.md inside → directory skill
       const subDir = path.join(dir, entry.name);
-      try {
-        for (const inner of fs.readdirSync(subDir)) {
-          if (inner.endsWith('.md')) {
-            found.push({ skillPath: path.join(subDir, inner), subdir: entry.name });
+      const skillMd = path.join(subDir, 'SKILL.md');
+      if (fs.existsSync(skillMd)) {
+        found.push({ skillPath: skillMd, subdir: entry.name, dirSkill: true });
+      } else {
+        // One level deep — category subdirectory with .md files,
+        // or nested skill directories (category/skill-name/SKILL.md)
+        try {
+          for (const inner of fs.readdirSync(subDir, { withFileTypes: true })) {
+            if (inner.isFile() && inner.name.endsWith('.md')) {
+              found.push({ skillPath: path.join(subDir, inner.name), subdir: entry.name, dirSkill: false });
+            } else if (inner.isDirectory()) {
+              const nestedSkillMd = path.join(subDir, inner.name, 'SKILL.md');
+              if (fs.existsSync(nestedSkillMd)) {
+                found.push({ skillPath: nestedSkillMd, subdir: entry.name, dirSkill: true });
+              }
+            }
           }
-        }
-      } catch {}
+        } catch {}
+      }
     }
   }
   return found;
@@ -613,11 +1026,20 @@ function listSkillsGlobally() {
   const registryEntries = loadGlobalRegistry().skills || {};
   const available = {};
 
-  for (const { skillPath, subdir } of _scanSkillsDir(dir)) {
+  for (const { skillPath, subdir, dirSkill: isDirSkill } of _scanSkillsDir(dir)) {
     try {
-      const raw = fs.readFileSync(skillPath, 'utf8');
+      let raw, name, bytes;
+      if (isDirSkill) {
+        raw = readDirSkillMd(path.dirname(skillPath));
+        if (!raw) continue;
+        const manifest = walkSkillDir(path.dirname(skillPath));
+        bytes = manifest.reduce((sum, f) => sum + f.size, 0);
+      } else {
+        raw = fs.readFileSync(skillPath, 'utf8');
+        bytes = Buffer.byteLength(raw, 'utf8');
+      }
       const fm = parseFrontmatter(raw);
-      const name = safeName(fm.meta.name || path.basename(skillPath, '.md'));
+      name = safeName(fm.meta.name || path.basename(skillPath, '.md'));
       // Category source priority: subdirectory > frontmatter > 'general'
       const cat = subdir ? normalizeCategory(subdir) : normalizeCategory(fm.meta.category);
       // First non-blank paragraph of body = short description for catalog
@@ -630,9 +1052,10 @@ function listSkillsGlobally() {
         version: String(fm.meta.version || '1').trim(),
         category: cat,
         description: desc,
-        source: skillPath,
-        localPath: skillPath,
-        bytes: Buffer.byteLength(raw, 'utf8'),
+        source: isDirSkill ? path.dirname(skillPath) : skillPath,
+        localPath: isDirSkill ? path.dirname(skillPath) : skillPath,
+        type: isDirSkill ? 'directory' : 'file',
+        bytes,
         active: false,  // global skills are never auto-active
       };
     } catch {}
@@ -676,13 +1099,17 @@ function searchSkills(query, skills) {
 function skillStatusGlobally() {
   const active = readActiveSkillGlobally();
   const all = listSkillsGlobally();
+  const activeBytes = active && active.bytes ? active.bytes
+    : (active && active.type === 'directory' ? (walkSkillDir(active.localPath).reduce((s, f) => s + f.size, 0))
+    : Buffer.byteLength(String(active?.content || ''), 'utf8'));
   return {
     active: active ? {
       name: active.name,
       version: active.version || '1',
       source: active.source,
+      type: active.type || 'file',
       loadedAt: active.loadedAt,
-      bytes: active.bytes || Buffer.byteLength(String(active.content || ''), 'utf8'),
+      bytes: activeBytes,
     } : null,
     total: all.length,
   };

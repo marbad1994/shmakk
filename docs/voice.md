@@ -52,6 +52,10 @@ shmakk --stt          # mic input only, text responses
 shmakk --tts          # text input, spoken responses
 ```
 
+The three modes are exclusive. If multiple flags are passed, the last one wins.
+Inside a running shmakk session, `enable stt`, `enable tts`, and `enable sts`
+also disable the other two modes.
+
 Just speak. shmakk will:
 1. Detect your voice via VAD
 2. Transcribe it (shown in cyan on stderr)

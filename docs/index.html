@@ -283,13 +283,19 @@ body {
   <h1>shm<em>akk</em></h1>
   <p class="sub">AI-supervised terminal. No GUI. No bloat. Just your shell, smarter.<br>Optionally: talks back.</p>
   <p class="honest">takes advantage of errors so you don't have to think about them</p>
-  <div class="install">npm install -g <span>git+https://github.com/marbad1994/shmakk.git</span></div>
+  <div class="install">npm install -g <span>shmakk</span></div>
 </div>
 
 <div class="tabs">
   <button class="tab active" onclick="go('chat')">chat</button>
+  <button class="tab" onclick="go('natural')">natural language</button>
   <button class="tab" onclick="go('project')">project builder</button>
   <button class="tab" onclick="go('typo')">typo correction</button>
+  <button class="tab" onclick="go('vim')">vim</button>
+  <button class="tab" onclick="go('endpoints')">endpoints</button>
+  <button class="tab" onclick="go('mcp')">mcp</button>
+  <button class="tab" onclick="go('ssh')">ssh</button>
+  <button class="tab" onclick="go('self')">self commands</button>
   <button class="tab" onclick="go('skills')">skills</button>
   <button class="tab" onclick="go('profiles')">profiles</button>
   <button class="tab voice-tab" onclick="go('voice')">voice</button>
@@ -323,6 +329,26 @@ body {
       <div class="ln" data-d="4300"><span class="ai-out">Fastest and most Pythonic. Works on any sequence.</span></div>
       <div class="ln" data-d="4600">&nbsp;</div>
       <div class="ln" data-d="4700"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/D/r/s/demo-deepseek</span><span class="muted">&gt;</span> <span class="cur"></span></div>
+    </div>
+
+    <!-- NATURAL LANGUAGE -->
+    <div class="panel" id="panel-natural">
+      <div class="ln" data-d="0"><span class="muted"># natural language becomes a tool plan, not blind shell text</span></div>
+      <div class="ln" data-d="160">&nbsp;</div>
+      <div class="ln" data-d="260"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/Downloads/log-archive</span><span class="muted">&gt;</span> <span class="user-input"><span class="cmd-first">delete</span> all files from every tuesday between 11 and 12 from the last 8 weeks</span></div>
+      <div class="ln" data-d="650"><span class="task-label">[shmakk task] (Ctrl-C to interrupt)</span></div>
+      <div class="ln" data-d="950"><span class="thinking">⊥ planning with safety constraints...</span></div>
+      <div class="ln" data-d="1350"><span class="ai-out">I will first list matching files, show the count, then ask before deleting.</span></div>
+      <div class="ln" data-d="1650"><span class="tool-arrow">→</span> <span class="tool-name">run(find . -type f -newermt "8 weeks ago" -printf ...)</span></div>
+      <div class="ln" data-d="2050"><span class="tool-result">  matched 37 files · Tuesday · modified 11:00:00-11:59:59</span></div>
+      <div class="ln" data-d="2300"><span class="tool-result">  ./2026-04-21/app-11-14.log</span></div>
+      <div class="ln" data-d="2450"><span class="tool-result">  ./2026-05-05/app-11-48.log</span></div>
+      <div class="ln" data-d="2600"><span class="tool-result">  ./2026-05-26/debug-11-31.tmp</span></div>
+      <div class="ln" data-d="2800"><span class="muted">  ...34 more</span></div>
+      <div class="ln" data-d="3200"><span class="confirm">Delete these 37 files? [y/N] </span><span class="user-input">n</span></div>
+      <div class="ln" data-d="3500"><span class="ai-out">Nothing deleted. I can write the exact deletion command to a script if you want to review it.</span></div>
+      <div class="ln" data-d="3900">&nbsp;</div>
+      <div class="ln" data-d="4000"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/Downloads/log-archive</span><span class="muted">&gt;</span> <span class="cur"></span></div>
     </div>
 
     <!-- PROJECT -->
@@ -373,27 +399,119 @@ body {
       <div class="ln" data-d="4300"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/D/r/s/demo-deepseek</span><span class="muted">&gt;</span> <span class="cur"></span></div>
     </div>
 
+    <!-- VIM -->
+    <div class="panel" id="panel-vim">
+      <div class="ln" data-d="0"><span class="muted"># real vi/vim, your config, plus shmakk commands</span></div>
+      <div class="ln" data-d="180"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/api</span><span class="muted">&gt;</span> <span class="white">shmakk --vim vi</span></div>
+      <div class="ln" data-d="520"><span class="muted">[shmakk] vi shim active. real editor config still loads.</span></div>
+      <div class="ln" data-d="850"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/api</span><span class="muted">&gt;</span> <span class="white">vi src/auth.js</span></div>
+      <div class="ln" data-d="1250"><span class="muted">:G create a JWT refresh token validator</span></div>
+      <div class="ln" data-d="1550"><span class="muted">[shmakk] generating...</span></div>
+      <div class="ln" data-d="2150"><span class="code">function validateRefreshToken(token, secret) {</span></div>
+      <div class="ln" data-d="2300"><span class="code">  const payload = jwt.verify(token, secret);</span></div>
+      <div class="ln" data-d="2450"><span class="code">  if (payload.type !== 'refresh') throw new Error('invalid token type');</span></div>
+      <div class="ln" data-d="2600"><span class="code">  return payload;</span></div>
+      <div class="ln" data-d="2750"><span class="code">}</span></div>
+      <div class="ln" data-d="3100">&nbsp;</div>
+      <div class="ln" data-d="3200"><span class="muted">press &lt;C-Space&gt;</span></div>
+      <div class="ln" data-d="3500"><span class="muted">[shmakk] suggesting...</span></div>
+      <div class="ln" data-d="4050"><span class="ai-out">[shmakk-suggestion] preview opened · Accept / Deny</span></div>
+      <div class="ln" data-d="4350"><span class="muted">:Cmd npm test -- auth</span></div>
+      <div class="ln" data-d="4650"><span class="tool-result">$ npm test -- auth</span></div>
+      <div class="ln" data-d="4800"><span class="tool-result">exit 0 · 12 tests passed</span></div>
+    </div>
+
+    <!-- ENDPOINTS -->
+    <div class="panel" id="panel-endpoints">
+      <div class="ln" data-d="0"><span class="muted"># one registry, separate main and fast model roles</span></div>
+      <div class="ln" data-d="220"><span class="code">~/.config/shmakk/endpoints.json</span></div>
+      <div class="ln" data-d="520"><span class="code">{ "main": "pro", "fast": "flash", "models": {</span></div>
+      <div class="ln" data-d="760"><span class="code">  "pro":   { "provider": "google", "model": "gemini-pro" },</span></div>
+      <div class="ln" data-d="1000"><span class="code">  "flash": { "provider": "google", "model": "gemini-flash" }</span></div>
+      <div class="ln" data-d="1240"><span class="code">}}</span></div>
+      <div class="ln" data-d="1650">&nbsp;</div>
+      <div class="ln" data-d="1750"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/app</span><span class="muted">&gt;</span> <span class="white">shmakk --endpoint pro</span></div>
+      <div class="ln" data-d="2100"><span class="ai-out">main model: pro · fast model: flash</span></div>
+      <div class="ln" data-d="2450"><span class="tool-result">agent planning / edits → pro</span></div>
+      <div class="ln" data-d="2700"><span class="tool-result">vim suggestions / low latency → flash</span></div>
+      <div class="ln" data-d="3050">&nbsp;</div>
+      <div class="ln" data-d="3150"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/app</span><span class="muted">&gt;</span> <span class="user-input"><span class="cmd-first">use</span> endpoint claude</span></div>
+      <div class="ln" data-d="3550"><span class="ai-out">active endpoint switched to claude. fast remains flash.</span></div>
+    </div>
+
+    <!-- MCP -->
+    <div class="panel" id="panel-mcp">
+      <div class="ln" data-d="0"><span class="muted"># stdio MCP servers become shmakk tools</span></div>
+      <div class="ln" data-d="220"><span class="code">.shmakk/mcp.json</span></div>
+      <div class="ln" data-d="520"><span class="code">{ "mcpServers": { "github": {</span></div>
+      <div class="ln" data-d="760"><span class="code">  "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"],</span></div>
+      <div class="ln" data-d="1000"><span class="code">  "env": { "GITHUB_TOKEN": "${GITHUB_TOKEN}" },</span></div>
+      <div class="ln" data-d="1240"><span class="code">  "safety": "uncertain", "safeTools": ["search_issues"]</span></div>
+      <div class="ln" data-d="1480"><span class="code">}}}</span></div>
+      <div class="ln" data-d="1850"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/app</span><span class="muted">&gt;</span> <span class="white">shmakk --mcp-status</span></div>
+      <div class="ln" data-d="2200"><span class="tool-result">github: running · 14 tools discovered</span></div>
+      <div class="ln" data-d="2450"><span class="tool-result">  github.search_issues      safe</span></div>
+      <div class="ln" data-d="2650"><span class="tool-result">  github.create_issue       uncertain</span></div>
+      <div class="ln" data-d="2950">&nbsp;</div>
+      <div class="ln" data-d="3050"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/app</span><span class="muted">&gt;</span> <span class="user-input"><span class="cmd-first">find</span> open bugs mentioning oauth callback</span></div>
+      <div class="ln" data-d="3450"><span class="tool-arrow">→</span> <span class="tool-name">github.search_issues({query:"oauth callback"})</span></div>
+      <div class="ln" data-d="3900"><span class="ai-out">Found 3 related issues. The newest regression is #482.</span></div>
+    </div>
+
+    <!-- SSH -->
+    <div class="panel" id="panel-ssh">
+      <div class="ln" data-d="0"><span class="muted"># remote hosts are explicit, named, and still safety-gated</span></div>
+      <div class="ln" data-d="220"><span class="code">.shmakk/hosts.json</span></div>
+      <div class="ln" data-d="500"><span class="code">{ "hosts": { "staging": {</span></div>
+      <div class="ln" data-d="740"><span class="code">  "host": "deploy@10.0.0.5", "port": 2247, "timeout_sec": 30</span></div>
+      <div class="ln" data-d="980"><span class="code">}}}</span></div>
+      <div class="ln" data-d="1350"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/app</span><span class="muted">&gt;</span> <span class="user-input"><span class="cmd-first">check</span> staging disk and restart api if it is healthy</span></div>
+      <div class="ln" data-d="1750"><span class="tool-arrow">→</span> <span class="tool-name">ssh_run(staging, df -h /srv/app)</span></div>
+      <div class="ln" data-d="2150"><span class="tool-result">  /srv/app  42G used  68G free</span></div>
+      <div class="ln" data-d="2450"><span class="tool-arrow">→</span> <span class="tool-name">ssh_run(staging, systemctl status api)</span></div>
+      <div class="ln" data-d="2850"><span class="tool-result">  active (running)</span></div>
+      <div class="ln" data-d="3150"><span class="confirm">Run remote restart on staging? [y/N] </span><span class="user-input">y</span></div>
+      <div class="ln" data-d="3450"><span class="tool-arrow">→</span> <span class="tool-name">ssh_run(staging, sudo systemctl restart api)</span></div>
+      <div class="ln" data-d="3900"><span class="ai-out">Restarted. Health check returned 200 OK.</span></div>
+    </div>
+
+    <!-- SELF COMMANDS -->
+    <div class="panel" id="panel-self">
+      <div class="ln" data-d="0"><span class="muted"># self commands control shmakk itself, not your shell</span></div>
+      <div class="ln" data-d="260"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/app</span><span class="muted">&gt;</span> <span class="user-input"><span class="cmd-first">show</span> plan</span></div>
+      <div class="ln" data-d="620"><span class="shmakk-section">Plan · auth migration</span></div>
+      <div class="ln" data-d="850"><span class="tool-result">  [x] inspect routes</span></div>
+      <div class="ln" data-d="1050"><span class="tool-result">  [ ] migrate token store</span></div>
+      <div class="ln" data-d="1250"><span class="tool-result">  [ ] add regression tests</span></div>
+      <div class="ln" data-d="1650"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/app</span><span class="muted">&gt;</span> <span class="user-input"><span class="cmd-first">mcp</span> status</span></div>
+      <div class="ln" data-d="2050"><span class="tool-result">browser: running · github: running · obs: disabled</span></div>
+      <div class="ln" data-d="2450"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/app</span><span class="muted">&gt;</span> <span class="user-input"><span class="cmd-first">set</span> model to flash</span></div>
+      <div class="ln" data-d="2850"><span class="ai-out">model set to flash</span></div>
+      <div class="ln" data-d="3250"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/app</span><span class="muted">&gt;</span> <span class="user-input"><span class="cmd-first">review</span> edits</span></div>
+      <div class="ln" data-d="3650"><span class="ai-out">opening edit review for 4 pending file changes...</span></div>
+    </div>
+
     <!-- SKILLS -->
     <div class="panel" id="panel-skills">
-      <div class="ln" data-d="0"><span class="muted"># install a skill from any URL — shmakk handles the rest</span></div>
+      <div class="ln" data-d="0"><span class="muted"># workspace and global skill registries</span></div>
       <div class="ln" data-d="100">&nbsp;</div>
-      <div class="ln" data-d="200"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~</span><span class="muted">&gt;</span> <span class="user-input"><span class="cmd-first">shmakk</span> --install-skill https://example.com/skills/rust-expert.md</span></div>
+      <div class="ln" data-d="200"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/app</span><span class="muted">&gt;</span> <span class="user-input"><span class="cmd-first">shmakk</span> --install-skill https://example.com/skills/rust-expert.md</span></div>
       <div class="ln" data-d="600"><span class="task-label">[shmakk task] (Ctrl-C to interrupt)</span></div>
       <div class="ln" data-d="900"><span class="thinking">⊥ fetching skill...</span></div>
       <div class="ln" data-d="1500"><span class="tool-result">  fetched: rust-expert.md (2.1 KB)</span></div>
-      <div class="ln" data-d="1700"><span class="tool-result">  installed to: ~/.shmakk/skills/rust-expert</span></div>
-      <div class="ln" data-d="1900"><span class="ai-out">Skill 'rust-expert' ready. It will be loaded automatically</span></div>
-      <div class="ln" data-d="2000"><span class="ai-out">when relevant context is detected.</span></div>
+      <div class="ln" data-d="1700"><span class="tool-result">  registered in: ~/app/.shmakk/skills.json</span></div>
+      <div class="ln" data-d="1900"><span class="ai-out">Skill 'rust-expert' is available in this workspace.</span></div>
       <div class="ln" data-d="2400">&nbsp;</div>
-      <div class="ln" data-d="2500"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~</span><span class="muted">&gt;</span> <span class="user-input"><span class="cmd-first">shmakk</span> --list-skills</span></div>
-      <div class="ln" data-d="2900"><span class="tool-result">  rust-expert       loaded from https://example.com/skills/rust-expert.md</span></div>
-      <div class="ln" data-d="3050"><span class="tool-result">  docker-compose    loaded from https://example.com/skills/docker.md</span></div>
-      <div class="ln" data-d="3200"><span class="tool-result">  git-flow          loaded from https://example.com/skills/git-flow.md</span></div>
-      <div class="ln" data-d="3500">&nbsp;</div>
-      <div class="ln" data-d="3600"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~</span><span class="muted">&gt;</span> <span class="user-input"><span class="cmd-first">shmakk</span> --load-skill rust-expert</span></div>
-      <div class="ln" data-d="4000"><span class="ai-out">rust-expert skill active for this session.</span></div>
-      <div class="ln" data-d="4300">&nbsp;</div>
-      <div class="ln" data-d="4400"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~</span><span class="muted">&gt;</span> <span class="cur"></span></div>
+      <div class="ln" data-d="2500"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/app</span><span class="muted">&gt;</span> <span class="user-input"><span class="cmd-first">shmakk</span> -G --install-skill https://example.com/skills/docker.md</span></div>
+      <div class="ln" data-d="2900"><span class="tool-result">  registered globally: ~/.config/shmakk/skills.json</span></div>
+      <div class="ln" data-d="3200"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/app</span><span class="muted">&gt;</span> <span class="user-input"><span class="cmd-first">list</span> skills dev</span></div>
+      <div class="ln" data-d="3550"><span class="tool-result">  workspace: rust-expert</span></div>
+      <div class="ln" data-d="3750"><span class="tool-result">  global:    docker, git-flow, code-review</span></div>
+      <div class="ln" data-d="3950">&nbsp;</div>
+      <div class="ln" data-d="4050"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/app</span><span class="muted">&gt;</span> <span class="user-input"><span class="cmd-first">load</span> skill rust-expert</span></div>
+      <div class="ln" data-d="4450"><span class="ai-out">rust-expert skill active for this session.</span></div>
+      <div class="ln" data-d="4650">&nbsp;</div>
+      <div class="ln" data-d="4750"><span class="hostname">marcus@tobarko.ai</span> <span class="path">~/app</span><span class="muted">&gt;</span> <span class="cur"></span></div>
     </div>
 
     <!-- PROFILES -->
@@ -483,7 +601,27 @@ body {
   </div>
   <div class="feat">
     <h3>Skills</h3>
-    <p>Extend behaviour with any URL: <code>shmakk --install-skill &lt;url&gt;</code>. Loaded per-session or automatically when relevant context is detected.</p>
+    <p>Workspace and global registries. Install from a URL, list categories, load exactly the skill a session needs.</p>
+  </div>
+  <div class="feat">
+    <h3>Vim mode</h3>
+    <p>Wrap real <code>vi</code>/<code>vim</code>, keep your config, and add <code>:G</code>, <code>:Tw</code>, <code>:Cmd</code>, plus full-block suggestions.</p>
+  </div>
+  <div class="feat">
+    <h3>MCP</h3>
+    <p>Connect stdio MCP servers as agent tools. Per-tool safety classification, env interpolation, status inspection.</p>
+  </div>
+  <div class="feat">
+    <h3>SSH</h3>
+    <p>Named remote hosts for <code>ssh_run</code>, <code>ssh_push</code>, and <code>ssh_pull</code>. Key auth and safety prompts stay in place.</p>
+  </div>
+  <div class="feat">
+    <h3>Endpoints</h3>
+    <p>Configure <code>main</code> for quality and <code>fast</code> for low-latency tasks like Vim suggestions.</p>
+  </div>
+  <div class="feat">
+    <h3>Self commands</h3>
+    <p>Control shmakk from inside the session: <code>show plan</code>, <code>mcp status</code>, <code>set model</code>, <code>review edits</code>.</p>
   </div>
   <div class="feat">
     <h3>Runtime profiles</h3>
@@ -504,7 +642,7 @@ body {
 <script>
 let current = 'chat';
 let timers = [];
-const order = ['chat','project','typo','skills','profiles','voice'];
+const order = ['chat','natural','project','typo','vim','endpoints','mcp','ssh','self','skills','profiles','voice'];
 
 function go(name) {
   timers.forEach(clearTimeout); timers = [];

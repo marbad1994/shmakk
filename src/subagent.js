@@ -1,8 +1,19 @@
+const { modelFor } = require('./llm');
+
 // Auto-subagent planning pass. Runs short read-only sub-calls before the
 // main agent loop to scope work, identify risks, and outline a plan.
 // Extracted from agent.js.
+//
+// Force triggers: phrases like "use agent team", "team mode", "pm mode",
+// "agent mode", "multi-agent", or "subagent mode" always enable subagents
+// regardless of heuristics or SHMAKK_AUTO_SUBAGENTS=0.
 
 function shouldUseAutoSubagents(input, roots) {
+  // Force team/PM mode when the user explicitly requests it, regardless of
+  // auto-detection heuristics or SHMAKK_AUTO_SUBAGENTS env override.
+  if (/(\buse\s+agent\s+team\b|\bteam\s+mode\b|\bpm\s+mode\b|\bagent\s+mode\b|\bmulti.?agent\b|\bsub.?agent\s+mode\b)/i.test(String(input || ''))) {
+    return true;
+  }
   if (String(process.env.SHMAKK_AUTO_SUBAGENTS || '1') === '0') return false;
   const minLen = Math.max(40, Number(process.env.SHMAKK_AUTO_SUBAGENTS_MIN_INPUT_LEN) || 140);
   const maxRoots = Math.max(1, Number(process.env.SHMAKK_AUTO_SUBAGENTS_MAX_ROOTS) || 2);
@@ -26,7 +37,7 @@ async function runAutoSubagents({ client, input, roots, signal }) {
   for (let i = 0; i < focuses.length; i++) {
     try {
       const r = await client.chat.completions.create({
-        model: process.env.SHMAKK_MODEL || 'gpt-4o-mini',
+        model: modelFor('subagent-planning'),
         temperature: 0,
         stream: false,
         tool_choice: 'none',

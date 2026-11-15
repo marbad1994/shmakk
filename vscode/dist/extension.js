@@ -271,245 +271,28 @@ function writeWorkspaceState(patch) {
   }
   fs.writeFileSync(stateFilePath(), JSON.stringify(next, null, 2));
 }
-var currentPanel;
-function getWebviewHtml(webview) {
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource} 'unsafe-inline';">
-  <title>shmakk</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size,13px); color: var(--vscode-foreground); background: var(--vscode-sideBar-background); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
-    h3 { font-size: 12px; font-weight: 600; text-transform: uppercase; opacity: 0.6; padding: 10px 12px 4px; }
-    .section { border-bottom: 1px solid var(--vscode-panel-border); padding: 0 12px 8px; }
-    .row { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
-    label { font-size: 12px; opacity: 0.8; min-width: 55px; }
-    input, select { flex: 1; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); border-radius: 4px; padding: 4px 8px; font-family: inherit; font-size: 12px; }
-    input:focus, select:focus { outline: 1px solid var(--vscode-focusBorder); }
-    button { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; border-radius: 4px; padding: 4px 10px; font-size: 11px; cursor: pointer; }
-    button:hover { background: var(--vscode-button-hoverBackground); }
-    button.sec { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
-    button.sec:hover { background: var(--vscode-button-secondaryHoverBackground); }
-    ul { list-style: none; margin: 4px 0; }
-    li { padding: 3px 6px; font-size: 12px; cursor: pointer; border-radius: 3px; display: flex; align-items: center; gap: 6px; }
-    li:hover { background: var(--vscode-list-hoverBackground); }
-    li.active { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
-    .badge { font-size: 9px; padding: 1px 5px; border-radius: 8px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
-    .tag { font-size: 9px; padding: 1px 5px; border-radius: 3px; opacity: 0.6; }
-    .status { font-size: 11px; opacity: 0.6; padding: 4px 0; }
-  </style>
-</head>
-<body>
-  <h3>Endpoint</h3>
-  <div class="section">
-    <div class="row">
-      <select id="epSelect" onchange="switchEndpoint()">
-        <option value="">-- select --</option>
-      </select>
-      <button onclick="refreshEndpoints()" class="sec">\u21BB</button>
-    </div>
-    <div class="status" id="epStatus"></div>
-  </div>
-
-  <h3>Model & Profile</h3>
-  <div class="section">
-    <div class="row"><label>Model</label><input type="text" id="modelInput" placeholder="gpt-4o-mini"></div>
-    <div class="row">
-      <label>Profile</label>
-      <select id="profileSelect">
-        <option value="tiny">tiny</option>
-        <option value="balanced" selected>balanced</option>
-        <option value="deep">deep</option>
-        <option value="builder">builder</option>
-      </select>
-    </div>
-    <div class="row"><button onclick="saveSettings()">Save</button></div>
-    <div class="status" id="cfgStatus"></div>
-  </div>
-
-  <h3>Skills</h3>
-  <div class="section">
-    <ul id="skillsList"><li>Loading\u2026</li></ul>
-    <div class="row"><button onclick="refreshSkills()" class="sec">Refresh</button></div>
-    <div class="status" id="skillStatus"></div>
-  </div>
-
-  <h3>Sessions</h3>
-  <div class="section">
-    <ul id="sessionsList"><li>Loading\u2026</li></ul>
-    <div class="row" style="gap:4px">
-      <button onclick="refreshSessions()" class="sec">Refresh</button>
-      <button onclick="clearAllSessions()" class="sec">Clear All</button>
-    </div>
-  </div>
-
-  <script>
-    const vsc = acquireVsCodeApi();
-    const el = (id) => document.getElementById(id);
-
-    window.addEventListener('load', () => { vsc.postMessage({ type: 'init' }); });
-
-    window.addEventListener('message', (e) => {
-      const m = e.data;
-      switch (m.type) {
-        case 'endpoints':
-          el('epSelect').innerHTML = '<option value="">-- select --</option>' +
-            Object.entries(m.endpoints || {}).map(([k]) => '<option value="'+k+'"'+(m.current===k?' selected':'')+'>'+k+'</option>').join('');
-          if (m.current) el('epStatus').textContent = 'Active: ' + m.current;
-          break;
-        case 'skills':
-          el('skillsList').innerHTML = (m.skills||[]).length
-            ? m.skills.map(s => '<li class="'+(s.active?'active':'')+'" onclick="toggleSkill(''+s.name+'',''+s.source+'')">'+s.name+(s.active?' <span class="badge">active</span>':'')+'<span class="tag">'+s.source+'</span>'+(s.description?'<br><small>'+s.description+'</small>':'')+'</li>').join('')
-            : '<li>No skills</li>';
-          break;
-        case 'sessions':
-          el('sessionsList').innerHTML = (m.sessions||[]).length
-            ? m.sessions.map(s => '<li onclick="loadSession(''+s.id+'')"><strong>'+s.status+'</strong> '+new Date(s.updatedAt).toLocaleDateString()+'<span class="badge">'+s.messages.length+'</span><br><small>'+s.id+'</small></li>').join('')
-            : '<li>No sessions</li>';
-          break;
-        case 'settings':
-          if (m.s.model) el('modelInput').value = m.s.model;
-          if (m.s.profile) el('profileSelect').value = m.s.profile;
-          break;
-        case 'status': el('epStatus').textContent = m.text; break;
-        case 'skillToggled': el('skillStatus').textContent = m.text; refreshSkills(); break;
-        case 'sessionsCleared': el('sessionsList').innerHTML = '<li>No sessions</li>'; break;
-      }
-    });
-
-    function switchEndpoint() {
-      const v = el('epSelect').value;
-      if (v) vsc.postMessage({ type: 'switchEndpoint', name: v });
-    }
-    function toggleSkill(name, source) {
-      vsc.postMessage({ type: 'toggleSkill', name, source });
-    }
-    function loadSession(id) { vsc.postMessage({ type: 'loadSession', id }); }
-    function clearAllSessions() { vsc.postMessage({ type: 'clearSessions' }); }
-    function refreshEndpoints() { vsc.postMessage({ type: 'init' }); }
-    function refreshSkills() { vsc.postMessage({ type: 'getSkills' }); }
-    function refreshSessions() { vsc.postMessage({ type: 'getSessions' }); }
-    function saveSettings() {
-      vsc.postMessage({ type: 'saveSettings', s: { model: el('modelInput').value.trim(), profile: el('profileSelect').value } });
-      el('cfgStatus').textContent = 'Saved \u2713';
-      setTimeout(() => el('cfgStatus').textContent = '', 2000);
-    }
-  </script>
-</body>
-</html>`;
-}
-function openSettingsPanel(context) {
-  if (currentPanel) {
-    currentPanel.reveal(vscode.ViewColumn.Two);
-    return;
+function findOrCreateShmakkTerminal() {
+  const name = "shmakk";
+  for (const t of vscode.window.terminals) {
+    if (t.name === name) return t;
   }
-  currentPanel = vscode.window.createWebviewPanel(
-    "shmakkSettings",
-    "shmakk Settings",
-    vscode.ViewColumn.Two,
-    { enableScripts: true, retainContextWhenHidden: true }
-  );
-  currentPanel.webview.html = getWebviewHtml(currentPanel.webview);
-  currentPanel.webview.onDidReceiveMessage(async (msg) => {
-    switch (msg.type) {
-      case "init":
-      case "getEndpoints": {
-        const eps = loadEndpoints();
-        const state = readWorkspaceState();
-        const current = state.endpointName || null;
-        currentPanel?.webview.postMessage({ type: "endpoints", endpoints: eps, current });
-        currentPanel?.webview.postMessage({
-          type: "settings",
-          s: { model: state.model || "", profile: state.profile || "" }
-        });
-        break;
-      }
-      case "switchEndpoint": {
-        const eps = loadEndpoints();
-        const cfg = eps[msg.name];
-        if (cfg) {
-          writeWorkspaceState({
-            endpointName: msg.name,
-            endpoint: cfg,
-            model: cfg.model || readWorkspaceState().model
-          });
-          restartServer();
-          currentPanel?.webview.postMessage({ type: "status", text: `Switched to: ${msg.name}` });
-        }
-        break;
-      }
-      case "getSkills": {
-        currentPanel?.webview.postMessage({ type: "skills", skills: loadSkills() });
-        break;
-      }
-      case "getSessions": {
-        currentPanel?.webview.postMessage({ type: "sessions", sessions: listSessions() });
-        break;
-      }
-      case "saveSettings": {
-        const s = msg.s;
-        writeWorkspaceState({
-          model: s.model || void 0,
-          profile: s.profile || void 0
-        });
-        restartServer();
-        break;
-      }
-      case "toggleSkill": {
-        const stateDir = path.join(workspaceConfigDir(), "state");
-        const activePath = path.join(stateDir, "active-skill.json");
-        fs.mkdirSync(stateDir, { recursive: true });
-        const skills = loadSkills();
-        const currentActive = skills.find((s) => s.active);
-        if (msg.name === currentActive?.name) {
-          fs.writeFileSync(activePath, "{}");
-          currentPanel?.webview.postMessage({ type: "skillToggled", text: `Unloaded: ${msg.name}` });
-        } else {
-          fs.writeFileSync(activePath, JSON.stringify({ name: msg.name, active: true }));
-          currentPanel?.webview.postMessage({ type: "skillToggled", text: `Loaded: ${msg.name}` });
-        }
-        break;
-      }
-      case "loadSession": {
-        const session = listSessions().find((s) => s.id === msg.id);
-        if (session) {
-          const doc = await vscode.workspace.openTextDocument({
-            content: formatSession(session),
-            language: "markdown"
-          });
-          await vscode.window.showTextDocument(doc);
-        }
-        break;
-      }
-      case "clearSessions": {
-        const answer = await vscode.window.showWarningMessage(
-          "Delete all shmakk sessions?",
-          { modal: true },
-          "Delete All"
-        );
-        if (answer === "Delete All") {
-          const dir = sessionsDir();
-          if (fs.existsSync(dir)) {
-            for (const f of fs.readdirSync(dir)) fs.unlinkSync(path.join(dir, f));
-          }
-          currentPanel?.webview.postMessage({ type: "sessionsCleared" });
-        }
-        break;
-      }
-    }
-  });
-  currentPanel.onDidDispose(() => {
-    currentPanel = void 0;
-  });
+  const terminal = vscode.window.createTerminal({ name, location: vscode.TerminalLocation.Panel });
+  terminal.show();
+  return terminal;
+}
+function sendToShmakkTerminal(text) {
+  const terminal = findOrCreateShmakkTerminal();
+  terminal.show();
+  terminal.shellIntegration?.executeCommand(text);
 }
 function activate(context) {
   registerChatParticipant(context);
   context.subscriptions.push(
-    vscode.commands.registerCommand("shmakk.openSettings", () => openSettingsPanel(context)),
+    vscode.commands.registerCommand("shmakk.openSettings", () => {
+      findOrCreateShmakkTerminal();
+    }),
     vscode.commands.registerCommand("shmakk.toggleSettings", () => {
-      currentPanel ? currentPanel.dispose() : openSettingsPanel(context);
+      findOrCreateShmakkTerminal();
     }),
     vscode.commands.registerCommand("shmakk.switchEndpoint", async () => {
       const eps = loadEndpoints();
@@ -595,6 +378,74 @@ function activate(context) {
           for (const f of fs.readdirSync(dir)) fs.unlinkSync(path.join(dir, f));
         }
         vscode.window.showInformationMessage("All sessions cleared.");
+      }
+    }),
+    vscode.commands.registerCommand("shmakk.fixCode", async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) return;
+      const code = editor.selection.isEmpty ? editor.document.getText() : editor.document.getText(editor.selection);
+      if (!code.trim()) {
+        vscode.window.showWarningMessage("No code to send.");
+        return;
+      }
+      const lang = editor.document.languageId;
+      const prompt = `fix this ${lang} code:
+\`\`\`${lang}
+${code}
+\`\`\``;
+      await sendToShmakkTerminal(prompt);
+    }),
+    vscode.commands.registerCommand("shmakk.explainCode", async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) return;
+      const code = editor.selection.isEmpty ? editor.document.getText() : editor.document.getText(editor.selection);
+      if (!code.trim()) {
+        vscode.window.showWarningMessage("No code to send.");
+        return;
+      }
+      const lang = editor.document.languageId;
+      const prompt = `explain this ${lang} code:
+\`\`\`${lang}
+${code}
+\`\`\``;
+      await sendToShmakkTerminal(prompt);
+    }),
+    vscode.commands.registerCommand("shmakk.sendToShmakk", async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) return;
+      const code = editor.selection.isEmpty ? editor.document.getText() : editor.document.getText(editor.selection);
+      if (!code.trim()) {
+        vscode.window.showWarningMessage("No code to send.");
+        return;
+      }
+      await sendToShmakkTerminal(code);
+    })
+  );
+  context.subscriptions.push(
+    vscode.languages.registerCodeActionsProvider("*", {
+      provideCodeActions(document, range, _context, _token) {
+        const diagnostics = _context.diagnostics.filter((d) => d.range);
+        if (!diagnostics.length) return [];
+        const fixAll = new vscode.CodeAction(
+          "Fix with shmakk",
+          vscode.CodeActionKind.QuickFix
+        );
+        fixAll.command = {
+          command: "shmakk.fixCode",
+          title: "Fix with shmakk",
+          arguments: []
+        };
+        fixAll.isPreferred = false;
+        const explain = new vscode.CodeAction(
+          "Explain in shmakk",
+          vscode.CodeActionKind.QuickFix
+        );
+        explain.command = {
+          command: "shmakk.explainCode",
+          title: "Explain in shmakk",
+          arguments: []
+        };
+        return [fixAll, explain];
       }
     })
   );

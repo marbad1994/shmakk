@@ -212,9 +212,15 @@ class MCPServer {
         if (item.type === 'text') {
           texts.push(item.text);
         } else if (item.type === 'image') {
+          // Preserve base64 image data so vision-capable providers can process it.
+          // Cap at ~2MB of base64 to avoid blowing out context windows.
+          const raw = String(item.data || '');
+          const capped = raw.length > 2_000_000 ? raw.slice(0, 2_000_000) : raw;
           images.push({
             mimeType: item.mimeType || 'image/png',
-            dataLength: (item.data || '').length,
+            data: capped,
+            dataLength: raw.length,
+            truncated: raw.length > 2_000_000,
           });
         } else if (item.type === 'resource') {
           texts.push(`[resource: ${item.resource?.uri || 'unknown'}]`);

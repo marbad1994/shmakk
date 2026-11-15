@@ -5,7 +5,7 @@
 import type { ReactNode } from 'react';
 import {
   Activity, BookOpen, Code2, GitBranch, MessageCircle, Palette, Workflow, Brain, Bug, CircleHelp, Cpu, Eraser, FileDiff, FolderOpen, Gauge, History, ListChecks,
-  MessageSquarePlus, Mic, Moon, Plug, Power, ScrollText, Search, Settings, ShieldCheck, Sparkles, SquareTerminal,
+  MessageSquarePlus, Mic, Moon, PanelRight, Globe, Plug, Power, ScrollText, Search, Settings, ShieldCheck, Sparkles, SquareTerminal,
   TerminalSquare, Users, Wand2, Zap,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -64,6 +64,10 @@ export const COMMANDS: Command[] = [
   { id: 'v-activity', slash: 'activity', title: 'Activity log', hint: 'Audit trail and session stats (--stats)', group: 'Go to', icon: <Activity />, run: go('activity') },
   { id: 'v-settings', slash: 'settings', title: 'Settings', hint: 'Model, behaviour, voice, appearance', group: 'Go to', icon: <Settings />, run: go('settings') },
   { id: 'terminal', slash: 'terminal', title: 'Toggle terminal', hint: 'The full shmakk CLI in a real terminal', group: 'Go to', icon: <SquareTerminal />, run: () => app().toggleDock() },
+  { id: 'inspector', slash: 'inspector', title: 'Toggle inspector', hint: 'Browser, changes and plan beside the chat', group: 'Go to', icon: <PanelRight />, run: () => app().toggleRight() },
+  { id: 'pane-browser', slash: 'browser', title: 'Browser pane', hint: 'Preview any URL this workspace serves', group: 'Go to', icon: <Globe />, run: () => { app().setView('chat'); app().setRightPane('browser'); } },
+  { id: 'pane-changes', slash: 'pane-changes', title: 'Changes pane', hint: 'Diffs beside the chat, with revert', group: 'Go to', icon: <FileDiff />, run: () => { app().setView('chat'); app().setRightPane('changes'); } },
+  { id: 'pane-plan', slash: 'pane-plan', title: 'Plan pane', hint: 'The active plan beside the chat', group: 'Go to', icon: <ListChecks />, run: () => { app().setView('chat'); app().setRightPane('plan'); } },
 
   // ── Mode ──
   { id: 'review', slash: 'review', title: 'Toggle review mode', hint: 'Confirm every AI action (--review)', group: 'Mode', icon: <ShieldCheck />, arg: 'on | off', run: (a) => app().patchSettings({ review: onOff(a, app().settings.review) }) },

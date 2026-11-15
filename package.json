@@ -42,6 +42,7 @@
     "dev": "node bin/shmakk.js --debug",
     "test": "node test/units.js",
     "check": "node -e \"require('./src/agent'); require('./src/orchestrator'); require('./src/webui/server'); console.log('check-ok')\"",
+    "test-vision": "node test/vision-e2e.js",
     "mock-llm": "node test/mock-llm.js",
     "global:setup": "node src/global-setup.js",
     "global:link": "npm link && npm run global:setup",
@@ -62,15 +63,17 @@
     "node": ">=18"
   },
   "dependencies": {
-    "node-pty": "^1.0.0",
-    "openai": "^4.77.0",
+    "@lydell/node-pty": "^1.2.0-beta.12",
+    "openai": "^4.104.0",
     "wavefile": "^11.0.0",
     "ws": "^8.23.0"
   },
   "optionalDependencies": {
     "@huggingface/transformers": "^4.2.0",
     "better-sqlite3": "^11.0.0",
-    "kokoro-js": "^1.2.1",
-    "playwright": "^1.40.0"
+    "kokoro-js": "^1.2.1"
+  },
+  "devDependencies": {
+    "playwright": "^1.60.0"
   }
 }

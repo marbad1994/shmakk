@@ -17,7 +17,7 @@ const { setMaxListeners } = require('events');
 const { correct } = require('../correction');
 const { runAgent, clearTaskJournal, summarizeToolResult } = require('../agent');
 const { TOOLS, dispatchTool } = require('../tools');
-const { makeClient, modelFor } = require('../llm');
+const { makeClient, modelFor, userContentWithImages, stripImageBlocks } = require('../llm');
 const { renderMemoryForPrompt } = require('../memory');
 const design = require('./design');
 const { buildContext } = require('./projects');
@@ -38,6 +38,7 @@ const sessionSearch = require('../session-search');
 const { HELP } = require('../cli');
 const audit = require('../audit');
 const store = require('./store');
+const artefacts = require('./artefacts');
 
 const HISTORY_MAX_ENTRIES = 30;
 const MAX_SHELL_OUTPUT = 200 * 1024;
@@ -79,6 +80,14 @@ function trimHistory(history) {
   return history.slice(cut);
 }
 
+// Did the user explicitly ask for a file to be kept as an artefact?
+// ("create a report as an artefact", "save this as an artefact", …)
+function artefactRequested(text) {
+  const t = String(text || '').toLowerCase();
+  if (!/\bartef?act/.test(t)) return false;
+  return /\b(create|save|make|generate|export|write|turn)\b/.test(t);
+}
+
 function titleFrom(text) {
   const t = String(text || '').replace(/\s+/g, ' ').trim().replace(/^[$!+]\s*/, '');
   return t.length > 52 ? `${t.slice(0, 50).trimEnd()}…` : (t || 'New chat');
@@ -92,16 +101,29 @@ function attachmentBlock(a, i) {
   const label = (a && a.name) || `attachment-${i + 1}`;
   const size = a && typeof a.size === 'number' ? a.size : 0;
   const content = a && typeof a.content === 'string' ? a.content : '';
+  if (a && typeof a.data === 'string' && a.data) {
+    const kind = (a.mimeType || 'image').replace(/^image\//, '') || 'image';
+    // No claim about it being viewable: formats the provider cannot read are
+    // converted or reported separately by the image pipeline.
+    return `[Attached image ${i + 1}: ${label} (${kind}, ${size} bytes)]`;
+  }
   if (content) {
     const clipped = content.length > MAX_ATTACHMENT_CHARS ? `${content.slice(0, MAX_ATTACHMENT_CHARS)}\n… (truncated)` : content;
     return `[Attached file ${i + 1}: ${label}]\n<<< ${label}\n${clipped}\n${label} >>>`;
   }
-  return `[Attached file ${i + 1}: ${label} (${size} bytes, binary or unreadable — not shown)]`;
+  return `[Attached file ${i + 1}: ${label} (${size} bytes, binary or unreadable, not shown)]`;
 }
 
 function attachmentContext(attachments) {
   if (!Array.isArray(attachments) || !attachments.length) return '';
   return attachments.map(attachmentBlock).join('\n\n');
+}
+
+// Image attachments travel as vision content blocks, not as prompt text.
+function imageAttachments(refs) {
+  return (Array.isArray(refs) ? refs : [])
+    .filter((a) => a && typeof a.data === 'string' && a.data)
+    .map((a) => ({ mimeType: a.mimeType || 'image/png', data: a.data, dataLength: a.data.length, name: a.name || 'image' }));
 }
 
 // Keep transcripts light: large string arguments (file bodies) are clipped.
@@ -379,11 +401,18 @@ class ChatManager {
     return buildContext(this._project(conv), conv, this._siblings(conv));
   }
 
+  // The user's global instruction, prepended to every conversation in every
+  // mode. Project instructions and shared context are layered after it.
+  _globalPrompt() {
+    const p = this.ctx.settings && this.ctx.settings.systemPrompt;
+    return typeof p === 'string' && p.trim() ? p.trim() : null;
+  }
+
   // ── entry point ─────────────────────────────────────────────────────────
 
   // mode: 'ask' (default) or 'shell'. A leading "$ " also means shell.
   // unattended: 'auto' | 'ask' | 'full' — set for automation runs (see _confirmTool).
-  async send(convId, rawText, { mode = 'ask', unattended = null, askTimeoutMs = null, attachments = null } = {}) {
+  async send(convId, rawText, { mode = 'ask', unattended = null, askTimeoutMs = null, attachments = null, hint = null } = {}) {
     const conv = this.get(convId);
     if (!conv) return { ok: false, error: 'conversation not found' };
     if (conv.run) return { ok: false, error: 'a run is already in progress' };
@@ -398,7 +427,8 @@ class ChatManager {
     setMaxListeners(0, ctrl.signal);
     let finish;
     const done = new Promise((r) => { finish = r; });
-    conv.run = { ctrl, activity: 'starting', unattended, askTimeoutMs, error: null, finish };
+    const images = imageAttachments(refs);
+    conv.run = { ctrl, activity: 'starting', unattended, askTimeoutMs, error: null, finish, images, hint, artefactRequested: artefactRequested(text) };
     this.ctx.broadcast({ t: 'run', convId: conv.id, running: true, activity: 'starting' });
 
     this._add(conv, { type: 'user', text, mode, attachments: refs.map((a) => ({ name: a.name || 'file', size: typeof a.size === 'number' ? a.size : 0 })) });
@@ -738,6 +768,24 @@ class ChatManager {
     };
   }
 
+  // When a non-code chat creates a file and the user asked for an artefact,
+  // snapshot it into the vault. Code mode is deliberately excluded: its files
+  // are project work, not artefacts.
+  _captureArtefact(conv, name, args) {
+    if (conv.mode === 'code') return;
+    if (!conv.run || !conv.run.artefactRequested) return;
+    if (name !== 'write_file' && name !== 'edit_file') return;
+    const p = args && args.path;
+    if (!p) return;
+    try {
+      const abs = path.isAbsolute(p) ? p : path.join(this.roots(conv)[0], p);
+      if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) return;
+      const art = artefacts.fromFile(abs, { mode: conv.mode, convId: conv.id, workspace: conv.workspace || this.ctx.getWorkspace() });
+      this._notice(conv, `Saved to artefacts: ${art.name}`, 'ok', { action: 'open:artefacts' });
+      this.ctx.broadcast({ t: 'artefacts.changed' });
+    } catch {}
+  }
+
   // ── agent event → transcript item mapping ───────────────────────────────
 
   _eventSink(conv, { agentLabel = null } = {}) {
@@ -809,6 +857,9 @@ class ChatManager {
               } catch {}
             }
           }
+          if (!ev.error && (ev.name === 'write_file' || ev.name === 'edit_file')) {
+            this._captureArtefact(conv, ev.name, ev.args);
+          }
           it.endedAt = Date.now();
           this._touch(conv, it);
           break;
@@ -845,7 +896,7 @@ class ChatManager {
     }
     process.env.SHMAKK_SESSION_ID = conv.sessionId || '';
     const cowork = conv.mode === 'cowork';
-    const hint = (base) => [base, cowork ? COWORK_HINT : null, this._projectContext(conv)].filter(Boolean).join('\n\n') || null;
+    const hint = (base) => [base, this._globalPrompt(), cowork ? COWORK_HINT : null, this._projectContext(conv)].filter(Boolean).join('\n\n') || null;
     const tools = cowork && this.ctx.automations
       ? coworkTools(mcpManager, this.ctx.automations, { projectId: conv.projectId, workspace: conv.workspace })
       : mcpManager;
@@ -869,7 +920,8 @@ class ChatManager {
     };
 
     // ── Team mode ──
-    if (!settings.review && !cowork && looksMultiDomain(cmd)) {
+    // Images are shown to a single agent: a team would each need the payload.
+    if (!settings.review && !cowork && !(conv.run && conv.run.images && conv.run.images.length) && looksMultiDomain(cmd)) {
       let teamItem = null;
       let summary = '';
       let handled = false;
@@ -938,7 +990,7 @@ class ChatManager {
           this._add(conv, { type: 'step', index: i + 1, total: plan.tasks.length, title: task.title, description: task.description });
           const taskInput = `[Task ${i + 1} of ${plan.tasks.length}: ${task.title}]\n${task.description}\n\nOverall goal: ${plan.title}\n\nOriginal request: ${cmd}`;
           try {
-            const updated = await runAgent({ ...agentOpts, input: taskInput, history: conv.history });
+            const updated = await runAgent({ ...agentOpts, input: taskInput, history: conv.history, images: conv.run ? conv.run.images : null });
             sink.close();
             conv.history = trimHistory(updated || conv.history);
             if (ctrl.signal.aborted) { task.status = 'failed'; sync(); throw new Error('stopped'); }
@@ -985,7 +1037,7 @@ class ChatManager {
 
     // ── Single agent ──
     if (routing.indicator) this._add(conv, { type: 'route', specialist: routing.specialist, indicator: routing.indicator, profile: agentProfile });
-    const updated = await runAgent({ ...agentOpts, input: cmd, history: conv.history });
+    const updated = await runAgent({ ...agentOpts, input: cmd, history: conv.history, images: conv.run ? conv.run.images : null });
     sink.close();
     conv.history = trimHistory(updated || conv.history);
     if (ctrl.signal.aborted) throw new Error('stopped');
@@ -1007,9 +1059,11 @@ class ChatManager {
       'Answer the question that was asked, at the depth it deserves. Use Markdown where it helps (code blocks, short lists, tables for comparisons).',
       'You can search the web and fetch pages when the answer depends on current or specific facts; say so briefly when you do. You have no access to files or a shell in this mode — if the user wants work done in a codebase, suggest Code mode; for visual work, Design mode; for recurring or scheduled work, Cowork mode.',
       renderMemoryForPrompt(this.ctx.getWorkspace()),
+      this._globalPrompt(),
       this._projectContext(conv),
     ].filter(Boolean).join('\n\n');
-    const messages = [{ role: 'system', content: system }, ...trimHistory(conv.history), { role: 'user', content: text }];
+    const userContent = await userContentWithImages(text, conv.run && conv.run.images, ctrl.signal);
+    const messages = [{ role: 'system', content: system }, ...trimHistory(conv.history), { role: 'user', content: userContent }];
     const sink = this._eventSink(conv);
 
     for (let round = 0; round < 6; round++) {
@@ -1050,7 +1104,7 @@ class ChatManager {
       }
     }
     sink.close();
-    conv.history = trimHistory(messages.slice(1));
+    conv.history = trimHistory(stripImageBlocks(messages.slice(1)));
     if (ctrl.signal.aborted) throw new Error('stopped');
   }
 
@@ -1074,10 +1128,11 @@ class ChatManager {
       write: this._logWriter(conv),
       signal: ctrl.signal,
       history: conv.history,
+      images: conv.run ? conv.run.images : null,
       profile: this.ctx.settings.profile || 'builder',
       colors: false,
       model: this._modelFor(conv),
-      specialistHint: [design.DESIGN_HINT, this._projectContext(conv)].filter(Boolean).join('\n\n'),
+      specialistHint: [design.DESIGN_HINT, this._globalPrompt(), this._projectContext(conv), conv.run && conv.run.hint].filter(Boolean).join('\n\n'),
       mcpManager: null,
       onEvent: (ev) => {
         sink(ev);

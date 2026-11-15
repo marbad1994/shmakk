@@ -49,16 +49,75 @@
       {
         "command": "shmakk.clearSessions",
         "title": "shmakk: Clear All Sessions"
+      },
+      {
+        "command": "shmakk.fixCode",
+        "title": "Fix with shmakk"
+      },
+      {
+        "command": "shmakk.explainCode",
+        "title": "Explain in shmakk"
+      },
+      {
+        "command": "shmakk.sendToShmakk",
+        "title": "Send to shmakk"
       }
     ],
     "menus": {
       "commandPalette": [
-        { "command": "shmakk.openSettings" },
-        { "command": "shmakk.toggleSettings" },
-        { "command": "shmakk.switchEndpoint" },
-        { "command": "shmakk.loadSkill" },
-        { "command": "shmakk.listSessions" },
-        { "command": "shmakk.clearSessions" }
+        {
+          "command": "shmakk.openSettings"
+        },
+        {
+          "command": "shmakk.toggleSettings"
+        },
+        {
+          "command": "shmakk.switchEndpoint"
+        },
+        {
+          "command": "shmakk.loadSkill"
+        },
+        {
+          "command": "shmakk.listSessions"
+        },
+        {
+          "command": "shmakk.clearSessions"
+        },
+        {
+          "command": "shmakk.explainCode"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "shmakk.fixCode",
+          "group": "0_shmakk@1",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "shmakk.fixCode",
+          "group": "0_shmakk@1",
+          "when": "!editorHasSelection"
+        },
+        {
+          "command": "shmakk.explainCode",
+          "group": "0_shmakk@2",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "shmakk.explainCode",
+          "group": "0_shmakk@2",
+          "when": "!editorHasSelection"
+        },
+        {
+          "command": "shmakk.sendToShmakk",
+          "group": "0_shmakk@3",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "shmakk.sendToShmakk",
+          "group": "0_shmakk@3",
+          "when": "!editorHasSelection"
+        }
       ],
       "editor/title": [
         {
@@ -75,6 +134,7 @@
   },
   "devDependencies": {
     "@types/vscode": "^1.93.0",
+    "@vscode/vsce": "^3.9.1",
     "esbuild": "^0.24.0"
   }
 }

@@ -7,13 +7,23 @@
 
 const fs = require('fs');
 const path = require('path');
-const { makeClient, modelFor, isConfigured } = require('./llm');
+const { makeClient, modelFor, isConfigured, getDeepSeekOptions, supportsVision, describeImages, userContentWithImages, stripImageBlocks, imageBlocks, normalizeImages, skippedNote } = require('./llm');
+const {
+  sanitizeAssistantContent,
+  isLeakedToolMarkup,
+  mightBecomeInternalMarkup,
+  MUTATION_TOOLS,
+  isMutationTool,
+  hashArgs,
+  DSML_RETRY_USER_MESSAGE,
+} = require('./guard');
 const { buildOrRefreshIndex, relevantSubgraph } = require('./workspace-index');
 const { renderActiveSkillForPrompt } = require('./skills');
 const { renderRulesForPrompt } = require('./rules');
 const { renderMemoryForPrompt } = require('./memory');
 const sessionSearch = require('./session-search');
 const promptCache = require('./prompt-cache');
+const audit = require('./audit');
 const { buildSystemPrompt } = require('./system-prompt');
 const {
   TOOLS,
@@ -74,14 +84,19 @@ function clearTaskJournal(root) {
   try { fs.rmSync(journalPath(root), { force: true }); } catch {}
 }
 
+const { renderBlock } = require('./markdown');
+
 // Tiny spinner so the user sees "the agent is thinking" while we wait on
-// the model. Erased when stop() is called.
+// the model. Erased when stop() is called. Also updates the terminal tab
+// title so you can see agent activity even when looking at another tab.
 function startSpinner(write, label = 'thinking') {
   const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
   let i = 0; let line = '';
   const draw = () => {
     line = `\x1b[2m${frames[i % frames.length]} ${label}…\x1b[0m`;
     write('\r' + line);
+    // Update terminal tab/window title so activity is visible from other tabs
+    write(`\x1b]0;${frames[i % frames.length]} ${label} — shmakk\x07`);
     i++;
   };
   draw();
@@ -89,24 +104,16 @@ function startSpinner(write, label = 'thinking') {
   return () => {
     clearInterval(tm);
     write('\r' + ' '.repeat(line.replace(/\x1b\[[0-9;]*m/g, '').length + 2) + '\r\r');
+    // Clear the terminal title — shell will restore normal title on next prompt
+    write('\x1b]0;\x07');
   };
 }
 
 function dim(s, enabled = true) { return enabled ? `\x1b[2m${s}\x1b[0m` : s; }
 
-function highlightCodeBlocks(text, enabled = true) {
-  const src = String(text || '');
-  if (!enabled) return src;
-  return src.replace(/```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g, (_m, lang, code) => {
-    const head = `\x1b[36m\x1b[1m${lang || 'code'}\x1b[0m`;
-    const body = `\x1b[90m${code.replace(/\n$/, '')}\x1b[0m`;
-    return `${head}\n${body}`;
-  }).replace(/\u0000\u0000\u0000/g, '```');
-}
-
 // ── Main agent entry point ──────────────────────────────────────────────────
 
-async function runAgent({ input, roots, glossary, confirmTool, write, signal, history = [], profile = 'balanced', colors = true, voiceMode = false, specialistHint = null, mcpManager = null, requireToolUse = false, onEvent = null, model = null }) {
+async function runAgent({ input, roots, glossary, confirmTool, write, signal, history = [], profile = 'balanced', colors = true, markdown = true, voiceMode = false, specialistHint = null, mcpManager = null, requireToolUse = false, onEvent = null, model = null, images = null }) {
   // onEvent: optional structured-event sink used by GUI front-ends (web UI).
   // When present, streaming text, tool calls and results are reported as
   // objects instead of being rendered to `write` as terminal text.
@@ -145,6 +152,40 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
 
   persistJournal('running');
   const promptCacheEnabled = String(process.env.SHMAKK_PROMPT_CACHE || '1') !== '0';
+
+  // ── Per-turn mutation-approval state ───────────────────────────────────
+  // Every mutation tool call must be individually approved.  If the user
+  // denies ANY mutation in a turn, ALL pending mutations from that turn are
+  // invalidated.  This prevents the agent from executing an edit after the
+  // user said no.
+  const turnApprovals = new Map();   // toolCallId → { approved, argsHash, expiresAt }
+  let turnDenied = false;
+
+  function clearTurnApprovals() {
+    turnApprovals.clear();
+    turnDenied = false;
+  }
+
+  function wrapConfirmTool(baseConfirm) {
+    if (!baseConfirm) return null;
+    return async ({ name, args, safety, description }) => {
+      // If this turn has already been denied, reject all mutation tools.
+      if (turnDenied && isMutationTool(name)) {
+        return false;
+      }
+      const ok = await baseConfirm({ name, args, safety, description });
+      if (!ok && isMutationTool(name)) {
+        turnDenied = true;
+        // Invalidate any pre-approved mutation calls from this turn.
+        for (const [id, a] of turnApprovals) {
+          if (isMutationTool(a.toolName)) a.approved = false;
+        }
+      }
+      return ok;
+    };
+  }
+
+  const guardedConfirm = wrapConfirmTool(confirmTool);
   const maxDiscoveryCallsPerRound = Math.max(
     1,
     Number(process.env.SHMAKK_MAX_DISCOVERY_CALLS_PER_ROUND)
@@ -157,8 +198,44 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
     const graph = relevantSubgraph(idx, input, 12, 1);
     if (graph.length) {
       indexHint = `\n\nCompact relevant subgraph for this task:\n${graph.map((n) => `- ${n.path} [role=${n.role}] symbols=${n.symbols.slice(0, 4).join(', ') || '-'} edges=${n.edges.slice(0, 4).join(', ') || '-'} snippet=${(n.snippet || []).slice(0, 3).join(' | ') || '-'}`).join('\n')}\nStart with these files and their immediate dependencies before broad exploration. Prefer these snippet cues before reading full files.`;
+    } else {
+      // Fallback: no query hits — give the agent a top-level map so it can
+      // start exploring without waiting for the user to say "read the dir".
+      const files = idx.files || {};
+      const configHints = [];
+      const topDirs = new Set();
+      const topFiles = new Set();
+      const allKeys = Object.keys(files);
+      // Determine which top-level names are directories vs files by checking
+      // whether they appear as a prefix for deeper entries.
+      const hasSlash = new Map(); // topName -> true if dir, false if top-level file
+      for (const rel of allKeys) {
+        const top = rel.split('/')[0];
+        if (!top || top.startsWith('.') || top === 'node_modules') continue;
+        if (rel === top) {
+          // A top-level file (no / in path) — only mark if not already known as dir
+          if (!hasSlash.has(top)) hasSlash.set(top, false);
+        } else {
+          // e.g. "src/agent.js" — top="src", this is a directory
+          hasSlash.set(top, true);
+        }
+        const base = rel.split('/').pop();
+        if (base === 'package.json' || base === 'README.md' || base === 'tsconfig.json') {
+          const f = files[rel];
+          configHints.push(`- ${rel} [role=${f.role}] snippet=${(f.snippet || []).slice(0, 1).join(' | ') || '-'}`);
+        }
+      }
+      for (const [name, isDir] of hasSlash) {
+        if (isDir) topDirs.add(name); else topFiles.add(name);
+      }
+      const topLines = [];
+      if (topDirs.size) topLines.push(`Top-level dirs: ${[...topDirs].sort().join(', ')}`);
+      if (topFiles.size) topLines.push(`Top-level files: ${[...topFiles].sort().join(', ')}`);
+      indexHint = `\n\nWorkspace structure (no query hits — start by exploring relevant directories):\n${topLines.join('\n')}${configHints.length ? '\n' + configHints.join('\n') : ''}\nUse list_dir to explore further.`;
     }
-  } catch {}
+  } catch (e) {
+    indexHint = `\n\nWorkspace index unavailable (${e.message || 'unknown error'}). Start with list_dir of the root directory to discover the project structure.`;
+  }
 
   // Build MCP tool hint for system prompt if MCP tools are available
   let mcpToolHint = null;
@@ -184,6 +261,7 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
     mcpToolHint,
     userRulesText,
     userMemoryText,
+    supportsVision: supportsVision(),
   });
 
   const boundedHistory = trimForContext(history, runtimeProfile.historyEntries);
@@ -191,11 +269,19 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
     ? `\n\nResume context from previous interrupted run:\n- previous_input: ${String(priorJournal.input || '').slice(0, 300)}\n- touched_files: ${(priorJournal.touchedFiles || []).slice(-20).join(', ') || '(none)'}\n- note: continue from latest completed work, avoid redoing already-touched steps unless necessary.`
     : '';
 
+  // Attached images (from the composer) are shown to this turn only. Vision
+  // endpoints get real image blocks; otherwise a vision endpoint describes them.
+  const userContent = await userContentWithImages(input + resumeContext, images, signal);
+
   const messages = [
     { role: 'system', content: sys },
     ...boundedHistory,
-    { role: 'user', content: input + resumeContext },
+    { role: 'user', content: userContent },
   ];
+
+  // Handed-back history stays text-only so base64 never gets persisted into a
+  // conversation file or resent on later turns.
+  const historyOut = () => stripImageBlocks(messages.slice(1));
 
   // Record user input as a turn for cross-session search
   const searchSessionId = process.env.SHMAKK_SESSION_ID || null;
@@ -224,30 +310,38 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
 
   // Tool loop. Streams content as it arrives; prints each tool call.
   let producedAnything = false;
+  const runState = { _dsmlLeakRetries: 0 };
+  let taskSpinnerStop = null;
+  const ensureSpinner = () => {
+    if (!taskSpinnerStop) taskSpinnerStop = startSpinner(write, 'thinking');
+  };
+  const stopTaskSpinner = () => {
+    if (taskSpinnerStop) { taskSpinnerStop(); taskSpinnerStop = null; }
+  };
   for (let i = 0; i < dynamicToolBudget; i++) {
-    if (signal && signal.aborted) return messages.slice(1);
+    if (signal && signal.aborted) { stopTaskSpinner(); return historyOut(); }
 
     // Stream the response so the user sees text as it generates.
     const cacheKey = promptCacheEnabled ? promptCache.makeKey({ model: modelName, messages, toolChoice: 'auto' }) : null;
     if (promptCacheEnabled && cacheKey) {
       const hit = promptCache.get(roots[0], cacheKey);
       if (hit && hit.content) {
+        stopTaskSpinner();
         if (emit) {
           emit({ type: 'message', content: hit.content, cached: true });
         } else {
           write(dim('[shmakk] prompt cache hit', colors) + '\n');
-          write(highlightCodeBlocks(hit.content, colors));
+          write(renderBlock(hit.content, { enabled: markdown, colors }));
           if (!hit.content.endsWith('\n')) write('\n');
         }
         messages.push({ role: 'assistant', content: hit.content });
         clearTaskJournal(roots[0]);
-        return messages.slice(1);
+        return historyOut();
       }
     }
 
-    const spinnerLabel = i === 0 ? 'thinking' : 'continuing';
-    if (emit) emit({ type: 'status', label: spinnerLabel });
-    const stop = emit ? () => {} : startSpinner(write, spinnerLabel);
+    if (emit) emit({ type: 'status', label: i === 0 ? 'thinking' : 'continuing' });
+    else ensureSpinner();
     const allTools = mcpManager ? [...TOOLS, ...mcpManager.getToolDefinitions()] : TOOLS;
     let stream;
     try {
@@ -259,30 +353,49 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
         model: modelName,
         messages, tools: allTools, tool_choice: toolChoiceForThisIter,
         temperature: 0, stream: true,
+        ...getDeepSeekOptions('tool_loop'),
       }, { signal });
     } catch (e) {
-      stop();
+      stopTaskSpinner();
       throw e;
     }
 
     let content = '';
     let reasoningContent = '';
     const toolCalls = []; // [{id, type:'function', function:{name, arguments}}]
-    let spinnerStopped = false;
+    let streamingContentOk = true;  // flipped to false on leak
     try {
       for await (const chunk of stream) {
+        // Check for abort between chunks.
+        if (signal && signal.aborted) {
+          streamingContentOk = false;
+          break;
+        }
         const delta = chunk.choices?.[0]?.delta;
         if (!delta) continue;
         if (delta.content) {
-          content += delta.content;
-          if (emit) emit({ type: 'delta', text: delta.content });
+          // ── Streaming guard: buffer tokens before flushing ──────────
+          // We never append tokens directly to visible chat state.
+          // Small lookbehind buffer so partial strings like "<｜｜DSML"
+          // are not flushed before we can detect them.
+          const token = delta.content;
+          content += token;
+          if (emit) emit({ type: 'delta', text: token });
+
+          // Check the trailing portion for partial DSML prefixes.
+          // Only check the last ~80 chars — enough to catch any prefix.
+          const tail = content.slice(-80);
+          if (mightBecomeInternalMarkup(tail)) {
+            // Hold back — don't flush yet, the next token may complete
+            // a benign string or reveal leaked markup.
+            continue;
+          }
         }
         if (typeof delta.reasoning_content === 'string' && delta.reasoning_content.length) {
           reasoningContent += delta.reasoning_content;
           if (emit) emit({ type: 'reasoning', text: delta.reasoning_content });
         }
         if (delta.tool_calls) {
-          if (!spinnerStopped) { stop(); spinnerStopped = true; }
           for (const tc of delta.tool_calls) {
             const idx = tc.index ?? 0;
             if (!toolCalls[idx]) toolCalls[idx] = { id: tc.id || '', type: 'function', function: { name: '', arguments: '' } };
@@ -294,7 +407,57 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
         }
       }
     } finally {
-      if (!spinnerStopped) stop();
+      // Spinner runs continuously from loop start — stopped below when
+      // we're about to show output or dispatch tools that may need input.
+    }
+
+    // ── DSML leak detection (after stream completes) ────────────────────
+    if (content && isLeakedToolMarkup(content)) {
+      const sanitized = sanitizeAssistantContent(content);
+      // Log the leak but do NOT persist raw content.
+      audit.append({
+        kind: 'dsml-leak',
+        model: modelFor('agent'),
+        leakedMarkupDetected: true,
+        retried: false,
+      });
+
+      // If this is the first leak in this turn, retry once with safer settings.
+      // We inject a user message telling the model not to emit DSML and re-run
+      // the current iteration.
+      const RETRY_MAX = 1;
+      if (!runState._dsmlLeakRetries) runState._dsmlLeakRetries = 0;
+
+      if (runState._dsmlLeakRetries < RETRY_MAX) {
+        runState._dsmlLeakRetries += 1;
+
+        // Remove the last user message (the one that triggered this turn)
+        // and replace it with the retry instruction so we don't grow history.
+        // Find the last user message index.
+        let lastUserIdx = -1;
+        for (let mi = messages.length - 1; mi >= 0; mi--) {
+          if (messages[mi].role === 'user') { lastUserIdx = mi; break; }
+        }
+        if (lastUserIdx >= 0) {
+          messages.splice(lastUserIdx, 1);
+        }
+        messages.push(DSML_RETRY_USER_MESSAGE);
+
+        // Disable thinking for this retry.
+        process.env._SHMAKK_FORCE_NO_THINKING = '1';
+        i--; // re-spend this iteration
+        audit.append({ kind: 'dsml-leak-retry', model: modelFor('agent') });
+        continue; // re-enter the tool loop
+      }
+
+      // Max retries exceeded — strip and show what we can.
+      content = sanitized.visibleText;
+      if (!content) {
+        stopTaskSpinner();
+        write(dim('[shmakk] response contained only leaked tool markup — blocked.', colors) + '\n');
+        clearTaskJournal(roots[0]);
+        return historyOut();
+      }
     }
 
     const fallbackActions = toolCalls.length ? [] : [
@@ -343,11 +506,12 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
 
     // No tools → done.
     if (!normalizedToolCalls.length) {
+      stopTaskSpinner();
       if (content) {
         if (emit) {
           emit({ type: 'message', content });
         } else {
-          write(highlightCodeBlocks(content, colors));
+          write(renderBlock(content, { enabled: markdown, colors }));
           if (!content.endsWith('\n')) write('\n');
         }
         producedAnything = true;
@@ -361,12 +525,13 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
         write(dim('[shmakk] model returned no response — try `shmakk --reset` or rephrase.', colors) + '\n');
       }
       clearTaskJournal(roots[0]);
-      return messages.slice(1);
+      return historyOut();
     }
 
     // Dispatch tool calls.
     // Reads/lists are noisy — collect them silently and show a single dim summary.
     // Writes, edits, runs, and errors always print clearly.
+    stopTaskSpinner();
     const SILENT_TOOLS = new Set(['read_file', 'list_dir', 'web_search', 'fetch_url']);
     let iterProgress = false;
     let silentReads = [];
@@ -391,7 +556,7 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
       if (canUseCache && toolResultCache.has(cacheKey)) {
         result = toolResultCache.get(cacheKey);
       } else {
-        result = await dispatchTool(c.function.name, args, roots, confirmTool, signal, mcpManager);
+        result = await dispatchTool(c.function.name, args, roots, guardedConfirm, signal, mcpManager);
         if (canUseCache && !result?.error) toolResultCache.set(cacheKey, result);
         iterProgress = true;
       }
@@ -414,10 +579,47 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
         write(dim(`→ ${c.function.name}(${shortArgs(args)})${summary ? ' — ' + summary : ''}`, colors) + '\n');
       }
 
-      messages.push({ role: 'tool', tool_call_id: c.id, content: JSON.stringify(result).slice(0, 8000) });
+      // Build tool result message. If the result includes images with real
+      // base64 data AND the current endpoint has `vision: true`, send them as
+      // vision content blocks in a follow-up user message. Otherwise just
+      // include image metadata in the text. Keep the tool message text-only.
+      // Only formats the provider accepts survive normalisation; anything else
+      // is converted to png up front or reported as text instead of sent.
+      const rawToolImages = Array.isArray(result.images) ? result.images.filter((img) => img.data) : [];
+      const prepared = rawToolImages.length ? await normalizeImages(rawToolImages) : { images: [], skipped: [] };
+      const toolImages = prepared.images;
+      const skippedNoteText = skippedNote(prepared.skipped);
+      const toolText = result.content || '';
+      const toolMeta = Object.fromEntries(
+        Object.entries(result || {}).filter(([k]) => !['content', 'images', 'error', 'isRetryable'].includes(k)),
+      );
+      let toolContent = (toolText + (Object.keys(toolMeta).length ? ' ' + JSON.stringify(toolMeta) : '')).trim();
+      if (skippedNoteText) toolContent = toolContent ? `${toolContent} ${skippedNoteText}` : skippedNoteText;
+      if (toolImages.length > 0 && !supportsVision()) {
+        // Endpoint doesn't support vision — call a vision-capable endpoint
+        // to describe the images as text for the non-vision model.
+        const visionDesc = await describeImages(toolImages, signal);
+        if (visionDesc) {
+          toolContent = toolContent ? `${toolContent}\n${visionDesc}` : visionDesc;
+        } else {
+          // Fallback: include image metadata as text
+          const imgDesc = toolImages.map((img, i) => `[Image #${i + 1}: ${img.mimeType}, base64=${img.dataLength} chars${img.truncated ? ', truncated' : ''}]`).join(', ');
+          toolContent = toolContent ? `${toolContent} ${imgDesc}` : imgDesc;
+        }
+      }
+      messages.push({ role: 'tool', tool_call_id: c.id, content: toolContent.slice(0, 8000) });
+      if (toolImages.length > 0 && supportsVision()) {
+        messages.push({
+          role: 'user',
+          content: imageBlocks(
+            `[Images returned by ${c.function.name}${toolImages.some((img) => img.truncated) ? ' (some truncated to ~2MB base64)' : ''}]`,
+            toolImages,
+          ),
+        });
+      }
       producedAnything = true;
       persistJournal('running');
-      if (signal && signal.aborted) return messages.slice(1);
+      if (signal && signal.aborted) return historyOut();
     }
 
     // Print batched read summary if any
@@ -433,6 +635,7 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
     }
 
     if (repeatedSignatureCount >= runtimeProfile.stallRepeat && noProgressRepeats >= 2) {
+      stopTaskSpinner();
       break;
     }
   }
@@ -448,23 +651,33 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
       temperature: 0,
       tool_choice: 'none',
       stream: false,
+      ...getDeepSeekOptions('tool_loop'),
     }, { signal });
     const finalText = final.choices?.[0]?.message?.content || '';
     if (finalText) {
+      // ── DSML leak guard (same as the main loop) ──────────────────────
+      const finalSanitized = sanitizeAssistantContent(finalText);
+      const displayText = finalSanitized.hadInternalLeak
+        ? finalSanitized.visibleText
+        : finalText;
+      if (finalSanitized.hadInternalLeak) {
+        audit.append({ kind: 'dsml-leak-finalize', model: modelFor('agent'), leakedMarkupDetected: true });
+      }
       if (emit) {
-        emit({ type: 'message', content: finalText });
-      } else {
-        write(finalText);
-        if (!finalText.endsWith('\n')) write('\n');
+        emit({ type: 'message', content: displayText });
+      } else if (displayText) {
+        write(renderBlock(displayText, { enabled: markdown, colors }));
+        if (!displayText.endsWith('\n')) write('\n');
       }
       clearTaskJournal(roots[0]);
-      return messages.slice(1);
+      return historyOut();
     }
   } catch {}
 
+  stopTaskSpinner();
   write(dim('[shmakk] paused after several tool rounds. Resume later continues from task journal; try `shmakk --reset` to clear.', colors) + '\n');
   persistJournal('paused');
-  return messages.slice(1);
+  return historyOut();
 }
 
 function runtimeSafeNumber(v, fallback) {

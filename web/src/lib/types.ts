@@ -6,7 +6,7 @@ export type AskStatus = 'pending' | 'yes' | 'no' | 'expired';
 
 interface Base { id: string; at: number }
 
-export interface AttachmentRef { name: string; size: number; content: string }
+export interface AttachmentRef { name: string; size: number; content: string; mimeType?: string; data?: string }
 export interface UserItem extends Base { type: 'user'; text: string; mode?: 'ask' | 'shell'; attachments?: { name: string; size: number }[] }
 export interface AssistantItem extends Base {
   type: 'assistant'; text: string; reasoning?: string; streaming?: boolean;
@@ -65,16 +65,42 @@ export interface Automation {
 }
 export interface ConvSnapshot extends ConvMeta { cwd: string; items: Item[]; running: boolean; activity: string | null }
 
+export interface Artefact {
+  id: string;
+  name: string;
+  path: string | null;
+  relPath: string;
+  mimeType: string;
+  size: number;
+  binary: boolean;
+  truncated: boolean;
+  note: string | null;
+  mode: Mode;
+  convId: string | null;
+  workspace: string | null;
+  createdAt: number;
+  updatedAt: number;
+  content?: string; // only present on the single-artefact endpoint
+}
+
 export interface Settings {
   review: boolean; yesFiles: boolean; noCorrection: boolean; noAi: boolean; debug: boolean;
   profile: string | null; ttsAuto: boolean; ttsVoice: string | null; voiceLanguage: string | null;
   voiceHandsFree: boolean; recentWorkspaces: string[];
   modelByMode: Record<Mode, string | null>; // per-space model override (null = default)
+  systemPrompt: string;                    // global instruction for every conversation
+}
+export interface RegistryModel {
+  name: string; // preset name in ~/.config/shmakk/endpoints.json
+  model: string; // model id sent to the provider
+  provider: string | null; vision: boolean; hasApiKey: boolean; default: boolean; fast: boolean;
 }
 export interface Provider {
   configured: boolean; endpoint: string | null; endpoints: string[]; baseUrl: string; model: string;
   apiKeyMasked: string | null; hasApiKey: boolean; headers: string; modelList: string;
-  models: string[]; // available model names, from the endpoint's model list (~/.config/shmakk/endpoints.js)
+  models: string[]; // selectable model ids: the registry first, env vars only as fallback
+  registry: RegistryModel[]; // parsed from ~/.config/shmakk/endpoints.json
+  modelsSource: 'registry' | 'endpoint' | 'env';
 }
 export interface Features {
   terminal: boolean; terminalReason: string | null; sessionSearch: boolean; stt: boolean; tts: boolean;
@@ -108,6 +134,7 @@ export type ServerMsg =
   | { t: 'status.changed' }
   | { t: 'projects.changed' }
   | { t: 'automations.changed' }
+  | { t: 'artefacts.changed' }
   | { t: 'automation.finished'; id: string; name: string; status: string; convId: string }
   | { t: 'design.changed'; convId: string }
   | { t: 'toast'; level: 'error' | 'info' | 'ok'; text: string }
@@ -115,4 +142,7 @@ export type ServerMsg =
   | { t: 'term.exit'; id: string; code: number; error?: string }
   | { t: 'pong' };
 
-export type ViewId = 'chat' | 'project' | 'automations' | 'github' | 'skills' | 'memory' | 'plan' | 'changes' | 'recall' | 'team' | 'mcp' | 'activity' | 'settings';
+export type ViewId = 'chat' | 'project' | 'automations' | 'github' | 'skills' | 'memory' | 'plan' | 'changes' | 'recall' | 'team' | 'mcp' | 'activity' | 'artefacts' | 'settings';
+
+/** Panes of the right-hand inspector, in tab order. */
+export type DocPane = 'browser' | 'changes' | 'plan';

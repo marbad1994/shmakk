@@ -1,10 +1,44 @@
 // shmakk orchestrator entry point.
 // Manages signal-driven lifecycle (restart, exit, profile changes) and
 // delegates each session to ./session.js.
+//
+// Browser CDP connector — loaded here so tools.js can discover it
+// through the orchestrator without requiring a direct dependency on
+// ./core/browserConnector from every call site.
 
 const { runOneSession } = require('./session');
 const { normalizeProfile } = require('./profiles');
 const { profileSignalPath } = require('./control');
+
+// Lazy-load the browser CDP connector (Playwright optional dep).
+let _browserConnector = null;
+function _getBrowserConnector() {
+  if (_browserConnector) return _browserConnector;
+  try {
+    _browserConnector = require('./core/browserConnector');
+  } catch (e) {
+    _browserConnector = null;
+  }
+  return _browserConnector;
+}
+
+// Execute a browser action against a user-connected Chrome instance via CDP.
+// This is the primary entry point for the agent's 'browser' tool when
+// the user has run `shmakk connect-browser` to attach to their own Chrome.
+async function executeBrowserAction(args) {
+  const bc = _getBrowserConnector();
+  if (!bc) {
+    return { error: 'Browser connector unavailable. playwright must be installed as an optional dependency.' };
+  }
+  return await bc.executeBrowserAction(args);
+}
+
+// Classify a browser action for safety gating.
+function classifyBrowserAction(args) {
+  const bc = _getBrowserConnector();
+  if (!bc) return 'uncertain';
+  return bc.classifyBrowserAction(args);
+}
 
 function isAbortError(e) {
   return e && (e.name === 'AbortError' || /aborted/i.test(String(e.message || '')));
@@ -58,4 +92,4 @@ async function start(opts) {
   return lastExit;
 }
 
-module.exports = { start };
+module.exports = { start, executeBrowserAction, classifyBrowserAction };

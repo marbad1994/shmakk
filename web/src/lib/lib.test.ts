@@ -34,6 +34,17 @@ describe('utils', () => {
 });
 
 import { defaultSchedule, describe as describeSchedule, fromCron, toCron } from './schedule';
+import { langFromPath } from '@/components/ui/code-view';
+
+describe('design code viewer', () => {
+  it('maps previewable design files to highlight languages', () => {
+    expect(langFromPath('index.html')).toBe('xml');
+    expect(langFromPath('logo.svg')).toBe('xml');
+    expect(langFromPath('styles/site.css')).toBe('css');
+    expect(langFromPath('app.tsx')).toBe('typescript');
+    expect(langFromPath('notes.txt')).toBe(null);
+  });
+});
 
 describe('schedule', () => {
   it('builds cron from friendly choices', () => {

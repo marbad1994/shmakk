@@ -93,6 +93,173 @@ const test = (name, fn) => tests.push({ name, fn });
   });
 }
 
+// ── CLI parsing / completions ──────────────────────────────────────────────
+{
+  const { parseArgs } = require('../src/cli');
+  const { FLAGS } = require('../src/completions');
+  const { _test: endpointsTest } = require('../src/endpoints');
+
+  test('cli: vim mode defaults to vi and accepts vi/vim/disable', () => {
+    assert.strictEqual(parseArgs([]).vim, 'vi');
+    assert.strictEqual(parseArgs(['--vim', 'vi']).vim, 'vi');
+    assert.strictEqual(parseArgs(['--vim', 'vim']).vim, 'vim');
+    assert.strictEqual(parseArgs(['--vim', 'disable']).vim, 'disable');
+  });
+
+  test('cli: -- passes remaining args through for hidden vim wrapper', () => {
+    const opts = parseArgs(['--vim-editor', 'vim', '--vim-real', '/usr/bin/vim', '--', '--help', 'file.txt']);
+    assert.strictEqual(opts.help, false);
+    assert.deepStrictEqual(opts.unknown, ['--help', 'file.txt']);
+  });
+
+  test('cli: parses browser-daemon subcommand', () => {
+    const opts = parseArgs(['browser-daemon', '--port', '3948']);
+    assert.strictEqual(opts.browserDaemon, true);
+    assert.strictEqual(opts.browserDaemonPort, 3948);
+    assert.deepStrictEqual(opts.unknown, []);
+  });
+
+  test('completions: includes --vim argument choices', () => {
+    const flag = FLAGS.find((f) => f.flag === '--vim');
+    assert.ok(flag);
+    assert.strictEqual(flag.arg, '<vi|vim|disable>');
+  });
+
+  test('endpoints: registry supports main and fast model roles', () => {
+    const registry = endpointsTest.normalizeRegistry({
+      main: 'pro',
+      fast: 'flash',
+      models: {
+        pro: { provider: 'google', model: 'gemini-pro' },
+        flash: { provider: 'google', model: 'gemini-flash' },
+      },
+    });
+    assert.strictEqual(registry.main, 'pro');
+    assert.strictEqual(registry.fast, 'flash');
+  });
+
+  test('endpoints: fast can be marked on a model entry', () => {
+    const registry = endpointsTest.normalizeRegistry({
+      models: {
+        pro: { provider: 'google', model: 'gemini-pro', main: true },
+        flash: { provider: 'google', model: 'gemini-flash', fast: true },
+      },
+    });
+    assert.strictEqual(registry.main, 'pro');
+    assert.strictEqual(registry.fast, 'flash');
+  });
+}
+
+// ── shmakk vim mode ────────────────────────────────────────────────────────
+{
+  const { commandUsesShmakk, _test: vimTest } = require('../src/vim');
+
+  test('vim: :cmd blocks shmakk recursion', () => {
+    assert.strictEqual(commandUsesShmakk('shmakk status'), true);
+    assert.strictEqual(commandUsesShmakk('npm test && shmakk status'), true);
+    assert.strictEqual(commandUsesShmakk('git status'), false);
+  });
+
+  test('vim: strips markdown fences from generated code', () => {
+    assert.strictEqual(vimTest.stripFence('```js\nconst x = 1;\n```'), 'const x = 1;');
+    assert.strictEqual(vimTest.stripFence('plain text'), 'plain text');
+  });
+
+  test('vim: generated commands preserve raw quoted args', () => {
+    const plugin = vimTest.writePlugin();
+    try {
+      const txt = fs.readFileSync(plugin, 'utf8');
+      assert.ok(txt.includes('command! -nargs=* ShmakkCommand call ShmakkCommand(<q-args>)'));
+      assert.ok(txt.includes('command! -nargs=* ShmakkGenerate call ShmakkGenerate(<q-args>)'));
+      assert.ok(!txt.includes('<f-args>'));
+      assert.ok(txt.includes('command! -nargs=* G call ShmakkGenerate(<q-args>)'));
+      assert.ok(txt.includes('command! -nargs=* Cmd call ShmakkCommand(<q-args>)'));
+      assert.ok(txt.includes('command! -nargs=0 ShmakkSuggest call ShmakkSuggest()'));
+      assert.ok(txt.includes('autocmd TextChangedI <buffer> call s:ScheduleAutoSuggest()'));
+      assert.ok(txt.includes('if !get(g:, "shmakk_auto_suggest", 0) | return | endif'));
+      assert.ok(txt.includes('job_start([s:shmakk_node, s:shmakk_bin, "--vim-ai", "suggest"]'));
+      assert.ok(!txt.includes('cnoremap'));
+      assert.ok(!txt.includes('cnoreabbrev'));
+    } finally {
+      fs.rmSync(plugin, { force: true });
+    }
+  });
+
+  test('vim: generated plugin escapes newline strings for Vimscript', () => {
+    const plugin = vimTest.writePlugin();
+    try {
+      const txt = fs.readFileSync(plugin, 'utf8');
+      assert.ok(txt.includes('join(getline(1, "$"), "\\n")'));
+      assert.ok(txt.includes('split(a:text, "\\n", v:true)'));
+      assert.ok(txt.includes('split(r.stdout, "\\n", v:true)'));
+      assert.ok(!txt.includes('join(getline(1, "$"), "\n")'));
+    } finally {
+      fs.rmSync(plugin, { force: true });
+    }
+  });
+
+  test('vim: C-Space uses full-block suggestion instead of completefunc', () => {
+    const plugin = vimTest.writePlugin();
+    try {
+      const txt = fs.readFileSync(plugin, 'utf8');
+      assert.ok(txt.includes('function! ShmakkSuggest() abort'));
+      assert.ok(txt.includes('echo "[shmakk] suggesting..." | redraw'));
+      assert.ok(txt.includes('Accept shmakk suggestion?'));
+      assert.ok(txt.includes('inoremap <silent> <C-Space> <Esc>:call ShmakkSuggest()<CR>a'));
+      assert.ok(txt.includes('command! -nargs=0 ShmakkAccept call ShmakkAccept()'));
+      assert.ok(txt.includes('command! -nargs=0 ShmakkDeny call ShmakkDeny()'));
+      assert.ok(txt.includes('command! -nargs=0 ShmakkPreview call ShmakkPreview()'));
+      assert.ok(!txt.includes('completefunc=ShmakkComplete'));
+      assert.ok(!txt.includes('function! ShmakkComplete'));
+    } finally {
+      fs.rmSync(plugin, { force: true });
+    }
+  });
+
+  test('vim: pending suggestion accept previews before insertion', () => {
+    const plugin = vimTest.writePlugin();
+    try {
+      const txt = fs.readFileSync(plugin, 'utf8');
+      const acceptStart = txt.indexOf('function! ShmakkAccept() abort');
+      const acceptEnd = txt.indexOf('function! ShmakkDeny() abort');
+      const acceptBlock = txt.slice(acceptStart, acceptEnd);
+      assert.ok(acceptBlock.includes('file [shmakk-suggestion]'));
+      assert.ok(acceptBlock.includes('Accept shmakk suggestion?'));
+      assert.ok(acceptBlock.includes('call s:InsertAtCursor(text)'));
+    } finally {
+      fs.rmSync(plugin, { force: true });
+    }
+  });
+
+  test('vim: suggestion context is trimmed around cursor', () => {
+    const lines = Array.from({ length: 300 }, (_, i) => `line ${i + 1}`);
+    const out = vimTest.contextWindow({ buffer: lines.join('\n'), line: 200 }, 'suggest');
+    assert.ok(out.includes('line 200'));
+    assert.ok(!out.includes('line 1\n'));
+    assert.ok(out.includes('Earlier lines omitted'));
+    assert.ok(out.includes('Later lines omitted'));
+  });
+
+  test('vim: suggestions prefer dedicated fast endpoint env', () => {
+    const prevSuggest = process.env.SHMAKK_VIM_SUGGEST_ENDPOINT;
+    const prevFast = process.env.SHMAKK_FAST_ENDPOINT;
+    try {
+      delete process.env.SHMAKK_VIM_SUGGEST_ENDPOINT;
+      delete process.env.SHMAKK_FAST_ENDPOINT;
+      assert.strictEqual(vimTest.suggestEndpointName(), 'fast');
+      process.env.SHMAKK_FAST_ENDPOINT = 'flash';
+      assert.strictEqual(vimTest.suggestEndpointName(), 'flash');
+      process.env.SHMAKK_VIM_SUGGEST_ENDPOINT = 'tiny';
+      assert.strictEqual(vimTest.suggestEndpointName(), 'tiny');
+    } finally {
+      if (prevSuggest === undefined) delete process.env.SHMAKK_VIM_SUGGEST_ENDPOINT;
+      else process.env.SHMAKK_VIM_SUGGEST_ENDPOINT = prevSuggest;
+      if (prevFast === undefined) delete process.env.SHMAKK_FAST_ENDPOINT;
+      else process.env.SHMAKK_FAST_ENDPOINT = prevFast;
+    }
+  });
+}
+
 // ── correction NL pre-filter ───────────────────────────────────────────────
 {
   const { looksLikeNaturalLanguage } = require('../src/correction');
@@ -168,6 +335,31 @@ const test = (name, fn) => tests.push({ name, fn });
     for (const p of ['.gitignore', '.editorconfig', 'README.md', 'src/index.js']) {
       assert.strictEqual(isSecretPath(p), false, `expected non-secret: ${p}`);
     }
+  });
+}
+
+// ── LLM message normalization ───────────────────────────────────────────────
+{
+  const { _test: llmTest } = require('../src/llm');
+
+  test('llm: downgrades image_url content blocks to text placeholders', () => {
+    const messages = [{
+      role: 'user',
+      content: [
+        { type: 'text', text: 'look at this' },
+        { type: 'image_url', image_url: { url: 'data:image/png;base64,abcd', detail: 'auto' } },
+      ],
+    }];
+    assert.strictEqual(llmTest.hasVisionContent(messages), true);
+    const downgraded = llmTest.downgradeVisionMessages(messages);
+    assert.strictEqual(downgraded[0].content, 'look at this\n[Image omitted: image/png, base64=4 chars, detail=auto]');
+    assert.strictEqual(llmTest.hasVisionContent(downgraded), false);
+  });
+
+  test('llm: detects image_url schema rejection errors', () => {
+    const err = new Error('400 Failed to deserialize the JSON body into the target type: messages[35]: unknown variant `image_url`, expected `text`');
+    err.status = 400;
+    assert.strictEqual(llmTest.isImageUrlSchemaError(err), true);
   });
 }
 
@@ -368,6 +560,100 @@ const test = (name, fn) => tests.push({ name, fn });
   });
 }
 
+// ── Vibedit state ─────────────────────────────────────────────────────────
+{
+  const path = require('path');
+  const { vibeditState } = require('../src/vibedit/state');
+
+  test('vibedit: state paths live under .shmakk/state', () => {
+    const root = '/tmp/shmakk-project';
+    const state = vibeditState(root);
+    assert.strictEqual(state.stateDir, path.join(root, '.shmakk', 'state'));
+    assert.strictEqual(state.pendingSpecFile, path.join(root, '.shmakk', 'state', 'vibedit-specs', 'pending'));
+    assert.strictEqual(state.pageStateFile, path.join(root, '.shmakk', 'state', 'vibedit-page-state.json'));
+    assert.ok(!Object.values(state).some((p) => String(p).includes('.' + 'vibedit')));
+  });
+
+  test('vibedit: launchers default to dynamic control ports', () => {
+    const web = fs.readFileSync(path.join(__dirname, '..', 'src', 'vibedit', 'index.js'), 'utf8');
+    const electron = fs.readFileSync(path.join(__dirname, '..', 'src', 'vibedit', 'electron.js'), 'utf8');
+    const overlay = fs.readFileSync(path.join(__dirname, '..', 'src', 'vibedit', 'overlay.js'), 'utf8');
+    assert.match(web, /const VIBEDIT_CONTROL_PORT = 0/);
+    assert.match(electron, /const VIBEDIT_CONTROL_PORT = 0/);
+    assert.ok(!web.includes('3947'));
+    assert.ok(!electron.includes('3947'));
+    assert.ok(!overlay.includes('8417'));
+  });
+}
+
+// ── Browser Automator extension ───────────────────────────────────────────
+{
+  const path = require('path');
+  const vm = require('vm');
+  const extDir = path.join(__dirname, '..', 'extensions', 'vibedit');
+  const content = fs.readFileSync(path.join(extDir, 'content.js'), 'utf8');
+  const background = fs.readFileSync(path.join(extDir, 'background.js'), 'utf8');
+  const popupHtml = fs.readFileSync(path.join(extDir, 'popup.html'), 'utf8');
+  const popupJs = fs.readFileSync(path.join(extDir, 'popup.js'), 'utf8');
+  const manifest = JSON.parse(fs.readFileSync(path.join(extDir, 'manifest.json'), 'utf8'));
+
+  test('browser automator extension: manifest and popup use automation branding', () => {
+    assert.strictEqual(manifest.name, 'shmakk Browser Automator');
+    assert.strictEqual(manifest.action.default_title, 'shmakk Browser Automator');
+    assert.match(manifest.description, /Automation overlay/i);
+    assert.match(popupHtml, /shmakk Browser Automator/);
+    assert.match(popupHtml, /shmakk browser-daemon/);
+    assert.match(popupJs, /browser-daemon/);
+  });
+
+  test('browser automator extension: content script excludes editor features', () => {
+    for (const forbidden of [
+      'saveBtn',
+      'editBtn',
+      'applyOps',
+      'saveResult',
+      'chatResult',
+      'inspector',
+      'source-spec',
+      'flowApply',
+      'executeScript',
+    ]) {
+      assert.ok(!content.includes(forbidden), `content.js should not contain ${forbidden}`);
+    }
+    assert.ok(content.includes('type: "automation"'));
+    assert.ok(content.includes('Describe what to automate...'));
+    assert.ok(content.includes('browserAutomator:'));
+    assert.ok(content.includes('chrome.storage.local.set'));
+    assert.ok(content.includes('chrome.storage.local.get'));
+  });
+
+  test('browser automator extension: background only forwards automation requests', () => {
+    assert.ok(background.includes("msg.type === 'automation'"));
+    assert.ok(background.includes("msg.type === 'executeTabAction'"));
+    assert.ok(background.includes('browserAutomator:${tabId}:'));
+    for (const forbidden of [
+      "msg.type === 'chat'",
+      "msg.type === 'save'",
+      "msg.type === 'flowStart'",
+      "msg.type === 'flowStop'",
+      "msg.type === 'flowApply'",
+      "msg.type === 'context'",
+      "msg.type === 'screenshot'",
+      "msg.type === 'executeScript'",
+      "msg.type === 'chatResult'",
+      "msg.type === 'saveResult'",
+    ]) {
+      assert.ok(!background.includes(forbidden), `background.js should not contain ${forbidden}`);
+    }
+  });
+
+  test('browser automator extension: scripts parse as JavaScript', () => {
+    new vm.Script(content, { filename: 'content.js' });
+    new vm.Script(background, { filename: 'background.js' });
+    new vm.Script(popupJs, { filename: 'popup.js' });
+  });
+}
+
 // ── self-commands ─────────────────────────────────────────────────────────
 {
   const { matchSelfCommand, SELF_COMMANDS } = require('../src/self-commands');
@@ -393,10 +679,10 @@ const test = (name, fn) => tests.push({ name, fn });
   });
 
   test('self-commands: destructive commands have confirm flag', () => {
-    const r1 = matchSelfCommand('compact');
+    const r1 = matchSelfCommand('/compact');
     assert.strictEqual(r1.matched, true);
     assert.strictEqual(r1.confirm, true);
-    const r2 = matchSelfCommand('reset');
+    const r2 = matchSelfCommand('/reset');
     assert.strictEqual(r2.matched, true);
     assert.strictEqual(r2.confirm, true);
   });
@@ -417,7 +703,7 @@ const test = (name, fn) => tests.push({ name, fn });
   });
 
   test('self-commands: matches "help" and "show help"', () => {
-    assert.strictEqual(matchSelfCommand('help').action, 'show-help');
+    assert.strictEqual(matchSelfCommand('/help').action, 'show-help');
     assert.strictEqual(matchSelfCommand('show help').action, 'show-help');
     assert.strictEqual(matchSelfCommand('what can you do').action, 'show-help');
   });
@@ -450,6 +736,17 @@ const test = (name, fn) => tests.push({ name, fn });
     assert.strictEqual(matchSelfCommand('enable correction').action, 'enable-correction');
   });
 
+  test('self-commands: matches voice mode toggles', () => {
+    assert.strictEqual(matchSelfCommand('enable stt').action, 'enable-stt');
+    assert.strictEqual(matchSelfCommand('disable stt').action, 'disable-stt');
+    assert.strictEqual(matchSelfCommand('enable tts').action, 'enable-tts');
+    assert.strictEqual(matchSelfCommand('disable tts').action, 'disable-tts');
+    assert.strictEqual(matchSelfCommand('enable sts').action, 'enable-sts');
+    assert.strictEqual(matchSelfCommand('disable sts').action, 'disable-sts');
+    assert.strictEqual(matchSelfCommand('turn on speech to text').action, 'enable-stt');
+    assert.strictEqual(matchSelfCommand('turn off speech to speech').action, 'disable-sts');
+  });
+
   test('self-commands: matches set profile with confirm flag', () => {
     const r = matchSelfCommand('set profile to deep');
     assert.strictEqual(r.action, 'set-profile');
@@ -467,6 +764,53 @@ const test = (name, fn) => tests.push({ name, fn });
     assert.strictEqual(opts.review, false);
     executeSelfCommand({ action: 'enable-debug' }, (s) => out.push(s), { opts });
     assert.strictEqual(opts.debug, true);
+  });
+
+  test('self-commands: executeSelfCommand mutates voice opts via ctx', () => {
+    const { executeSelfCommand } = require('../src/self-commands');
+    const opts = { stt: false, tts: false, sts: false, voice: false };
+    const out = [];
+    executeSelfCommand({ action: 'enable-stt' }, (s) => out.push(s), { opts });
+    assert.strictEqual(opts.stt, true);
+    assert.strictEqual(opts.tts, false);
+    assert.strictEqual(opts.sts, false);
+    assert.strictEqual(opts.voice, true);
+    executeSelfCommand({ action: 'enable-tts' }, (s) => out.push(s), { opts });
+    assert.strictEqual(opts.stt, false);
+    assert.strictEqual(opts.tts, true);
+    assert.strictEqual(opts.sts, false);
+    assert.strictEqual(opts.voice, false);
+    executeSelfCommand({ action: 'enable-sts' }, (s) => out.push(s), { opts });
+    assert.strictEqual(opts.sts, true);
+    assert.strictEqual(opts.stt, false);
+    assert.strictEqual(opts.tts, false);
+    assert.strictEqual(opts.voice, true);
+    executeSelfCommand({ action: 'disable-sts' }, (s) => out.push(s), { opts });
+    assert.strictEqual(opts.sts, false);
+    assert.strictEqual(opts.stt, false);
+    assert.strictEqual(opts.tts, false);
+    assert.strictEqual(opts.voice, false);
+  });
+
+  test('cli: voice flags are last-one-wins', () => {
+    const { parseArgs } = require('../src/cli');
+    let opts = parseArgs(['--stt', '--tts']);
+    assert.strictEqual(opts.stt, false);
+    assert.strictEqual(opts.tts, true);
+    assert.strictEqual(opts.sts, false);
+    assert.strictEqual(opts.voice, false);
+
+    opts = parseArgs(['--tts', '--sts']);
+    assert.strictEqual(opts.stt, false);
+    assert.strictEqual(opts.tts, false);
+    assert.strictEqual(opts.sts, true);
+    assert.strictEqual(opts.voice, true);
+
+    opts = parseArgs(['--sts', '--voice']);
+    assert.strictEqual(opts.stt, true);
+    assert.strictEqual(opts.tts, false);
+    assert.strictEqual(opts.sts, false);
+    assert.strictEqual(opts.voice, true);
   });
 
   test('self-commands: executeSelfCommand sets env var for model', () => {
@@ -687,7 +1031,7 @@ const test = (name, fn) => tests.push({ name, fn });
 
   test('self-commands: matches "show rules", "rules", "my rules"', () => {
     assert.strictEqual(matchSelfCommand('show rules').action, 'show-rules');
-    assert.strictEqual(matchSelfCommand('rules').action, 'show-rules');
+    assert.strictEqual(matchSelfCommand('/rules').action, 'show-rules');
     assert.strictEqual(matchSelfCommand('my rules').action, 'show-rules');
     assert.strictEqual(matchSelfCommand('what are my rules?').action, 'show-rules');
   });
@@ -827,7 +1171,7 @@ const test = (name, fn) => tests.push({ name, fn });
 
   test('self-commands: memory commands match', () => {
     assert.strictEqual(matchSelfCommand('show memory').action, 'show-memory');
-    assert.strictEqual(matchSelfCommand('memory').action, 'show-memory');
+    assert.strictEqual(matchSelfCommand('/memory').action, 'show-memory');
     assert.strictEqual(matchSelfCommand('my memory').action, 'show-memory');
     const f = matchSelfCommand('forget the old jwt setup');
     assert.strictEqual(f.action, 'forget-memory');
@@ -988,7 +1332,7 @@ const test = (name, fn) => tests.push({ name, fn });
   test('self-commands: matches "list workflows" / "workflows"', () => {
     assert.strictEqual(matchSelfCommand('list workflows').action, 'list-workflows');
     assert.strictEqual(matchSelfCommand('show workflows').action, 'list-workflows');
-    assert.strictEqual(matchSelfCommand('workflows').action, 'list-workflows');
+    assert.strictEqual(matchSelfCommand('/workflows').action, 'list-workflows');
   });
 
   test('self-commands: matches "run workflow X" with arg', () => {
@@ -1000,7 +1344,7 @@ const test = (name, fn) => tests.push({ name, fn });
   test('self-commands: matches "list agents" / "specialists"', () => {
     assert.strictEqual(matchSelfCommand('list agents').action, 'list-agents');
     assert.strictEqual(matchSelfCommand('show specialists').action, 'list-agents');
-    assert.strictEqual(matchSelfCommand('agents').action, 'list-agents');
+    assert.strictEqual(matchSelfCommand('/agents').action, 'list-agents');
   });
 }
 
@@ -1021,15 +1365,16 @@ const test = (name, fn) => tests.push({ name, fn });
   });
 
   test('self-commands: representative inputs match before correction would run', () => {
-    // These are inputs that fish/bash would reject as "command not found".
-    // The exit handler checks matchSelfCommand FIRST; if matched, correction
-    // and agent are both skipped. We just verify the patterns trigger.
+    // Single-word commands use / prefix or shmakk prefix.
+    // Multi-word natural language works without a prefix.
+    // Bare words like "help" or "status" are NOT intercepted (they go to the shell).
     const inputs = [
-      'help', 'show help', 'list skills', 'skills', 'show plan', 'stats',
-      'status', 'mcp status', 'compact', 'reset', 'show rules', 'rules',
-      'review edits', 'show changes', 'enable review', 'disable review',
-      'colors on', 'colors off', 'debug on', 'debug off',
-      'set model to gpt-4o', 'set base url to http://x.local', 'auto mode',
+      '/help', 'show help', 'list skills', '/skills', 'show plan',
+      '/stats', '/status', 'mcp status', '/compact', '/reset',
+      'show rules', '/rules', 'review edits', 'show changes',
+      'enable review', 'disable review', 'colors on', 'colors off',
+      'debug on', 'debug off', 'set model to gpt-4o',
+      'set base url to http://x.local', 'auto mode',
     ];
     for (const i of inputs) {
       const m = matchSelfCommand(i);
@@ -1047,6 +1392,42 @@ const test = (name, fn) => tests.push({ name, fn });
       const m = matchSelfCommand(i);
       assert.strictEqual(m.matched, false, `"${i}" should not match a self-command`);
     }
+  });
+
+  test('self-commands: /-prefixed unknown commands are recognized as shmakk-addressed', () => {
+    // /-prefixed commands that don't match a known self-command should
+    // still be identified as shmakk-addressed so the corrector skips them.
+    // This is tested via the correction engine directly.
+    const { correct } = require('../src/correction');
+    // Verify the corrector bails out for /-prefixed input
+    const r1 = matchSelfCommand('/some-unknown-command');
+    assert.strictEqual(r1.matched, false, 'unknown /cmd should not match a self-command');
+    // But the corrector should reject it (tested async below)
+  });
+}
+
+// ── corrector: /-prefix bypass ─────────────────────────────────────────────
+{
+  const { correct } = require('../src/correction');
+
+  test('corrector: /-prefixed commands are skipped', async () => {
+    // No glossary needed — the guard runs before glossary access
+    const r = await correct({ input: '/status', glossary: null });
+    assert.strictEqual(r.category, 'not_a_correction');
+    assert.ok(r.reason.includes('shmakk self-command'));
+  });
+
+  test('corrector: shmakk-prefixed commands are skipped', async () => {
+    const r = await correct({ input: 'shmakk compact', glossary: null });
+    assert.strictEqual(r.category, 'not_a_correction');
+    assert.ok(r.reason.includes('shmakk self-command'));
+  });
+
+  test('corrector: normal commands still reach correction logic', async () => {
+    const r = await correct({ input: 'git statsu', glossary: null });
+    // Without a glossary it'll fail at the glossary check, but not at the / prefix guard
+    assert.strictEqual(r.category, 'not_a_correction');
+    assert.ok(r.reason.includes('no glossary'));
   });
 }
 
@@ -1187,6 +1568,8 @@ test('modules: all entry modules load', () => {
   require('../src/agent');
   require('../src/review');
   require('../src/orchestrator');
+  require('../src/browser-daemon');
+  require('../src/cli/browserDaemon');
 });
 
 // ── runner ─────────────────────────────────────────────────────────────────
@@ -1260,6 +1643,56 @@ test('webui terminal: settings map onto CLI flags', () => {
   assert.deepStrictEqual(cliFlags({ review: true, yesFiles: true, profile: 'deep' }, '/w'), ['--review', '--yes-files', '--profile', 'deep', '--workspace', '/w']);
   assert.deepStrictEqual(cliFlags({}, null), []);
 });
+
+test('webui provider: the model registry drives selectable models, env is only the fallback', () => withTempHome(async (dir) => {
+  const path = require('path');
+  const cfgDir = path.join(dir, '.config', 'shmakk');
+  fs.mkdirSync(cfgDir, { recursive: true });
+  fs.writeFileSync(path.join(cfgDir, 'endpoints.json'), JSON.stringify({
+    main: 'claude',
+    fast: 'kimi',
+    models: {
+      'gpt-5': { provider: 'codex', model: 'gpt-5-codex', vision: true },
+      claude: { provider: 'anthropic', model: 'claude-sonnet-4-5', api_key: 'sk-secret-value' },
+      kimi: { provider: 'openai-compatible', model: 'moonshotai/kimi-k2.6', base_url: 'http://127.0.0.1:1234/v1' },
+    },
+  }));
+  const savedEnv = { MODEL: process.env.SHMAKK_MODEL, MODELS: process.env.SHMAKK_MODELS, BASE: process.env.SHMAKK_BASE_URL };
+  process.env.SHMAKK_MODELS = 'env-only-model';
+  const { startWebServer } = require('../src/webui/server');
+  const read = async () => {
+    const h = await startWebServer({ port: 0, workspace: dir, quiet: true, token: 'tok-reg' });
+    try {
+      const raw = await (await fetch(h.baseUrl + '/api/provider', { headers: { authorization: 'Bearer tok-reg' } })).text();
+      return { raw, p: JSON.parse(raw) };
+    } finally { await h.close(); }
+  };
+  try {
+    const { raw, p } = await read();
+    assert.ok(!raw.includes('sk-secret-value'), 'api keys never leave the server');
+    assert.strictEqual(p.modelsSource, 'registry');
+    assert.deepStrictEqual(p.registry.map((m) => m.name), ['claude', 'gpt-5', 'kimi'], 'main entry first');
+    assert.deepStrictEqual(p.registry.filter((m) => m.vision).map((m) => m.name), ['claude', 'gpt-5'], 'vision is reported per entry');
+    assert.strictEqual(p.registry.find((m) => m.name === 'claude').default, true);
+    assert.deepStrictEqual(p.endpoints, ['gpt-5', 'claude', 'kimi'], 'file order');
+    // Model ids from the registry are what the composer offers.
+    assert.ok(p.models.includes('claude-sonnet-4-5'), JSON.stringify(p.models));
+    assert.ok(p.models.includes('moonshotai/kimi-k2.6'));
+    assert.ok(p.models.includes('gpt-5-codex'));
+    assert.ok(!p.models.includes('env-only-model'), 'env must not override the registry');
+
+    // Without a registry the environment is the fallback.
+    fs.rmSync(path.join(cfgDir, 'endpoints.json'));
+    const fallback = (await read()).p;
+    assert.strictEqual(fallback.modelsSource, 'env');
+    assert.deepStrictEqual(fallback.registry, []);
+    assert.ok(fallback.models.includes('env-only-model'), JSON.stringify(fallback.models));
+  } finally {
+    if (savedEnv.MODEL === undefined) delete process.env.SHMAKK_MODEL; else process.env.SHMAKK_MODEL = savedEnv.MODEL;
+    if (savedEnv.MODELS === undefined) delete process.env.SHMAKK_MODELS; else process.env.SHMAKK_MODELS = savedEnv.MODELS;
+    if (savedEnv.BASE === undefined) delete process.env.SHMAKK_BASE_URL; else process.env.SHMAKK_BASE_URL = savedEnv.BASE;
+  }
+}));
 
 test('webui server: token auth, origin check, settings never leak secrets', () => withTempHome(async (dir) => {
   const { startWebServer } = require('../src/webui/server');
@@ -1355,6 +1788,151 @@ test('webui chat: attachments are inlined into the prompt and kept off the store
     if (savedUrl !== undefined) process.env.SHMAKK_BASE_URL = savedUrl;
   }
 }));
+
+// ── image formats ───────────────────────────────────────────────────────────
+
+{
+  const images = require('../src/images');
+  const PNG_1PX = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==',
+    'base64',
+  );
+
+  // 2x2 24-bit BMP: enough for sniffing and for a real converter round-trip.
+  const tinyBmp = () => {
+    const w = 2; const h = 2; const rowSize = Math.ceil((w * 3) / 4) * 4;
+    const pixels = rowSize * h;
+    const buf = Buffer.alloc(54 + pixels);
+    buf.write('BM', 0, 'latin1');
+    buf.writeUInt32LE(buf.length, 2);
+    buf.writeUInt32LE(54, 10);
+    buf.writeUInt32LE(40, 14);
+    buf.writeInt32LE(w, 18);
+    buf.writeInt32LE(h, 22);
+    buf.writeUInt16LE(1, 26);
+    buf.writeUInt16LE(24, 28);
+    buf.writeUInt32LE(pixels, 34);
+    buf.writeInt32LE(2835, 38);
+    buf.writeInt32LE(2835, 42);
+    for (let i = 0; i < pixels; i++) buf[54 + i] = i % 3 === 0 ? 0x30 : 0xc0;
+    return buf;
+  };
+
+  test('images: sniffs the real format from magic bytes', () => {
+    assert.strictEqual(images.sniffMime(PNG_1PX), 'image/png');
+    assert.strictEqual(images.sniffMime(tinyBmp()), 'image/bmp');
+    assert.strictEqual(images.sniffMime(Buffer.from('GIF89a-body')), 'image/gif');
+    assert.strictEqual(images.sniffMime(Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10])), 'image/jpeg');
+    assert.strictEqual(images.sniffMime(Buffer.from('RIFF\0\0\0\0WEBPVP8 ', 'latin1')), 'image/webp');
+    assert.strictEqual(images.sniffMime(Buffer.from([0x49, 0x49, 0x2a, 0x00, 0x08])), 'image/tiff');
+    assert.strictEqual(images.sniffMime(Buffer.from([0x00, 0x00, 0x01, 0x00, 0x01])), 'image/x-icon');
+    assert.strictEqual(images.sniffMime(Buffer.from('\0\0\0\x1cftypavif' + 'rest', 'latin1')), 'image/avif');
+    assert.strictEqual(images.sniffMime(Buffer.from('\0\0\0\x18ftypheic' + 'rest', 'latin1')), 'image/heic');
+    assert.strictEqual(images.sniffMime(Buffer.from('<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg"></svg>')), 'image/svg+xml');
+    assert.strictEqual(images.sniffMime(Buffer.from('hello, this is a text file')), null);
+    assert.strictEqual(images.sniffMime(Buffer.alloc(0)), null);
+  });
+
+  test('images: content wins over extension, extension is the fallback', () => {
+    // A .png that is really a JPEG is treated as a JPEG.
+    assert.strictEqual(images.mimeForFile('shot.png', Buffer.from([0xff, 0xd8, 0xff, 0xe0])), 'image/jpeg');
+    // Unreadable bytes fall back to what the name promises.
+    assert.strictEqual(images.mimeForFile('shot.png', Buffer.from('not really an image')), 'image/png');
+    assert.strictEqual(images.mimeForFile('notes.md', Buffer.from('x')), null);
+    assert.strictEqual(images.mimeFromExt('PHOTO.HEIC'), 'image/heic');
+    assert.strictEqual(images.cleanMime('image/jpg'), 'image/jpeg');
+  });
+
+  test('images: recognises every extension we accept', () => {
+    const good = ['a.png', 'a.apng', 'a.jpg', 'a.jpeg', 'a.jpe', 'a.jfif', 'a.gif', 'a.webp', 'a.bmp', 'a.dib',
+      'a.svg', 'a.svgz', 'a.tif', 'a.tiff', 'a.avif', 'a.heic', 'a.heif', 'a.ico', 'a.cur'];
+    const bad = ['a.txt', 'a.md', 'a.pdf', 'a.json', 'a.mp4', 'a'];
+    for (const n of good) assert.ok(images.isImagePath(n), `${n} should be an image`);
+    for (const n of bad) assert.ok(!images.isImagePath(n), `${n} should not be an image`);
+  });
+
+  test('images: provider formats pass through untouched', async () => {
+    const data = PNG_1PX.toString('base64');
+    const out = await images.normalizeImage({ name: 'x.png', mimeType: 'image/png', data, dataLength: data.length });
+    assert.strictEqual(out.mimeType, 'image/png');
+    assert.strictEqual(out.data, data);
+    assert.ok(!out.unsupported);
+    // A JPEG mislabelled as png is relabelled from its bytes, not re-encoded.
+    const jpegData = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46]).toString('base64');
+    const out2 = await images.normalizeImage({ name: 'x.png', mimeType: 'image/png', data: jpegData });
+    assert.strictEqual(out2.mimeType, 'image/jpeg');
+    assert.strictEqual(out2.data, jpegData);
+  });
+
+  test('images: converts bmp/tiff/ico to png when a converter is installed', async () => {
+    const out = await images.normalizeImage({ name: 'x.bmp', mimeType: 'image/bmp', data: tinyBmp().toString('base64') });
+    if (await images.hasConverter()) {
+      assert.strictEqual(out.mimeType, 'image/png', 'bmp should be converted to png');
+      assert.strictEqual(out.convertedFrom, 'image/bmp');
+      assert.strictEqual(images.sniffMime(Buffer.from(out.data, 'base64')), 'image/png');
+      assert.strictEqual(out.dataLength, out.data.length);
+    } else {
+      assert.strictEqual(out.unsupported, true);
+      assert.strictEqual(out.mimeType, 'image/bmp');
+      assert.ok(out.reason, 'a skipped image explains itself');
+    }
+  });
+
+  test('images: nothing unserialisable reaches the model', async () => {
+    const { images: ok, skipped } = await images.normalizeImages([
+      { name: 'a.png', data: PNG_1PX.toString('base64') },
+      { name: 'b.bin', data: Buffer.from('definitely not an image').toString('base64') },
+      { name: 'c.txt', data: '' },
+    ]);
+    assert.strictEqual(ok.length, 1);
+    assert.strictEqual(skipped.length, 1, 'empty attachments are dropped, not "skipped"');
+    assert.match(images.skippedNote(skipped), /b\.bin/);
+    assert.strictEqual(images.skippedNote([]), '');
+  });
+
+  test('llm: composer images become png vision blocks after normalisation', async () => {
+    const llm = require('../src/llm');
+    const { images: ok, skipped } = await llm.normalizeImages([{ name: 'shot.bmp', mimeType: 'image/bmp', data: tinyBmp().toString('base64') }]);
+    assert.strictEqual(skipped.length, 0);
+    const blocks = llm.imageBlocks('what is this?', ok);
+    assert.strictEqual(blocks[0].text, 'what is this?');
+    assert.ok(blocks[1].image_url.url.startsWith('data:image/png;base64,'), blocks[1].image_url.url.slice(0, 40));
+  });
+
+  test('llm: an unreadable image is reported as text, never as a broken block', () => withTempHome(async () => {
+    for (const k of ['SHMAKK_BASE_URL', 'SHMAKK_ENDPOINTS_FILE']) delete process.env[k];
+    const llm = require('../src/llm');
+    const out = await llm.userContentWithImages('look', [{ name: 'photo.heic', mimeType: 'application/x-not-an-image', data: Buffer.from('nope').toString('base64') }]);
+    assert.strictEqual(typeof out, 'string', 'no image blocks for an unusable attachment');
+    assert.match(out, /^look/);
+    assert.match(out, /photo\.heic/);
+    assert.match(out, /could not be shown/);
+  }));
+
+  test('read_file: converts image formats the provider cannot read', async () => {
+    const os = require('os'); const path = require('path');
+    const { dispatchTool } = require('../src/tools');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shmakk-img-test-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'tiny.bmp'), tinyBmp());
+      fs.writeFileSync(path.join(dir, 'tiny.png'), PNG_1PX);
+      fs.writeFileSync(path.join(dir, 'notes.txt'), 'plain text');
+      const png = await dispatchTool('read_file', { path: path.join(dir, 'tiny.png') }, [dir]);
+      assert.strictEqual(png.images[0].mimeType, 'image/png');
+      const bmp = await dispatchTool('read_file', { path: path.join(dir, 'tiny.bmp') }, [dir]);
+      if (await images.hasConverter()) {
+        assert.strictEqual(bmp.images.length, 1);
+        assert.strictEqual(bmp.images[0].mimeType, 'image/png');
+        assert.match(bmp.content, /converted from image\/bmp/);
+      } else {
+        assert.deepStrictEqual(bmp.images, []);
+        assert.match(bmp.content, /cannot be shown to the model/);
+      }
+      const txt = await dispatchTool('read_file', { path: path.join(dir, 'notes.txt') }, [dir]);
+      assert.ok(!txt.images || !txt.images.length);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+}
 
 test('webui github: repository and branch names are validated', () => {
   const { parseRepo, validBranch } = require('../src/webui/github');

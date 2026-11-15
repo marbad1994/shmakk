@@ -1,7 +1,9 @@
+import type { ClipboardEvent } from 'react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ArrowUp, ChevronDown, Cpu, FileText, Mic, Paperclip, Square, Volume2, VolumeX, X } from 'lucide-react';
 import { COMMANDS, filterCommands, matchSlash, type Command } from '@/lib/commands';
-import { cn, modKey } from '@/lib/utils';
+import { bytes, cn } from '@/lib/utils';
+import { browserStorage, draftScope, enterDraft, loadDrafts, saveDrafts } from '@/lib/composerDraft';
 import { modeInfo } from '@/lib/modes';
 import type { Mode } from '@/lib/types';
 import { useApp } from '@/store/app';
@@ -22,6 +24,140 @@ interface Props {
   onStopSpeaking(): void;
 }
 
+/** A file staged in the composer. `url` is a blob URL used only for image thumbnails,
+ *  `data` is the downscaled base64 image the model actually sees. */
+type PendingFile = { name: string; size: number; content: string; url?: string; mimeType?: string; data?: string };
+type ParkedDraft = { text: string; mode: 'ask' | 'shell'; files: PendingFile[] };
+
+// Prompts parked under the conversation or empty space they were typed in.
+// Module scope on purpose: the composer is remounted when design mode swaps
+// the chat layout, and the parked prompts must outlive that. Seeded from
+// localStorage so a reload does not throw away something you were mid-way
+// through writing.
+const parked = new Map<string, ParkedDraft>(
+  [...loadDrafts(browserStorage())].map(([scope, d]) => [scope, { text: d.text, mode: d.mode, files: [] }] as const),
+);
+
+const MAX_IMAGE_EDGE = 1568;
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+// Raw (undecoded) image bytes only travel when the socket and the server can
+// still do something with them: the websocket caps messages at 4 MB.
+const MAX_RAW_IMAGE_BYTES = 2 * 1024 * 1024;
+const NATIVE_IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+
+// Every format we recognise. Providers only take png/jpeg/gif/webp, so the rest
+// are rasterised here or converted by the server after upload.
+const IMAGE_MIME_BY_EXT: Record<string, string> = {
+  png: 'image/png', apng: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', jpe: 'image/jpeg', jfif: 'image/jpeg',
+  gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', dib: 'image/bmp', svg: 'image/svg+xml', svgz: 'image/svg+xml',
+  tif: 'image/tiff', tiff: 'image/tiff', avif: 'image/avif', heic: 'image/heic', heif: 'image/heif',
+  ico: 'image/x-icon', cur: 'image/x-icon',
+};
+
+function extOfFile(name: string) {
+  return name.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1] || '';
+}
+
+function imageMimeOf(f: File) {
+  const type = (f.type || '').toLowerCase().split(';')[0].trim();
+  if (type.startsWith('image/')) return type === 'image/jpg' ? 'image/jpeg' : type;
+  return IMAGE_MIME_BY_EXT[extOfFile(f.name)] || null;
+}
+
+const isImageFile = (f: File) => !!imageMimeOf(f);
+
+/** Extension for a pasted file, which often arrives without a usable name. */
+function pasteExt(f: File) {
+  const ext = extOfFile(f.name);
+  if (ext) return ext;
+  const sub = (f.type || '').split('/')[1]?.split(/[;+]/)[0];
+  return sub === 'jpeg' ? 'jpg' : sub || 'bin';
+}
+
+const GENERIC_PASTE_NAMES = /^(image|blob|file|clipboard)(\.(png|jpe?g|gif|webp|bmp))?$/i;
+
+/** Files carried by a paste (Ctrl/Cmd+V). Screenshots and copies from a file
+ *  manager show up here; plain text returns an empty list so the browser can
+ *  insert it as usual. */
+function clipboardFiles(dt: DataTransfer | null, at = new Date()): File[] {
+  if (!dt) return [];
+  const out: File[] = [];
+  for (const item of Array.from(dt.items || [])) {
+    if (item.kind !== 'file') continue;
+    const f = item.getAsFile();
+    if (f) out.push(f);
+  }
+  if (!out.length && dt.files?.length) out.push(...Array.from(dt.files));
+  if (!out.length) return out;
+  const stamp = at.toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  return out.map((f, i) => {
+    if (f.name && !GENERIC_PASTE_NAMES.test(f.name)) return f;
+    const suffix = out.length > 1 ? `-${i + 1}` : '';
+    return new File([f], `paste-${stamp}${suffix}.${pasteExt(f)}`, { type: f.type });
+  });
+}
+
+function drawToJpeg(width: number, height: number, draw: (ctx: CanvasRenderingContext2D, w: number, h: number) => void): string | null {
+  const scale = Math.min(1, MAX_IMAGE_EDGE / Math.max(width, height));
+  const w = Math.max(1, Math.round(width * scale));
+  const h = Math.max(1, Math.round(height * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, w, h);
+  draw(ctx, w, h);
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+  return dataUrl.slice(dataUrl.indexOf(',') + 1) || null;
+}
+
+async function readRaw(f: File, mimeType: string) {
+  try {
+    const buf = new Uint8Array(await f.arrayBuffer());
+    let binary = '';
+    for (let i = 0; i < buf.length; i += 0x8000) binary += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+    return { mimeType, data: btoa(binary) };
+  } catch { return null; }
+}
+
+/** Downscale an image so it fits vision input sizes and the websocket payload
+ *  limit, or hand back the original bytes when a converter can read them. */
+async function prepareImage(f: File): Promise<{ mimeType: string; data: string } | null> {
+  const declared = imageMimeOf(f);
+  // Already a provider format and small enough: send it untouched so animation
+  // and transparency survive and nothing is recompressed.
+  if (declared && NATIVE_IMAGE_MIMES.has(declared) && f.size <= MAX_RAW_IMAGE_BYTES) {
+    const raw = await readRaw(f, declared);
+    if (raw) return raw;
+  }
+  try {
+    const bitmap = await createImageBitmap(f);
+    const data = drawToJpeg(bitmap.width, bitmap.height, (ctx, w, h) => ctx.drawImage(bitmap, 0, 0, w, h));
+    bitmap.close();
+    if (data) return { mimeType: 'image/jpeg', data };
+  } catch {}
+  // createImageBitmap skips SVG and several exotic formats: rasterise via <img>.
+  try {
+    const url = URL.createObjectURL(f);
+    try {
+      const img = new Image();
+      img.src = url;
+      await img.decode();
+      const data = drawToJpeg(img.naturalWidth || 1024, img.naturalHeight || 1024, (ctx, w, h) => ctx.drawImage(img, 0, 0, w, h));
+      if (data) return { mimeType: 'image/jpeg', data };
+    } finally { URL.revokeObjectURL(url); }
+  } catch {}
+  // Nothing can decode it here (HEIC in Chrome, unusual TIFF): send the bytes
+  // with the right mime and let the server convert them.
+  if (declared && f.size <= MAX_RAW_IMAGE_BYTES) {
+    const raw = await readRaw(f, declared);
+    if (raw) return raw;
+  }
+  return null;
+}
+
 const HISTORY_KEY = 'shmakk.inputHistory';
 const MAX_ATTACH_BYTES = 200 * 1024;
 const MAX_ATTACH_CHARS = 60000;
@@ -37,11 +173,18 @@ export function Composer({ mode: space, running, activity, mic, speaking, onMic,
   const patchSettings = useApp((s) => s.patchSettings);
   const provider = useApp((s) => s.provider);
   const draft = useApp((s) => s.draft);
+  const clearDraft = useApp((s) => s.clearDraft);
   const activeId = useApp((s) => s.activeId);
 
   const [text, setText] = useState('');
-  const [files, setFiles] = useState<{ name: string; size: number; content: string }[]>([]);
+  const [files, setFiles] = useState<PendingFile[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
+  // Object URLs for image thumbnails, revoked when the attachment goes away.
+  const blobUrls = useRef<Set<string>>(new Set());
+  const makeBlobUrl = useCallback((f: File) => { const u = URL.createObjectURL(f); blobUrls.current.add(u); return u; }, []);
+  const dropBlobUrl = useCallback((u?: string) => { if (u && blobUrls.current.delete(u)) URL.revokeObjectURL(u); }, []);
+  const clearBlobUrls = useCallback(() => { blobUrls.current.forEach((u) => URL.revokeObjectURL(u)); blobUrls.current.clear(); }, []);
+  useEffect(() => () => clearBlobUrls(), [clearBlobUrls]);
   const [mode, setMode] = useState<'ask' | 'shell'>('ask');
   const shell = agentic && mode === 'shell';
   useEffect(() => { if (!agentic && mode === 'shell') setMode('ask'); }, [agentic, mode]);
@@ -50,6 +193,35 @@ export function Composer({ mode: space, running, activity, mic, speaking, onMic,
   const ref = useRef<HTMLTextAreaElement>(null);
   const history = useRef<string[]>(loadHistory());
   const histIdx = useRef(-1);
+  // The composer outlives a space or session switch, so its local text would
+  // otherwise follow you into the next one. Park the prompt (and its staged
+  // files) under the slot it was written in and restore whatever belongs to the
+  // slot we just entered. Design mode swaps the whole chat layout for one with
+  // a preview, which remounts this composer, so the parked prompts have to live
+  // outside the component or they would be lost (or, worse, refilled from the
+  // one-shot draft below).
+  const scope = draftScope(space, activeId);
+  const [scopeKey, setScopeKey] = useState<string | null>(null);
+  if (scopeKey !== scope) {
+    const next = enterDraft(parked, scopeKey, scope, { text, mode, files }, { text: '', mode: 'ask' as const, files: [] });
+    setScopeKey(scope);
+    setText(next.text);
+    setMode(next.mode);
+    setFiles(next.files);
+    setMenuDismissed(false);
+  }
+
+  // Keep the parked map and localStorage in step with what is on screen, so a
+  // reload or a remount lands back on the same prompt.
+  useEffect(() => {
+    parked.set(scope, { text, mode, files });
+    const t = setTimeout(() => saveDrafts(browserStorage(), parked), 400);
+    return () => clearTimeout(t);
+  }, [scope, text, mode, files]);
+
+  // Switching slots is the moment the outgoing draft has to be on disk: the
+  // debounce above is cleared by the switch before it can fire.
+  useEffect(() => { saveDrafts(browserStorage(), parked); }, [scope]);
 
   // Slash menu
   const slash = mode === 'ask' ? matchSlash(text) : null;
@@ -71,7 +243,10 @@ export function Composer({ mode: space, running, activity, mic, speaking, onMic,
     setText(draft.text);
     setMode(draft.mode);
     ref.current?.focus();
-  }, [draft]);
+    // One-shot: consume it so it can't be re-applied when the composer
+    // remounts (e.g. switching into design mode swaps the chat layout).
+    clearDraft();
+  }, [draft, clearDraft]);
   // Don't pop the on-screen keyboard uninvited on phones.
   useEffect(() => { if (!isTouch()) ref.current?.focus(); }, [activeId]);
 
@@ -99,10 +274,11 @@ export function Composer({ mode: space, running, activity, mic, speaking, onMic,
     }
     setText('');
     setFiles([]);
+    clearBlobUrls();
     setMenuDismissed(false);
     haptic();
-    void send(value, shell ? 'shell' : 'ask', files);
-  }, [text, files, running, mode, shell, matches, runCommand, send]);
+    void send(value, shell ? 'shell' : 'ask', files.map(({ name, size, content, mimeType, data }) => ({ name, size, content, mimeType, data })));
+  }, [text, files, running, mode, shell, matches, runCommand, send, clearBlobUrls]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.nativeEvent.isComposing) return;
@@ -143,22 +319,45 @@ export function Composer({ mode: space, running, activity, mic, speaking, onMic,
 
   // Attach files for reference: read text files into the message, keep others
   // as name/size only (the model gets a note that they're binary).
-  const onFiles = useCallback(async (list: FileList | null) => {
+  const onFiles = useCallback(async (list: FileList | readonly File[] | null) => {
     if (!list || !list.length) return;
-    const picked: { name: string; size: number; content: string }[] = [];
+    const picked: PendingFile[] = [];
     for (const f of Array.from(list)) {
       if (picked.length >= MAX_ATTACH_COUNT) break;
+      // Images get a real thumbnail and a base64 copy so the model can see them.
+      if (isImageFile(f)) {
+        if (f.size > MAX_IMAGE_BYTES) { picked.push({ name: f.name, size: f.size, content: '' }); continue; }
+        const prepared = await prepareImage(f);
+        picked.push({ name: f.name, size: f.size, content: '', url: makeBlobUrl(f), mimeType: prepared?.mimeType, data: prepared?.data });
+        continue;
+      }
       if (f.size > MAX_ATTACH_BYTES) { picked.push({ name: f.name, size: f.size, content: '' }); continue; }
       let content = '';
       try { content = await f.text(); } catch { content = ''; }
       const binary = content.includes('\u0000');
       picked.push({ name: f.name, size: f.size, content: binary ? '' : content.slice(0, MAX_ATTACH_CHARS) });
     }
-    setFiles((prev) => [...prev, ...picked].slice(0, MAX_ATTACH_COUNT));
-  }, []);
+    setFiles((prev) => {
+      const all = [...prev, ...picked];
+      for (const dropped of all.slice(MAX_ATTACH_COUNT)) dropBlobUrl(dropped.url);
+      return all.slice(0, MAX_ATTACH_COUNT);
+    });
+  }, [makeBlobUrl, dropBlobUrl]);
 
-  // Per-space model picker. The list of models comes from the endpoint's model
-  // list in ~/.config/shmakk/endpoints.js; "default" clears the override.
+  // Ctrl/Cmd+V carrying files (a screenshot, files copied in a file manager)
+  // stages them exactly like the paperclip; plain text pastes normally.
+  const onPaste = (e: ClipboardEvent<HTMLDivElement>) => {
+    const pasted = clipboardFiles(e.clipboardData);
+    if (!pasted.length) return;
+    e.preventDefault();
+    setMenuDismissed(true);
+    void onFiles(pasted);
+    ref.current?.focus();
+  };
+
+  // Per-space model picker. The list comes from the model registry in
+  // ~/.config/shmakk/endpoints.json (env vars are only the fallback);
+  // "default" clears the override.
   const DEFAULT_MODEL = '__default';
   const modelByMode = settings.modelByMode || ({} as Record<Mode, string | null>);
   const currentModel = modelByMode[space] || provider.model || 'default';
@@ -220,7 +419,7 @@ export function Composer({ mode: space, running, activity, mic, speaking, onMic,
           </div>
         ) : null}
 
-        <div className={cn('rounded-[22px] border border-line-strong bg-raised shadow-[0_8px_30px_rgb(0_0_0/0.18)] transition-[border-color,box-shadow] focus-within:border-accent/45 focus-within:ring-[3px] focus-within:ring-accent/10', shell && 'border-accent/40')}>
+        <div onPaste={onPaste} className={cn('rounded-[22px] border border-line-strong bg-raised shadow-[0_8px_30px_rgb(0_0_0/0.18)] transition-[border-color,box-shadow] focus-within:border-accent/45 focus-within:ring-[3px] focus-within:ring-accent/10', shell && 'border-accent/40')}>
           <div className="flex items-start gap-1 px-4 pb-1 pt-3">
             <span className="w-4 shrink-0 select-none font-mono text-[15px] font-bold leading-[1.6] text-accent" aria-hidden>{shell ? '$' : '❯'}</span>
             <textarea
@@ -240,38 +439,40 @@ export function Composer({ mode: space, running, activity, mic, speaking, onMic,
             />
           </div>
           {files.length > 0 ? (
-            <div className="flex flex-col gap-2 px-4 pb-2">
+            <div className="flex flex-wrap gap-2 px-4 pb-2" aria-label="Attachments">
               {files.map((f, i) => (
-                <div key={`${f.name}-${i}`} className="group relative overflow-hidden rounded-xl border border-line bg-panel">
-                  <button type="button" aria-label={`Remove ${f.name}`} onClick={() => setFiles((p) => p.filter((_, j) => j !== i))} className="absolute right-1.5 top-1.5 z-10 grid size-6 place-items-center rounded-full bg-raised/90 text-faint shadow-sm opacity-0 transition-opacity hover:text-fg focus-visible:opacity-100 group-hover:opacity-100">
-                    <X className="size-3.5" />
-                  </button>
-                  {f.content ? (
-                    <div className="relative">
-                      <pre className="m-0 max-h-40 overflow-y-auto whitespace-pre-wrap break-words p-3 pr-9 font-mono text-[11.5px] leading-relaxed text-dim">{f.content}</pre>
-                      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-panel to-transparent" />
+                <div key={`${f.name}-${i}`} className="group relative size-28 shrink-0">
+                  <div className="relative size-full overflow-hidden rounded-xl border border-line bg-panel transition-colors group-hover:border-line-strong" title={`${f.name} · ${bytes(f.size)}`}>
+                    {f.url ? (
+                      <img src={f.url} alt={f.name} className="size-full object-cover" draggable={false} />
+                    ) : f.content ? (
+                      <>
+                        <pre className="m-0 size-full overflow-hidden whitespace-pre-wrap break-all p-2 font-mono text-[7px] leading-[1.45] text-faint">{f.content.slice(0, 420)}</pre>
+                        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-9 bg-gradient-to-t from-panel to-transparent" />
+                      </>
+                    ) : (
+                      <div className="grid size-full place-items-center text-faint">
+                        <FileText className="size-6" strokeWidth={1.75} />
+                      </div>
+                    )}
+                    <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/55 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
+                    <div className="pointer-events-none absolute inset-x-0 bottom-0 px-2 pb-1.5 text-[10px] text-dim opacity-0 transition-opacity group-hover:opacity-100">
+                      <span className="block truncate">{f.name}</span>
                     </div>
-                  ) : (
-                    <div className="flex h-20 items-center justify-center gap-2 text-faint">
-                      <FileText className="size-4" />
-                      <span className="text-xs">no preview</span>
-                    </div>
-                  )}
+                    <button type="button" aria-label={`Remove ${f.name}`} onClick={() => { dropBlobUrl(files[i]?.url); setFiles((p) => p.filter((_, j) => j !== i)); }} className="absolute right-1 top-1 z-10 grid size-5 place-items-center rounded-full bg-raised/90 text-faint shadow-sm opacity-0 transition-opacity hover:text-fg focus-visible:opacity-100 group-hover:opacity-100 touch:opacity-100">
+                      <X className="size-3" />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
           ) : null}
           <div className="flex items-center gap-1.5 px-2.5 pb-2 pt-1">
             <div className="no-scrollbar flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto [mask-image:linear-gradient(to_right,black_calc(100%-16px),transparent)] [&>*]:shrink-0">
-            {!agentic ? <>
-              <span className={cn('inline-flex items-center gap-1.5 rounded-full border border-line px-2.5 py-0.5 font-mono text-xs touch:py-1.5 [&_svg]:size-3.5', modeInfo(space).tone)}>{modeInfo(space).icon}{modeInfo(space).label.toLowerCase()}</span>
-              {modelMenu}
-            </> : null}
-            {agentic ? <>
-            <Segmented label="Input mode" value={mode} onChange={(m) => { setMode(m); ref.current?.focus(); }} options={[{ value: 'ask', label: 'ask' }, { value: 'shell', label: 'shell' }]} />
-
+            {agentic ? (
+              <Segmented label="Input mode" value={mode} onChange={(m) => { setMode(m); ref.current?.focus(); }} options={[{ value: 'ask', label: 'ask' }, { value: 'shell', label: 'shell' }]} />
+            ) : null}
             {modelMenu}
-            </> : null}
 
             <span className="w-3" />
             </div>
@@ -281,7 +482,7 @@ export function Composer({ mode: space, running, activity, mic, speaking, onMic,
                 <Paperclip />
               </Button>
             </Tip>
-            <input ref={fileRef} type="file" multiple hidden onChange={(e) => { void onFiles(e.target.files); e.target.value = ''; }} />
+            <input ref={fileRef} type="file" multiple hidden accept="image/*,.heic,.heif,.avif,.tiff,.tif,.bmp,.ico,.cur,.jfif,.svg" onChange={(e) => { void onFiles(e.target.files); e.target.value = ''; }} />
             {speaking ? (
               <Tip label="Stop speaking" side="top"><Button variant="ghost" size="icon" aria-label="Stop speaking" onClick={onStopSpeaking}><VolumeX className="text-accent" /></Button></Tip>
             ) : (
@@ -307,9 +508,6 @@ export function Composer({ mode: space, running, activity, mic, speaking, onMic,
             )}
           </div>
         </div>
-        <p className="m-0 pt-1.5 text-center text-[11.5px] text-faint max-md:hidden touch:hidden">
-          <kbd>Enter</kbd> send · <kbd>Shift Enter</kbd> newline · <kbd>/</kbd> commands{agentic ? <> · <kbd>$</kbd> shell</> : null} · <kbd>{modKey} K</kbd> palette
-        </p>
       </div>
     </div>
   );

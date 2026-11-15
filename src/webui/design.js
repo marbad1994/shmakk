@@ -19,6 +19,7 @@ const TYPES = {
   '.html': 'text/html; charset=utf-8', '.htm': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.json': 'application/json; charset=utf-8',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',
+  '.avif': 'image/avif', '.bmp': 'image/bmp', '.tif': 'image/tiff', '.tiff': 'image/tiff', '.heic': 'image/heic', '.heif': 'image/heif',
   '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.woff': 'font/woff', '.txt': 'text/plain; charset=utf-8', '.md': 'text/plain; charset=utf-8',
 };
 
@@ -120,6 +121,49 @@ function restore(dir, n) {
   return true;
 }
 
+// Resolve a working-copy file path safely (no signature, no .versions: this
+// is for internal writes from the canvas editor).
+function resolveFile(dir, relPath) {
+  const rel = String(relPath || '').replace(/^\/+/, '') || 'index.html';
+  if (rel.split('/').some((seg) => seg === '..' || seg.startsWith('.'))) return null;
+  const abs = path.resolve(dir, rel);
+  if (abs !== dir && !abs.startsWith(dir + path.sep)) return null;
+  try {
+    const real = fs.realpathSync(abs);
+    const realDir = fs.realpathSync(dir);
+    if (!real.startsWith(realDir + path.sep) || !fs.statSync(real).isFile()) return null;
+    return real;
+  } catch { return null; }
+}
+
+function writeFile(dir, relPath, content) {
+  const real = resolveFile(dir, relPath);
+  if (!real) return false;
+  fs.writeFileSync(real, String(content ?? ''), 'utf8');
+  return true;
+}
+
+// Context the AI composer sends so a targeted edit lands on the right element.
+function elementEditHint(file, element) {
+  if (!file && !element) return null;
+  const lines = ['Targeted element edit in this design'];
+  if (file) lines.push(`- File to edit: ${file}`);
+  if (element && element.tag) {
+    lines.push(`- Selected element: <${element.tag}>${element.text ? ` with text "${element.text}"` : ''}`);
+    if (element.selector) lines.push(`- A selector for it: ${element.selector}`);
+    if (element.styles && typeof element.styles === 'object') {
+      const styles = Object.entries(element.styles).map(([k, v]) => `${k}: ${v}`).join('; ');
+      if (styles) lines.push(`- Its inline styles: ${styles}`);
+    }
+    if (element.computed && typeof element.computed === 'object') {
+      const computed = Object.entries(element.computed).map(([k, v]) => `${k}: ${v}`).join('; ');
+      if (computed) lines.push(`- Its computed styles: ${computed}`);
+    }
+  }
+  lines.push('Apply the user\'s request to this element/file. Use edit_file with a tight old_string so only the requested change is made; keep everything else identical.');
+  return lines.join('\n');
+}
+
 function sign(secret, convId) {
   return crypto.createHmac('sha256', String(secret)).update(`artifact:${convId}`).digest('base64url').slice(0, 32);
 }
@@ -165,4 +209,4 @@ Working style
 - When refining, change only what was asked and keep the rest stable.
 - Finish with a short note: what you made, the key decisions, and one or two things worth trying next.`;
 
-module.exports = { designsRoot, designDir, ensureDir, listFiles, listVersions, snapshot, restore, sign, resolveArtifact, ARTIFACT_CSP, DESIGN_HINT, VERSIONS };
+module.exports = { designsRoot, designDir, ensureDir, listFiles, listVersions, snapshot, restore, writeFile, elementEditHint, sign, resolveArtifact, ARTIFACT_CSP, DESIGN_HINT, VERSIONS };

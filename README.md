@@ -33,10 +33,47 @@ export SHMAKK_API_KEY="your-api-key"
 export SHMAKK_MODEL="gpt-4o-mini"
 ```
 
-Or copy the template and fill it in:
+Or configure multiple native model providers in `~/.config/shmakk/endpoints.json`:
+
+```json
+{
+  "main": "claude",
+  "fast": "flash",
+  "models": {
+    "claude": {
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-5-20250929",
+      "api_key": "ANTHROPIC_API_KEY"
+    },
+    "flash": {
+      "provider": "google",
+      "model": "gemini-flash",
+      "api_key": "GOOGLE_API_KEY"
+    },
+    "gpt5": {
+      "provider": "codex",
+      "model": "gpt-5-codex",
+      "api_key": "OPENAI_API_KEY"
+    },
+    "kimi": {
+      "provider": "nvidia",
+      "model": "moonshotai/kimi-k2.6",
+      "api_key": "nvapi-..."
+    },
+    "local-qwen": {
+      "provider": "openai-compatible",
+      "base_url": "http://127.0.0.1:1234/v1",
+      "model": "qwen/qwen3.5-9b"
+    }
+  }
+}
+```
+
+Providers: `openai-compatible` | `codex` | `anthropic` | `google` | `nvidia`
 
 ```bash
-cp node_modules/shmakk/.env.example .env
+shmakk --endpoint claude
+shmakk --model-recommendation    # main model chooses best model per call
 ```
 
 ### 2. Launch
@@ -97,26 +134,24 @@ docker compose logs shmakk       # prints the sign-in link
 
 → Reverse proxy, TLS and hardening: [docs/deploy.md](docs/deploy.md)
 
-## Voice (optional)
+## Launch options
 
-speak naturally — shmakk listens, transcribes, responds, and reads its answer aloud. No push-to-talk.
-
-```bash
-# Install system dependency
-sudo pacman -S sox        # Arch/EndeavourOS
-sudo apt install sox      # Debian/Ubuntu
-brew install sox          # macOS
-
-# Install voice deps and run preflight check
-npm run setup:voice
-
-# Launch in speech-to-speech mode
-shmakk --sts
-```
-
-Say **"stop"** or **"quiet"** to interrupt TTS mid-sentence.
-
-→ Full voice documentation: [docs/voice.md](docs/voice.md)
+| Flag | What it does |
+|------|-------------|
+| `shmakk` | Auto mode (AI acts on failures) |
+| `shmakk --review` | Review mode (confirm every AI action) |
+| `shmakk --yes-files` | Auto-accept file writes, edits, mkdir |
+| `shmakk --no-ai` | Disable AI entirely (pure passthrough) |
+| `shmakk --no-correction` | Disable command correction |
+| `shmakk --debug` | Verbose logging to stderr |
+| `shmakk --profile <name>` | Startup profile: `tiny`, `balanced`, `deep`, `builder`, `large-app` |
+| `shmakk --workspace <path>` | Override workspace root |
+| `shmakk --new-session` | Force a new session instead of resuming |
+| `shmakk --shell <shell>` | Use a specific shell (default: current `$SHELL`) |
+| `shmakk --print-config` | Print resolved configuration and exit |
+| `shmakk --colors true\|false` | Enable/disable ANSI colors |
+| `shmakk --markdown true\|false` | Enable/disable markdown rendering |
+| `shmakk --notify` | Desktop notifications for Y/n prompts |
 
 ## Profiles
 
@@ -139,19 +174,190 @@ Switch profiles mid-session:
 shmakk --profile-set deep
 ```
 
-## Skills
+## Vim / vi mode
 
-Skills are task-specific markdown files loaded into the agent's context on demand. The `skills/` directory contains 32 built-in skills covering areas like `code-review`, `research`, `backend`, `devops`, `sysmon`, `logs`, and more.
+By default, shmakk intercepts `vi` inside a shmakk session. Use `--vim vim` to intercept `vim`, or `--vim disable` to leave both commands untouched.
 
-```bash
-shmakk --install-skill <name>   # install a skill from the built-in library
-shmakk --load-skill <name>      # load an installed skill for this session
-shmakk --list-skills            # show currently loaded skills
+The shim launches your real Vim with your normal config, then loads shmakk commands:
+
+| Vim command | What it does |
+|-------------|--------------|
+| `:G <prompt>` | Generate code at the cursor |
+| `:Tw <prompt>` | Write prose or documentation |
+| `:Cmd <command>` | Run a shell command in a scratch buffer |
+| `<C-Space>` / `:ShmakkSuggest` | Full-block AI suggestion with preview + Accept/Deny |
+| `:ShmakkAccept` / `:ShmakkPreview` / `:ShmakkDeny` | Handle pending auto-suggestions |
+
+Mappings: `<leader>sa` (accept), `<leader>sp` (preview), `<leader>sd` (deny).
+
+Lowercase `:g` remains Vim's native `:global`; use uppercase `:G` for shmakk.
+
+Optional automatic suggestions:
+
+```vim
+let g:shmakk_auto_suggest = 1
+let g:shmakk_auto_suggest_delay_ms = 2000
+let g:shmakk_auto_suggest_min_chars = 20
 ```
 
-## Coordinator & Multi-step workflows
+→ Full Vim documentation: [docs/vim.md](docs/vim.md)
 
-The coordinator system enables complex, multi-step task execution with plan-first workflows. When tackling large projects or intricate tasks, shmakk breaks them into manageable steps, validates each stage, and maintains context across the entire workflow.
+## Voice (optional)
+
+Speak naturally — shmakk listens, transcribes, responds, and reads its answer aloud. No push-to-talk.
+
+```bash
+# Install system dependency
+sudo pacman -S sox        # Arch/EndeavourOS
+sudo apt install sox      # Debian/Ubuntu
+brew install sox          # macOS
+
+# Launch in speech-to-speech mode
+shmakk --sts
+```
+
+Say **"stop"** or **"quiet"** to interrupt TTS mid-sentence.
+
+| Mode | What it does |
+|------|-------------|
+| `--sts` | Speech-to-Speech: always-on mic + TTS |
+| `--stt` | Speech-to-Text: mic input, text output |
+| `--tts` | Text-to-Speech: text input, spoken output |
+
+STT uses Whisper-base ONNX in-process. TTS uses kokoro-js (Kokoro-82M ONNX, ~334MB). 28 voices, rotated daily.
+
+→ Full voice documentation: [docs/voice.md](docs/voice.md)
+
+## Skills
+
+Skills are task-specific markdown files loaded into the agent's context on demand. The package ships 500+ built-in skills covering code review, backend, frontend, devops, databases, business, design, and more.
+
+```bash
+shmakk --load-skill <name>         # load a built-in skill for this session
+shmakk --install-skill <url>       # download skill markdown from URL, validate, load
+shmakk -G --load-skill <name>      # use global registry (~/.config/shmakk)
+shmakk --list-skills               # list all registered skills
+shmakk --skill-status              # active skill and registry status
+shmakk --unload-skill <name>       # remove skill from its registry
+```
+
+In-session commands:
+
+```
+list skills                          # list all registered skills
+list skills <category>               # list skills in a category
+find skills <query>                  # search by name/description
+load skill <name>                    # load into active workspace
+unload skill <name>                  # remove from registry
+skill status                         # active skill and registry state
+```
+
+## Vibedit — visual editing overlay
+
+Vibedit opens a Chromium browser tab, injects a chat panel overlay, captures screenshots for vision-model analysis, and applies code changes directly to your project.
+
+```bash
+# Inside a session:
+/vibedit <url | file | package.json | dir>
+/vibedit-electron <debug-port>       # connect to running Electron app via CDP
+/ve <debug-port>                     # short alias
+```
+
+The overlay appears as a puck in the bottom-right corner. Click to open the chat panel. Use the Save button to capture a spec (screenshot + description); the agent receives it for implementation.
+
+Dependencies: `npm install playwright && npx playwright install chromium`
+
+→ Full vibedit documentation: [docs/vibedit-analysis.md](docs/vibedit-analysis.md)
+
+## Browser automation
+
+shmakk can control headless Playwright browsers for non-interactive browsing (navigate, click, type, screenshot, evaluate, scroll). Install `playwright` and `chromium` first.
+
+For live Chrome tabs, use the extension daemon:
+
+```bash
+shmakk browser-daemon                  # run global extension backend
+shmakk browser-daemon --port 3947      # custom port
+shmakk connect-browser                 # auto-detect and connect to CDP
+shmakk connect-browser --port 9222     # specific port
+```
+
+## Remote SSH
+
+The agent can run commands and transfer files on remote hosts via SSH. Configure hosts in `.shmakk/hosts.json` (per-project) or `~/.config/shmakk/hosts.json` (global):
+
+```json
+{
+  "hosts": {
+    "devbox": {
+      "host": "marcus@192.168.1.100",
+      "port": 22,
+      "auto_approve": false,
+      "timeout_sec": 30
+    }
+  },
+  "allow_ssh_config": false,
+  "default_timeout_sec": 30
+}
+```
+
+| Tool | Description |
+|------|-------------|
+| `ssh_run` | Run a shell command on a remote host |
+| `ssh_push` | Copy a local workspace file to a remote host |
+| `ssh_pull` | Copy a remote file into the local workspace |
+
+For persistent connections, use `ControlMaster` in `~/.ssh/config`.
+
+→ Full SSH documentation: [docs/ssh.md](docs/ssh.md)
+
+## MCP servers
+
+Connect to Model Context Protocol servers over stdio. Configure in `.shmakk/mcp.json` (workspace) or `~/.config/shmakk/mcp.json` (global):
+
+```json
+{
+  "mcpServers": {
+    "example": {
+      "command": "node",
+      "args": ["server.js"],
+      "env": { "TOKEN": "${TOKEN}" },
+      "safety": "uncertain",
+      "safeTools": ["read_status"],
+      "unsafeTools": ["delete_item"],
+      "timeout": 30000,
+      "disabled": false
+    }
+  }
+}
+```
+
+Use `shmakk --mcp-status` or the in-session `mcp status` command to inspect servers and tools.
+
+→ Full MCP documentation: [docs/mcp.md](docs/mcp.md)
+
+## Self-commands (inside a session)
+
+Type these inside an shmakk session. Prefix with `/cmd` or `shmakk cmd`.
+
+| Command | What it does |
+|---------|-------------|
+| `/status` | Show session status |
+| `/stats` | Show session/task statistics |
+| `/sessions` | Show recent sessions |
+| `show plan` | Display current plan and progress |
+| `resume status` | Task journal summary for continuity |
+| `/compact` | Clear conversation + task journal |
+| `/reset` | Clear AI conversation history |
+| `list skills` | List registered skills |
+| `load skill <name>` | Load a skill |
+| `agent overview` | Show all agents and their specialisms |
+| `recall <query>` | Search past sessions |
+| `find session <query>` | Find a session by topic |
+| `show config` | Print resolved configuration |
+| `show memory` | List stored memories |
+| `mcp status` | Show MCP servers and tools |
+| `/vibedit <url>` | Open visual editing overlay |
 
 ## Environment variables
 
@@ -160,35 +366,44 @@ The coordinator system enables complex, multi-step task execution with plan-firs
 | `SHMAKK_BASE_URL` | OpenAI-compatible base URL |
 | `SHMAKK_API_KEY` | API key |
 | `SHMAKK_MODEL` | Default model |
-| `SHMAKK_HEADERS` | Extra headers (k=v,k=v) |
+| `SHMAKK_PROVIDER` | `openai-compatible`, `codex`, `anthropic`, `google`, `nvidia` |
+| `SHMAKK_HEADERS` | Extra headers: `k=v,k=v` |
+| `SHMAKK_FAST_ENDPOINT` | Named endpoint for low-latency tasks |
+| `SHMAKK_VIM_SUGGEST_ENDPOINT` | Named endpoint for Vim suggestions |
+| `SHMAKK_REGISTRY` | Model registry filter (comma-separated) |
+| `SHMAKK_MODEL_RECOMMENDATION` | Set to `1` to let main model choose per call |
+| `SHMAKK_VIM_SUGGEST_MAX_CHARS` | Max context chars for Vim suggestions |
+| `SHMAKK_VIM_SUGGEST_BEFORE_LINES` | Context lines before cursor |
+| `SHMAKK_VIM_SUGGEST_AFTER_LINES` | Context lines after cursor |
+| `SHMAKK_HF_CACHE` | HuggingFace cache dir (voice models) |
+| `SHMAKK_TTS_VOICE` | Pin a specific TTS voice |
+| `SHMAKK_TTS_DTYPE` | Kokoro dtype: `fp32`, `fp16`, `q8`, `q4`, `q4f16` |
+| `SHMAKK_VOICE_LANGUAGE` | Language hint for STT |
+| `SHMAKK_VOICE_MAX_SEC` | Max recording seconds |
+| `SHMAKK_VOICE_SILENCE_SEC` | VAD silence threshold |
+| `SHMAKK_VOICE_SILENCE_THRESHOLD` | VAD amplitude threshold |
+| `SHMAKK_VOICE_PAD_START_SEC` | Start-of-recording padding |
 
-## Useful commands
+## Help categories
 
-| Command | What it does |
-|---------|-------------|
-| `shmakk --help` | Show help |
-| `shmakk --web` | Open the web interface |
-| `shmakk --desktop` | Open the desktop app |
-| `shmakk --status` | Check if inside shmakk |
-| `shmakk --stats` | Session statistics |
-| `shmakk --compact` | Clear conversation history |
-| `shmakk --install-skill <name>` | Install a skill from the built-in library |
-| `shmakk --load-skill <name>` | Load an installed skill for this session |
-| `shmakk --list-skills` | List loaded skills |
-| `shmakk --reset` | Reset conversation + task journal |
-| `shmakk --restart` | Restart the inner shell |
-| `shmakk --exit` | Exit shmakk |
-| `shmakk --review` | Confirm every AI action |
-| `shmakk --yes-files` | Auto-accept file writes |
-| `shmakk --no-correction` | Disable command correction |
-| `shmakk --colors true\|false` | Toggle colored output |
-| `shmakk --sts` | Speech-to-speech mode |
-| `shmakk --stt` | Mic input, text responses |
-| `shmakk --tts` | Text input, spoken responses |
+```bash
+shmakk --help              # overview
+shmakk --help launch       # startup modes, profiles, tuning
+shmakk --help session      # status, stats, restart, exit
+shmakk --help skills       # skill discovery, loading, listing
+shmakk --help models       # provider configuration, endpoint presets
+shmakk --help vim          # Vim/vi integration
+shmakk --help voice        # Speech-to-Text / Text-to-Speech
+shmakk --help env          # environment variable reference
+shmakk --help mcp          # MCP servers and browser automation
+shmakk --help ssh          # remote host execution
+shmakk --help vibedit      # visual editing overlay
+shmakk --help self         # natural-language self-commands
+```
 
 ## Safety
 
-- shmakk prompts you before running commands flagged as risky (writes, deletes, network, installs)
+- Prompts before risky commands (writes, deletes, network, installs)
 - Secrets (`.env`, keys, tokens) are never sent to the AI
 - Workspace root is enforced — tools can't access files outside it
 

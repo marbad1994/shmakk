@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body { width: 220px; padding: 14px; font-family: system-ui, sans-serif; background: #16181d; color: #e7e9ee; font-size: 12.5px; margin: 0; }
+    h1 { font-size: 13px; color: #e8a33d; margin: 0 0 8px; letter-spacing: .04em; }
+    .status { display: flex; align-items: center; gap: 6px; margin: 8px 0; }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: #5a5f6b; }
+    .dot.on { background: #58c789; }
+    .hint { color: #8b909d; font-size: 11px; margin-top: 10px; border-top: 1px solid #23262e; padding-top: 8px; }
+    #port { font-family: ui-monospace, monospace; font-size: 11px; color: #8b909d; }
+  </style>
+</head>
+<body>
+  <h1>shmakk Browser Automator</h1>
+  <div class="status"><span class="dot" id="dot"></span><span id="statusText">Checking...</span></div>
+  <div id="port"></div>
+  <div class="hint">Run <code>shmakk browser-daemon</code>, then open any page. The puck runs typed or recorded automation.</div>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -126,6 +126,34 @@ function makeSessionId() {
   return `${date}-${rand}`;
 }
 
+// ── Session resume ────────────────────────────────────────────────────────
+
+// Returns the most recent active session for a workspace, or null if none.
+// An "active" session has ended_at IS NULL. No time or PID check; sessions
+// live until explicitly ended (by process exit or --new-session).
+function findActiveSession(workspace) {
+  if (!workspace) return null;
+  const db = getDB();
+  if (!db) return null;
+  try {
+    return db.prepare(
+      'SELECT * FROM sessions WHERE workspace = ? AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1'
+    ).get(workspace) || null;
+  } catch {
+    return null;
+  }
+}
+
+// Update the PID for an existing session (called on resume, so the current
+// process becomes the session's recorded owner).
+function updateSessionPid(sessionId, pid) {
+  const db = getDB();
+  if (!db) return;
+  try {
+    db.prepare('UPDATE sessions SET pid = ? WHERE id = ?').run(pid, sessionId);
+  } catch {}
+}
+
 // ── Recording (called from session/agent code) ───────────────────────────
 
 function recordSessionStart({ sessionId, workspace, pid }) {
@@ -411,6 +439,8 @@ function isAvailable() {
 module.exports = {
   isAvailable,
   makeSessionId,
+  findActiveSession,
+  updateSessionPid,
   recordSessionStart,
   recordSessionEnd,
   recordTurn,
@@ -424,4 +454,5 @@ module.exports = {
   dbStats,
   closeDB,
   dbPath,
+  getDB,
 };

@@ -1,0 +1,913 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>shmakk demo scenes</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #0f1117;
+  font-family: 'JetBrains Mono', 'Fira Mono', monospace;
+  color: #d4d4d4;
+  width: 1920px;
+  height: 1080px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  position: relative;
+}
+
+/* ---- SCENE CONTAINERS ---- */
+.scene {
+  position: absolute;
+  inset: 0;
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+}
+.scene.active { display: flex; }
+
+/* ---- TITLE SCENE ---- */
+.title-scene {
+  background: radial-gradient(ellipse at center, #1a1f2e 0%, #0f1117 70%);
+}
+.title-scene .logo {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 120px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  background: linear-gradient(135deg, #4af073 20%, #4da6ff 80%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin-bottom: 16px;
+}
+.title-scene .tagline {
+  font-size: 22px;
+  color: #666;
+  letter-spacing: 0.06em;
+}
+.title-scene .sub-tagline {
+  font-size: 14px;
+  color: #3a3a3a;
+  margin-top: 8px;
+  font-style: italic;
+}
+.title-scene .install-line {
+  margin-top: 40px;
+  font-size: 16px;
+  color: #4af073;
+  background: #111;
+  border: 1px solid #2a2a2a;
+  border-radius: 4px;
+  padding: 10px 24px;
+}
+.title-scene .install-line .muted { color: #555; }
+
+/* ---- TERMINAL SCENE ---- */
+.terminal-scene {
+  justify-content: center;
+  align-items: center;
+  background: #0f1117;
+}
+.terminal-scene .window {
+  width: 900px;
+  background: #0a0c11;
+  border: 1px solid #2a2d35;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+}
+.terminal-scene .titlebar {
+  background: #181b22;
+  padding: 10px 16px;
+  display: flex; align-items: center; gap: 8px;
+  border-bottom: 1px solid #2a2d35;
+}
+.terminal-scene .dot { width: 12px; height: 12px; border-radius: 50%; }
+.terminal-scene .dot-r { background: #ff5f57; }
+.terminal-scene .dot-y { background: #febc2e; }
+.terminal-scene .dot-g { background: #28c840; }
+.terminal-scene .win-title {
+  margin-left: 10px;
+  font-size: 12px;
+  color: #444;
+}
+.terminal-scene .term {
+  padding: 18px 22px 28px;
+  font-size: 15px;
+  line-height: 1.75;
+  min-height: 420px;
+}
+
+/* terminal colors */
+.hostname  { color: #4af073; }
+.path      { color: #5c9cf5; }
+.exitcode  { color: #ff6b6b; }
+.muted     { color: #555; }
+.white     { color: #fff; }
+.user-input  { color: #e0e0e0; }
+.cmd-first  { color: #e0e0e0; }
+.task-label  { color: #888; }
+.thinking    { color: #888; }
+.ai-out      { color: #d4d4d4; }
+.tool-arrow  { color: #4af073; }
+.tool-name   { color: #d4d4d4; }
+.tool-result { color: #888; }
+.corr-old    { color: #ff6b6b; text-decoration: line-through; }
+.corr-arrow  { color: #888; }
+.corr-new    { color: #4af073; }
+.code        { color: #4af073; }
+.warn-val    { color: #ffb830; }
+.confirm     { color: #d4d4d4; }
+
+.ln { opacity: 0; transition: opacity 0.08s; }
+.ln.show { opacity: 1; }
+
+.cur {
+  display: inline-block; width: 9px; height: 16px;
+  background: #d4d4d4; vertical-align: text-bottom;
+  animation: blink 1.1s step-end infinite; margin-left: 2px;
+}
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+.prompt-line { margin-top: 4px; }
+
+/* ---- OVERLAY ---- */
+.overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  pointer-events: none;
+  z-index: 10;
+}
+.overlay-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: #4af073;
+  background: rgba(15,17,23,0.85);
+  border: 1px solid rgba(74,240,115,0.3);
+  border-radius: 4px;
+  padding: 8px 20px;
+  opacity: 0;
+  transition: opacity 0.4s;
+  position: absolute;
+  top: 60px;
+}
+.overlay-label.show { opacity: 1; }
+
+/* ---- SCENE BADGE ---- */
+.scene-badge {
+  position: absolute;
+  bottom: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 11px;
+  color: #2a2a2a;
+  letter-spacing: 0.1em;
+  z-index: 5;
+}
+
+/* pulse ring for voice scene */
+.mic-ring {
+  display: inline-block;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: #4af073;
+  animation: mic-pulse 1.5s ease-in-out infinite;
+  margin-right: 6px;
+}
+@keyframes mic-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; box-shadow: 0 0 0 0 rgba(74,240,115,0.4); }
+  50% { transform: scale(1.2); opacity: 0.7; box-shadow: 0 0 0 6px rgba(74,240,115,0); }
+}
+
+/* feature callout */
+.callout {
+  position: absolute;
+  right: 80px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: #4af073;
+  text-align: right;
+  opacity: 0;
+  transition: opacity 0.5s;
+  z-index: 8;
+}
+.callout.show { opacity: 1; }
+.callout .callout-title {
+  font-size: 10px;
+  color: #555;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.callout .callout-body {
+  font-size: 14px;
+  color: #d4d4d4;
+  line-height: 1.6;
+}
+
+/* mobile notice scene */
+.notice-scene {
+  background: radial-gradient(ellipse at center, #1a1f2e 0%, #0f1117 70%);
+  text-align: center;
+}
+.notice-scene .notice-text {
+  font-size: 24px;
+  color: #aaa;
+  line-height: 1.8;
+}
+.notice-scene .notice-cta {
+  margin-top: 30px;
+  font-size: 18px;
+  color: #4af073;
+  background: #111;
+  border: 1px solid #2a2a2a;
+  border-radius: 4px;
+  padding: 14px 28px;
+}
+</style>
+</head>
+<body>
+
+<!-- ====== SCENE 0: TITLE ====== -->
+<div class="scene active" id="scene-title">
+  <div class="title-scene" style="position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;align-items:center;">
+    <div class="logo" id="title-logo" style="opacity:0;transform:translateY(20px);transition:all 0.8s ease-out;">shmakk</div>
+    <div class="tagline" id="title-tagline" style="opacity:0;transform:translateY(15px);transition:all 0.8s ease-out 0.3s;">AI-supervised terminal</div>
+    <div class="sub-tagline" id="title-sub" style="opacity:0;transition:all 0.8s ease-out 0.6s;">No GUI. No bloat. Just your shell, smarter.</div>
+    <div class="install-line" id="title-install" style="opacity:0;transition:all 0.8s ease-out 0.9s;">
+      npm install -g <span class="muted">shmakk</span>
+    </div>
+  </div>
+</div>
+
+<!-- ====== SCENE 1: INSTALL ====== -->
+<div class="scene" id="scene-install">
+  <div class="terminal-scene" style="position:absolute;inset:0;display:flex;">
+    <div class="overlay-label" id="ol-install">getting started</div>
+    <div class="window">
+      <div class="titlebar">
+        <div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div>
+        <span class="win-title">shmakk : setup</span>
+      </div>
+      <div class="term" id="term-install"></div>
+    </div>
+    <div class="scene-badge">scene 1/8</div>
+  </div>
+</div>
+
+<!-- ====== SCENE 2: TYPO CORRECTION ====== -->
+<div class="scene" id="scene-typo">
+  <div class="terminal-scene" style="position:absolute;inset:0;display:flex;">
+    <div class="overlay-label" id="ol-typo">typo correction</div>
+    <div class="callout" id="co-typo">
+      <div class="callout-title">feature</div>
+      <div class="callout-body">Mistyped a command?<br>shmakk detects it,<br>suggests a fix, and<br>re-runs automatically.</div>
+    </div>
+    <div class="window">
+      <div class="titlebar">
+        <div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div>
+        <span class="win-title">shmakk : MainThread</span>
+      </div>
+      <div class="term" id="term-typo"></div>
+    </div>
+    <div class="scene-badge">scene 2/8</div>
+  </div>
+</div>
+
+<!-- ====== SCENE 3: CHAT ====== -->
+<div class="scene" id="scene-chat">
+  <div class="terminal-scene" style="position:absolute;inset:0;display:flex;">
+    <div class="overlay-label" id="ol-chat">natural language</div>
+    <div class="callout" id="co-chat">
+      <div class="callout-title">feature</div>
+      <div class="callout-body">Ask questions in plain<br>English. shmakk understands<br>intent, not just syntax.</div>
+    </div>
+    <div class="window">
+      <div class="titlebar">
+        <div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div>
+        <span class="win-title">shmakk : MainThread</span>
+      </div>
+      <div class="term" id="term-chat"></div>
+    </div>
+    <div class="scene-badge">scene 3/8</div>
+  </div>
+</div>
+
+<!-- ====== SCENE 4: PROJECT BUILDER ====== -->
+<div class="scene" id="scene-project">
+  <div class="terminal-scene" style="position:absolute;inset:0;display:flex;">
+    <div class="overlay-label" id="ol-project">project builder</div>
+    <div class="callout" id="co-project">
+      <div class="callout-title">feature</div>
+      <div class="callout-body">"Set up a new project"<br>shmakk plans, scaffolds,<br>and builds — hands-free.</div>
+    </div>
+    <div class="window">
+      <div class="titlebar">
+        <div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div>
+        <span class="win-title">shmakk : MainThread</span>
+      </div>
+      <div class="term" id="term-project"></div>
+    </div>
+    <div class="scene-badge">scene 4/8</div>
+  </div>
+</div>
+
+<!-- ====== SCENE 5: SAFETY ====== -->
+<div class="scene" id="scene-safety">
+  <div class="terminal-scene" style="position:absolute;inset:0;display:flex;">
+    <div class="overlay-label" id="ol-safety">safety controls</div>
+    <div class="callout" id="co-safety">
+      <div class="callout-title">feature</div>
+      <div class="callout-body">Dangerous commands are<br>intercepted. shmakk asks<br>for confirmation before<br>anything destructive.</div>
+    </div>
+    <div class="window">
+      <div class="titlebar">
+        <div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div>
+        <span class="win-title">shmakk : MainThread</span>
+      </div>
+      <div class="term" id="term-safety"></div>
+    </div>
+    <div class="scene-badge">scene 5/8</div>
+  </div>
+</div>
+
+<!-- ====== SCENE 6: SKILLS & PROFILES ====== -->
+<div class="scene" id="scene-skills">
+  <div class="terminal-scene" style="position:absolute;inset:0;display:flex;">
+    <div class="overlay-label" id="ol-skills">skills & profiles</div>
+    <div class="callout" id="co-skills">
+      <div class="callout-title">feature</div>
+      <div class="callout-body">32 built-in skills for<br>code review, research,<br>devops, and more.<br><br>4 runtime profiles from<br>tiny to large-app.</div>
+    </div>
+    <div class="window">
+      <div class="titlebar">
+        <div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div>
+        <span class="win-title">shmakk : MainThread</span>
+      </div>
+      <div class="term" id="term-skills"></div>
+    </div>
+    <div class="scene-badge">scene 6/8</div>
+  </div>
+</div>
+
+<!-- ====== SCENE 7: VOICE ====== -->
+<div class="scene" id="scene-voice">
+  <div class="terminal-scene" style="position:absolute;inset:0;display:flex;">
+    <div class="overlay-label" id="ol-voice">voice mode</div>
+    <div class="callout" id="co-voice">
+      <div class="callout-title">feature</div>
+      <div class="callout-body">Speak naturally.<br>shmakk listens, responds,<br>and reads answers aloud.<br>No push-to-talk needed.</div>
+    </div>
+    <div class="window">
+      <div class="titlebar">
+        <div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div>
+        <span class="win-title">shmakk : voice</span>
+      </div>
+      <div class="term" id="term-voice"></div>
+    </div>
+    <div class="scene-badge">scene 7/8</div>
+  </div>
+</div>
+
+<!-- ====== SCENE 8: OUTRO ====== -->
+<div class="scene" id="scene-outro">
+  <div class="title-scene" style="position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;align-items:center;">
+    <div class="logo" id="outro-logo" style="opacity:0;transform:translateY(20px);transition:all 0.8s ease-out;">shmakk</div>
+    <div class="tagline" id="outro-tagline" style="opacity:0;transition:all 0.8s ease-out 0.3s;">Your terminal, supercharged.</div>
+    <div class="install-line" id="outro-install" style="opacity:0;transition:all 0.8s ease-out 0.6s;">
+      npm install -g <span class="muted">shmakk</span>
+    </div>
+    <div style="margin-top:30px;opacity:0;transition:all 0.8s ease-out 0.9s;" id="outro-gh">
+      <span style="font-size:14px;color:#555;">github.com/marbad1994/shmakk</span>
+    </div>
+    <div style="margin-top:20px;opacity:0;transition:all 0.8s ease-out 1.2s;" id="outro-star">
+      <span style="font-size:12px;color:#3a3a3a;">star the repo if this was useful</span>
+    </div>
+  </div>
+</div>
+
+<!-- ====== MOBILE NOTICE ====== -->
+<div class="scene" id="scene-mobile">
+  <div class="notice-scene" style="position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;align-items:center;">
+    <div class="notice-text">shmakk works everywhere,<br>on every platform.</div>
+    <div class="notice-cta">One install. Your terminal, smarter.</div>
+  </div>
+</div>
+
+<script>
+// ---- SCENE DIRECTOR ----
+const SCENES = [
+  'scene-title',    // 0
+  'scene-install',  // 1
+  'scene-typo',     // 2
+  'scene-chat',     // 3
+  'scene-project',  // 4
+  'scene-safety',   // 5
+  'scene-skills',   // 6
+  'scene-voice',    // 7
+  'scene-outro',    // 8
+];
+
+let currentScene = 0;
+
+function showScene(idx) {
+  document.querySelectorAll('.scene').forEach(s => s.classList.remove('active'));
+  const id = SCENES[idx];
+  document.getElementById(id).classList.add('active');
+  currentScene = idx;
+}
+
+function typeLines(containerId, lines, delayMs, callback) {
+  const el = document.getElementById(containerId);
+  if (!el) { if (callback) callback(); return; }
+  el.innerHTML = '';
+  let i = 0;
+  function next() {
+    if (i >= lines.length) {
+      if (callback) callback();
+      return;
+    }
+    const div = document.createElement('div');
+    div.className = 'ln';
+    div.innerHTML = lines[i];
+    el.appendChild(div);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => { div.classList.add('show'); });
+    });
+    i++;
+    setTimeout(next, delayMs);
+  }
+  next();
+}
+
+function clearAndRun(containerId, sequence, done) {
+  const el = document.getElementById(containerId);
+  if (!el) { if (done) done(); return; }
+  el.innerHTML = '';
+  let step = 0;
+  function runStep() {
+    if (step >= sequence.length) {
+      if (done) done();
+      return;
+    }
+    const s = sequence[step];
+    if (s.clear) {
+      el.innerHTML = '';
+      step++;
+      runStep();
+      return;
+    }
+    if (s.wait) {
+      step++;
+      setTimeout(runStep, s.wait);
+      return;
+    }
+    if (s.lines) {
+      let li = 0;
+      function addLine() {
+        if (li >= s.lines.length) {
+          step++;
+          if (s.afterWait) setTimeout(runStep, s.afterWait);
+          else runStep();
+          return;
+        }
+        const div = document.createElement('div');
+        div.className = 'ln';
+        div.innerHTML = s.lines[li];
+        el.appendChild(div);
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => { div.classList.add('show'); });
+        });
+        li++;
+        setTimeout(addLine, s.delay || 120);
+      }
+      addLine();
+      return;
+    }
+    step++;
+    runStep();
+  }
+  runStep();
+}
+
+// ---- SCENE SCRIPTS ----
+function runTitleScene(done) {
+  showScene(0);
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      document.getElementById('title-logo').style.opacity = '1';
+      document.getElementById('title-logo').style.transform = 'translateY(0)';
+    });
+  });
+  setTimeout(() => {
+    document.getElementById('title-tagline').style.opacity = '1';
+    document.getElementById('title-tagline').style.transform = 'translateY(0)';
+  }, 400);
+  setTimeout(() => {
+    document.getElementById('title-sub').style.opacity = '1';
+  }, 800);
+  setTimeout(() => {
+    document.getElementById('title-install').style.opacity = '1';
+  }, 1200);
+  setTimeout(done, 4000);
+}
+
+function runInstallScene(done) {
+  showScene(1);
+  setTimeout(() => { document.getElementById('ol-install').classList.add('show'); }, 200);
+
+  const seq = [
+    { lines: [
+      '<span class="hostname">marcus@workstation</span> <span class="path">~</span><span class="muted">&gt;</span> <span class="white">npm install -g shmakk</span>',
+    ], delay: 100 },
+    { wait: 800 },
+    { lines: [
+      '<span class="muted">added 47 packages in 3s</span>',
+    ], delay: 80 },
+    { wait: 500 },
+    { lines: [
+      '',
+      '<span class="hostname">marcus@workstation</span> <span class="path">~</span><span class="muted">&gt;</span> <span class="white">export SHMAKK_API_KEY="sk-..."</span>',
+    ], delay: 80 },
+    { wait: 300 },
+    { lines: [
+      '<span class="hostname">marcus@workstation</span> <span class="path">~</span><span class="muted">&gt;</span> <span class="white">shmakk</span>',
+    ], delay: 80 },
+    { wait: 400 },
+    { lines: [
+      '<span class="muted">session started. type commands or questions naturally.</span>',
+    ], delay: 80 },
+    { wait: 1200 },
+  ];
+
+  clearAndRun('term-install', seq, () => {
+    setTimeout(done, 400);
+  });
+}
+
+function runTypoScene(done) {
+  showScene(2);
+  setTimeout(() => { document.getElementById('ol-typo').classList.add('show'); }, 200);
+  setTimeout(() => { document.getElementById('co-typo').classList.add('show'); }, 2000);
+
+  const seq = [
+    { lines: [
+      '<span class="hostname">marcus@tobarko.ai</span> <span class="path">~/project</span><span class="muted">&gt;</span> <span class="user-input">gti status</span>',
+    ], delay: 100 },
+    { wait: 500 },
+    { lines: [
+      '<span class="exitcode">fish: Unknown command: gti</span>',
+    ], delay: 60 },
+    { wait: 400 },
+    { lines: [
+      '<span class="corr-old">gti status</span> <span class="corr-arrow">→</span> <span class="corr-new">git status</span>',
+    ], delay: 80 },
+    { wait: 200 },
+    { lines: [
+      '<span class="muted">[shmakk] corrected and re-running...</span>',
+    ], delay: 80 },
+    { wait: 600 },
+    { lines: [
+      '',
+      '<span class="white">On branch main</span>',
+      '<span class="white">nothing to commit, working tree clean</span>',
+    ], delay: 60 },
+    { wait: 800 },
+    { lines: [
+      '',
+      '<span class="hostname">marcus@tobarko.ai</span> <span class="path">~/project</span><span class="muted">&gt;</span> <span class="user-input">git diff --staged<span class="cur"></span></span>',
+    ], delay: 80 },
+    { wait: 400 },
+  ];
+
+  clearAndRun('term-typo', seq, () => {
+    setTimeout(done, 300);
+  });
+}
+
+function runChatScene(done) {
+  showScene(3);
+  setTimeout(() => { document.getElementById('ol-chat').classList.add('show'); }, 200);
+  setTimeout(() => { document.getElementById('co-chat').classList.add('show'); }, 3000);
+
+  const seq = [
+    { lines: [
+      '<span class="hostname">marcus@tobarko.ai</span> <span class="path">~/project</span><span class="muted">&gt;</span> <span class="user-input">Hey can we chat?</span>',
+    ], delay: 100 },
+    { wait: 600 },
+    { lines: [
+      '<span class="task-label">[shmakk task] (Ctrl-C to interrupt)</span>',
+    ], delay: 80 },
+    { wait: 400 },
+    { lines: [
+      '<span class="thinking">thinking...</span>',
+    ], delay: 80 },
+    { wait: 800 },
+    { lines: [
+      '<span class="ai-out">Sure! What\'s on your mind? Need help with</span>',
+      '<span class="ai-out">something in your project, or just want to bounce</span>',
+      '<span class="ai-out">around some ideas?</span>',
+    ], delay: 40 },
+    { wait: 1500 },
+    { lines: [
+      '',
+      '<span class="hostname">marcus@tobarko.ai</span> <span class="path">~/project</span><span class="muted">&gt;</span> <span class="user-input">What does this codebase do?<span class="cur"></span></span>',
+    ], delay: 80 },
+    { wait: 600 },
+    { lines: [
+      '<span class="task-label">[shmakk task] (Ctrl-C to interrupt)</span>',
+      '<span class="thinking">reading source files...</span>',
+    ], delay: 60 },
+    { wait: 1000 },
+    { lines: [
+      '<span class="ai-out">This is a Node.js CLI tool that wraps your shell</span>',
+      '<span class="ai-out">with AI supervision. It corrects typos, handles</span>',
+      '<span class="ai-out">multi-step tasks, and keeps you safe from</span>',
+      '<span class="ai-out">destructive commands. Built on node-pty.</span>',
+    ], delay: 35 },
+    { wait: 1000 },
+  ];
+
+  clearAndRun('term-chat', seq, () => {
+    setTimeout(done, 300);
+  });
+}
+
+function runProjectScene(done) {
+  showScene(4);
+  setTimeout(() => { document.getElementById('ol-project').classList.add('show'); }, 200);
+  setTimeout(() => { document.getElementById('co-project').classList.add('show'); }, 2000);
+
+  const seq = [
+    { lines: [
+      '<span class="hostname">marcus@tobarko.ai</span> <span class="path">~/projects</span><span class="muted">&gt;</span> <span class="user-input">set up a new React + TypeScript project with Tailwind</span>',
+    ], delay: 80 },
+    { wait: 600 },
+    { lines: [
+      '<span class="task-label">[shmakk task] planning...</span>',
+    ], delay: 80 },
+    { wait: 500 },
+    { lines: [
+      '<span class="thinking">analyzing request...</span>',
+    ], delay: 80 },
+    { wait: 700 },
+    { lines: [
+      '<span class="ai-out">I\'ll scaffold a React + TypeScript project with</span>',
+      '<span class="ai-out">Tailwind CSS. Running:</span>',
+    ], delay: 50 },
+    { wait: 300 },
+    { lines: [
+      '',
+      '<span class="tool-arrow">→</span> <span class="tool-name">run</span> <span class="code">npx create-react-app my-app --template typescript</span>',
+    ], delay: 60 },
+    { wait: 1000 },
+    { lines: [
+      '<span class="tool-result">Creating a new React app...</span>',
+      '<span class="tool-result">Installing packages. This might take a minute.</span>',
+    ], delay: 50 },
+    { wait: 1200 },
+    { lines: [
+      '<span class="tool-result">Success! Created my-app</span>',
+    ], delay: 60 },
+    { wait: 400 },
+    { lines: [
+      '',
+      '<span class="tool-arrow">→</span> <span class="tool-name">run</span> <span class="code">cd my-app && npm install -D tailwindcss</span>',
+    ], delay: 60 },
+    { wait: 800 },
+    { lines: [
+      '<span class="tool-result">added 12 packages in 2s</span>',
+    ], delay: 60 },
+    { wait: 500 },
+    { lines: [
+      '',
+      '<span class="ai-out">Project ready at ~/projects/my-app</span>',
+      '<span class="ai-out">Run `npm start` to launch the dev server.</span>',
+    ], delay: 50 },
+    { wait: 800 },
+  ];
+
+  clearAndRun('term-project', seq, () => {
+    setTimeout(done, 300);
+  });
+}
+
+function runSafetyScene(done) {
+  showScene(5);
+  setTimeout(() => { document.getElementById('ol-safety').classList.add('show'); }, 200);
+  setTimeout(() => { document.getElementById('co-safety').classList.add('show'); }, 2500);
+
+  const seq = [
+    { lines: [
+      '<span class="hostname">marcus@tobarko.ai</span> <span class="path">~/project</span><span class="muted">&gt;</span> <span class="user-input">rm -rf node_modules</span>',
+    ], delay: 100 },
+    { wait: 500 },
+    { lines: [
+      '',
+      '<span class="warn-val">[shmakk] This will delete 2,847 files. Proceed?</span>',
+    ], delay: 80 },
+    { wait: 300 },
+    { lines: [
+      '<span class="confirm">[y/N]</span> <span class="user-input">y</span>',
+    ], delay: 100 },
+    { wait: 600 },
+    { lines: [
+      '<span class="muted">deleting node_modules/...</span>',
+    ], delay: 80 },
+    { wait: 800 },
+    { lines: [
+      '',
+      '<span class="hostname">marcus@tobarko.ai</span> <span class="path">~/project</span><span class="muted">&gt;</span> <span class="user-input">git push --force origin main</span>',
+    ], delay: 80 },
+    { wait: 500 },
+    { lines: [
+      '',
+      '<span class="warn-val">[shmakk] Force pushing rewrites remote history.</span>',
+      '<span class="warn-val">This can cause data loss for collaborators.</span>',
+    ], delay: 80 },
+    { wait: 300 },
+    { lines: [
+      '<span class="confirm">[y/N]</span> <span class="user-input">n</span>',
+    ], delay: 100 },
+    { wait: 400 },
+    { lines: [
+      '<span class="muted">aborted.</span>',
+    ], delay: 80 },
+    { wait: 800 },
+  ];
+
+  clearAndRun('term-safety', seq, () => {
+    setTimeout(done, 300);
+  });
+}
+
+function runSkillsScene(done) {
+  showScene(6);
+  setTimeout(() => { document.getElementById('ol-skills').classList.add('show'); }, 200);
+  setTimeout(() => { document.getElementById('co-skills').classList.add('show'); }, 1500);
+
+  const seq = [
+    { lines: [
+      '<span class="hostname">marcus@tobarko.ai</span> <span class="path">~/project</span><span class="muted">&gt;</span> <span class="user-input">shmakk --skill code-review</span>',
+    ], delay: 100 },
+    { wait: 400 },
+    { lines: [
+      '<span class="task-label">[shmakk] loaded skill: code-review v1</span>',
+    ], delay: 80 },
+    { wait: 400 },
+    { lines: [
+      '',
+      '<span class="hostname">marcus@tobarko.ai</span> <span class="path">~/project</span><span class="muted">&gt;</span> <span class="user-input">review src/agent.js for issues</span>',
+    ], delay: 80 },
+    { wait: 600 },
+    { lines: [
+      '<span class="task-label">[shmakk task] code review in progress...</span>',
+      '<span class="thinking">analyzing src/agent.js...</span>',
+    ], delay: 80 },
+    { wait: 1000 },
+    { lines: [
+      '',
+      '<span class="ai-out">CODE REVIEW: src/agent.js</span>',
+      '',
+      '<span class="ai-out">IMPORTANT — Should fix</span>',
+      '<span class="ai-out">[Line 47] Missing timeout on fetch call — may hang indefinitely</span>',
+      '<span class="ai-out">[Line 112] Large response not streamed — memory concern for big payloads</span>',
+      '',
+      '<span class="ai-out">LOOKS GOOD</span>',
+      '<span class="ai-out">Error handling on tool failures is consistent</span>',
+      '<span class="ai-out">Input sanitization before shell execution</span>',
+    ], delay: 40 },
+    { wait: 1500 },
+    { lines: [
+      '',
+      '<span class="hostname">marcus@tobarko.ai</span> <span class="path">~/project</span><span class="muted">&gt;</span> <span class="user-input">shmakk --profile-set deep</span>',
+    ], delay: 80 },
+    { wait: 400 },
+    { lines: [
+      '<span class="muted">[shmakk] profile switched: balanced → deep</span>',
+      '<span class="muted">[shmakk] larger context, deeper investigation mode</span>',
+    ], delay: 80 },
+    { wait: 1000 },
+  ];
+
+  clearAndRun('term-skills', seq, () => {
+    setTimeout(done, 300);
+  });
+}
+
+function runVoiceScene(done) {
+  showScene(7);
+  setTimeout(() => { document.getElementById('ol-voice').classList.add('show'); }, 200);
+  setTimeout(() => { document.getElementById('co-voice').classList.add('show'); }, 2000);
+
+  const seq = [
+    { lines: [
+      '<span class="hostname">marcus@tobarko.ai</span> <span class="path">~/project</span><span class="muted">&gt;</span> <span class="white">shmakk --sts</span>',
+    ], delay: 100 },
+    { wait: 400 },
+    { lines: [
+      '<span class="muted">voice mode active. speak naturally.</span>',
+    ], delay: 80 },
+    { wait: 600 },
+    { lines: [
+      '',
+      '<span class="mic-ring"></span><span class="voice-txt">"what ports are listening right now?"</span>',
+    ], delay: 80 },
+    { wait: 600 },
+    { lines: [
+      '<span class="thinking">transcribing... processing...</span>',
+    ], delay: 80 },
+    { wait: 800 },
+    { lines: [
+      '',
+      '<span class="ai-out">Running ss -tlnp to check listening ports.</span>',
+    ], delay: 50 },
+    { wait: 600 },
+    { lines: [
+      '<span class="tool-result">LISTEN 0.0.0.0:3015 (node)</span>',
+      '<span class="tool-result">LISTEN 127.0.0.1:5491 (postgres)</span>',
+      '<span class="tool-result">LISTEN 127.0.0.1:6342 (redis-server)</span>',
+    ], delay: 50 },
+    { wait: 800 },
+    { lines: [
+      '',
+      '<span class="voice-resp">[TTS] You have three services listening:</span>',
+      '<span class="voice-resp">      a Node app on port 3015, Postgres on 5491,</span>',
+      '<span class="voice-resp">      and Redis on 6342.</span>',
+    ], delay: 60 },
+    { wait: 1500 },
+  ];
+
+  clearAndRun('term-voice', seq, () => {
+    setTimeout(done, 300);
+  });
+}
+
+function runOutroScene(done) {
+  showScene(8);
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      document.getElementById('outro-logo').style.opacity = '1';
+      document.getElementById('outro-logo').style.transform = 'translateY(0)';
+    });
+  });
+  setTimeout(() => {
+    document.getElementById('outro-tagline').style.opacity = '1';
+    document.getElementById('outro-tagline').style.transform = 'translateY(0)';
+  }, 400);
+  setTimeout(() => {
+    document.getElementById('outro-install').style.opacity = '1';
+  }, 800);
+  setTimeout(() => {
+    document.getElementById('outro-gh').style.opacity = '1';
+  }, 1200);
+  setTimeout(() => {
+    document.getElementById('outro-star').style.opacity = '1';
+  }, 1600);
+  setTimeout(done, 5000);
+}
+
+// ---- MAIN SEQUENCE ----
+const sceneRunners = [
+  runTitleScene,
+  runInstallScene,
+  runTypoScene,
+  runChatScene,
+  runProjectScene,
+  runSafetyScene,
+  runSkillsScene,
+  runVoiceScene,
+  runOutroScene,
+];
+
+function runAll(idx) {
+  if (idx >= sceneRunners.length) {
+    // all done — signal to Playwright
+    document.title = 'DONE';
+    return;
+  }
+  sceneRunners[idx](() => {
+    runAll(idx + 1);
+  });
+}
+
+// start after a short delay so the page renders
+setTimeout(() => { runAll(0); }, 500);
+</script>
+</body>
+</html>

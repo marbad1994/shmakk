@@ -18,9 +18,9 @@ export function Page({ lead, actions, tabs, children }: { lead?: ReactNode; acti
   );
 }
 
-export function Section({ title, aside, children, className }: { title: ReactNode; aside?: ReactNode; children: ReactNode; className?: string }) {
+export function Section({ id, title, aside, children, className }: { id?: string; title: ReactNode; aside?: ReactNode; children: ReactNode; className?: string }) {
   return (
-    <section className={cn('grid gap-3', className)}>
+    <section id={id} className={cn('grid gap-3', className)}>
       <h2 className="m-0 flex items-center gap-2 text-[13px] font-semibold text-dim after:h-px after:flex-1 after:bg-line">
         {title}{aside ? <span className="order-last font-normal">{aside}</span> : null}
       </h2>

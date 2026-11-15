@@ -8,6 +8,7 @@ import type {
   AskItem, AssistantItem, Item, LogItem, NoticeItem, OutputItem, PlanItem, RouteItem, ShellItem, StepItem, TeamItem, ToolItem, UserItem, ViewId,
 } from '@/lib/types';
 import { bytes, cn, copyText } from '@/lib/utils';
+import { resolveApprovalKey } from '@/lib/approvalKeys';
 import { useApp } from '@/store/app';
 import { haptic } from '@/hooks/useMobile';
 import { Badge } from '@/components/ui/badge';
@@ -190,10 +191,20 @@ function Ask({ item }: { item: AskItem }) {
     // On touch devices focusing would summon nothing useful and can scroll; skip it.
     if (!matchMedia('(pointer: coarse)').matches) yesRef.current?.focus({ preventScroll: true });
     const onKey = (e: KeyboardEvent) => {
-      const el = e.target as HTMLElement;
-      if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || e.metaKey || e.ctrlKey || e.altKey) return;
-      if (e.key === 'y' || e.key === 'Y') { e.preventDefault(); answer(item.id, true); }
-      if (e.key === 'n' || e.key === 'N' || e.key === 'Escape') { e.preventDefault(); answer(item.id, false); }
+      const el = e.target as HTMLElement | null;
+      const decision = resolveApprovalKey({
+        key: e.key,
+        metaKey: e.metaKey,
+        ctrlKey: e.ctrlKey,
+        altKey: e.altKey,
+        isComposing: e.isComposing,
+        tagName: el?.tagName,
+        value: el instanceof HTMLTextAreaElement ? el.value : undefined,
+      });
+      if (!decision) return;
+      // Cancelling the keypress keeps the letter out of the draft.
+      e.preventDefault();
+      answer(item.id, decision === 'yes');
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);

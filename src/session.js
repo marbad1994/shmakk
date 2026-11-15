@@ -19,9 +19,11 @@ const { runTeam, looksMultiDomain } = require('./team');
 const { addPlanTasks, markTaskComplete, markTaskSkipped } = require('./task-file');
 const { captureGitSha, runPostPlanReview } = require('./code-reviewer');
 const sessionSearch = require('./session-search');
-const { HELP } = require('./cli');
+const { HELP, HELP_SUMMARY, HELP_SESSION_SUMMARY } = require('./cli');
+const { vibeditState } = require('./vibedit/state');
 const audit = require('./audit');
 const { setMaxListeners } = require('events');
+const { prepareVimEnvironment } = require('./vim');
 
 // Lazy-loaded voice service — only required when --voice is active
 let voiceService = null;
@@ -155,17 +157,55 @@ function makeToolConfirm(opts, ask, out, getAbort) {
     const ok = await ask('Run?', wouldAuto, {
       onCancel: getAbort,
       onWhy: showWhy,
+      notifyBody: description,
     });
     audit.append({ kind: ok ? 'tool-allowed' : 'tool-declined', name, args });
     return ok;
   };
 }
 
+// Check all workspace roots for pending vibedit specs. If found, read the
+// spec, delete the signal file, and return formatted injection text.
+function drainPendingVibeditSpecs(roots) {
+  const specs = [];
+  for (const root of roots) {
+    const signalFile = vibeditState(root).pendingSpecFile;
+    try {
+      if (require('fs').existsSync(signalFile)) {
+        const specPath = require('fs').readFileSync(signalFile, 'utf8').trim();
+        if (specPath && require('fs').existsSync(specPath)) {
+          const raw = require('fs').readFileSync(specPath, 'utf8');
+          require('fs').unlinkSync(signalFile);
+          specs.push({ path: specPath, content: raw });
+        }
+      }
+    } catch {}
+  }
+  if (specs.length === 0) return null;
+
+  let text = 'Implement the following vibedit specification(s). ';
+  text += 'These were produced by the visual browser editor where the user made live changes and clicked Save. ';
+  text += 'The spec describes what the user wants. You are shmakk PM: read the spec, figure out all files that need changes (may span frontend AND backend), and make the edits.\n\n';
+  for (const s of specs) {
+    text += `--- VIBEDIT SPEC (from ${s.path}) ---\n${s.content}\n\n`;
+  }
+  return text;
+}
+
 async function runOneSession(opts, registerSession) {
-  const session = startSession({ debug: opts.debug, voiceEnabled: !!opts.voice });
+  const vimShim = prepareVimEnvironment(opts.vim || 'vim');
+  const session = startSession({
+    debug: opts.debug,
+    voiceEnabled: !!opts.voice && !opts.sts,
+    stsEnabled: !!opts.sts,
+    shellOverride: opts.shell,
+    extraEnv: vimShim.env,
+    cleanup: vimShim.cleanup,
+  });
   let colorsEnabled = opts.colors !== false;
+  let markdownEnabled = opts.markdown !== false;
   const out = (s) => session.stdoutWrite(colorsEnabled ? s : stripAnsi(s));
-  const ask = makePrompter(session, out);
+  const ask = makePrompter(session, out, opts);
   const glossary = loadGlossary();
   // Workspace tracking: explicit --workspace is "pinned"; otherwise cwd
   // floats with the inner shell's `cd`. When both pinned and cwd differ,
@@ -174,9 +214,18 @@ async function runOneSession(opts, registerSession) {
   let cwd = pinnedWorkspace || process.cwd();
 
   function currentRoots() {
-    if (!pinnedWorkspace) return [require('path').resolve(cwd)];
+    const tmp = '/tmp';
+    if (!pinnedWorkspace) {
+      const r = [require('path').resolve(cwd)];
+      if (tmp !== r[0] && !r[0].startsWith(tmp + '/')) r.push(tmp);
+      return r;
+    }
     const c = require('path').resolve(cwd);
-    return c === pinnedWorkspace ? [pinnedWorkspace] : [pinnedWorkspace, c];
+    const r = c === pinnedWorkspace ? [pinnedWorkspace] : [pinnedWorkspace, c];
+    if (tmp !== r[0] && !r[0].startsWith(tmp + '/')) {
+      if (r.length < 2 || (tmp !== r[1] && !r[1].startsWith(tmp + '/'))) r.push(tmp);
+    }
+    return r;
   }
 
   // ── MCP server setup ──
@@ -195,10 +244,30 @@ async function runOneSession(opts, registerSession) {
   }
   // Generate a session ID so all turns/files this session produces can be
   // joined together in the search DB. Persists in env so subagents can tag.
-  const sessionId = sessionSearch.makeSessionId();
+  // Resume an existing session for this workspace if available and the
+  // user hasn't explicitly requested a fresh session via --new-session.
+  let sessionId = null;
+  let resumed = false;
+  if (cwd) {
+    const existing = sessionSearch.findActiveSession(cwd);
+    if (existing && !opts.newSession) {
+      sessionId = existing.id;
+      sessionSearch.updateSessionPid(sessionId, process.pid);
+      resumed = true;
+    } else if (existing && opts.newSession) {
+      // Force a new session: end the old one first
+      sessionSearch.recordSessionEnd({ sessionId: existing.id });
+    }
+  }
+  if (!sessionId) {
+    sessionId = sessionSearch.makeSessionId();
+  }
   process.env.SHMAKK_SESSION_ID = sessionId;
   audit.append({ kind: 'session-start', sessionId, workspace: cwd, pinnedWorkspace, review: !!opts.review, pid: process.pid });
   sessionSearch.recordSessionStart({ sessionId, workspace: cwd, pid: process.pid });
+  if (resumed) {
+    out(`\x1b[2m[shmakk] resumed session ${sessionId}\x1b[0m\r\n`);
+  }
 
   // Incremental audit-log index catch-up — runs once at session start, async,
   // never blocks the user. Pulls in any sessions/turns persisted by other
@@ -369,7 +438,10 @@ async function runOneSession(opts, registerSession) {
       executeSelfCommand(voiceSelfCmd, out, {
         opts,
         HELP,
+        HELP_SUMMARY,
+        HELP_SESSION_SUMMARY,
         setColors: (v) => { colorsEnabled = v; },
+        setVoiceMode,
       });
       return;
     }
@@ -392,6 +464,7 @@ async function runOneSession(opts, registerSession) {
             history,
             profile: opts.profile || voiceRouting.profile || 'balanced',
             colors: colorsEnabled,
+            markdown: markdownEnabled,
             voiceMode: true,
             specialistHint: voiceRouting.specialistHint,
             mcpManager,
@@ -466,12 +539,72 @@ async function runOneSession(opts, registerSession) {
   // ── Continuous voice loop (--sts always-on) ──
   // When --sts is active, runs a background loop: listen → transcribe → inject.
   // No hotkey needed — just speak and pause.
+
+  // ── Vibedit spec trigger ──
+  // Called from the vibedit onSpec callback when the user clicks Save in the
+  // overlay. Drains pending specs, runs the agent immediately, and updates
+  // history/session search — just like the normal command loop.
+  let specRunBusy = false;
+  async function runVibeditSpecNow(spec, specPath) {
+    if (specRunBusy) {
+      // Spec is already saved to the pending signal file. The currently
+      // running agent (or the next user command) will pick it up.
+      out(dim('[shmakk vibedit] spec queued — agent busy, will apply next', colorsEnabled) + '\r\n');
+      return;
+    }
+    if (!isConfigured()) {
+      out('\r\n\x1b[33m[shmakk vibedit] LLM not configured — spec saved but cannot apply yet\x1b[0m\r\n');
+      session.childWrite('\r');
+      return;
+    }
+    specRunBusy = true;
+    try {
+      await withAI(async (ctrl) => {
+        const specInjection = drainPendingVibeditSpecs(currentRoots());
+        if (!specInjection) {
+          out('\r\n\x1b[33m[shmakk vibedit] no pending specs found\x1b[0m\r\n');
+          return;
+        }
+        out('\x1b[36m[shmakk vibedit] applying spec immediately... (Ctrl-C to interrupt)\x1b[0m\r\n');
+        out(dim(`[shmakk vibedit] spec: ${spec.summary || '(no summary)'}`, colorsEnabled) + '\r\n');
+        try {
+          const updated = await runAgent({
+            roots: currentRoots(),
+            glossary,
+            confirmTool: makeToolConfirm(opts, ask, out, () => ctrl.abort()),
+            write: out,
+            signal: ctrl.signal,
+            profile: opts.profile || 'balanced',
+            colors: colorsEnabled,
+            markdown: markdownEnabled,
+            mcpManager,
+            input: specInjection,
+            history,
+          });
+          history = trimHistory(updated || history);
+          out(dim('\r\n[shmakk vibedit] spec applied', colorsEnabled) + '\r\n');
+        } catch (e) {
+          if (isAbortError(e)) {
+            // already signaled
+          } else {
+            out(`\r\n\x1b[31m[shmakk vibedit] error applying spec: ${e.message}\x1b[0m\r\n`);
+          }
+        }
+      });
+    } finally {
+      specRunBusy = false;
+    }
+  }
   // Pauses while TTS is speaking to avoid feedback loop.
-  if (opts.sts) {
+  let stsLoopStarted = false;
+  function startStsLoop() {
+    if (stsLoopStarted) return true;
     const vs = getVoiceService();
     if (!vs.isAvailable()) {
       out('\r\n\x1b[33m[shmakk] no audio recorder found. Install sox.\x1b[0m\r\n');
+      return false;
     } else {
+      stsLoopStarted = true;
       // Preload STT model in background so first transcription doesn't lag
       try { vs.preloadSTT(); } catch {}
       let voiceLoopActive = true;
@@ -520,56 +653,99 @@ async function runOneSession(opts, registerSession) {
       if (!session._stsFlags) session._stsFlags = {};
       session._stsFlags.setTtsSpeaking = (v) => { ttsSpeaking = v; if (!v) ttsStoppedAt = Date.now(); };
       // Let the global Ctrl+C handler stop the STS loop on double-press.
-      session._stsFlags.stopLoop = () => { voiceLoopActive = false; };
+      session._stsFlags.stopLoop = () => { voiceLoopActive = false; stsLoopStarted = false; };
+      // Pause/resume the loop externally (used by push-to-talk interrupt).
+      session._stsFlags.setVoiceBusy = (v) => { voiceBusy = v; };
+      return true;
+    }
+  }
+
+  if (opts.sts) startStsLoop();
+
+  function stopStsLoop() {
+    if (session._stsFlags?.stopLoop) session._stsFlags.stopLoop();
+  }
+
+  function stopRecorder() {
+    try { getVoiceService()._killRecorder(); } catch {}
+  }
+
+  function stopTts() {
+    try { getVoiceService()._killTts(); } catch {}
+    try { getTTSService().stopSpeaking(); } catch {}
+  }
+
+  function setVoiceMode(mode, enabled) {
+    const on = !!enabled;
+    if (mode === 'stt') {
+      if (on) {
+        stopStsLoop();
+        opts.stt = true;
+        opts.voice = true;
+        opts.sts = false;
+        session.setVoiceEnabled(true);
+      } else {
+        opts.stt = false;
+        if (!opts.sts) opts.voice = false;
+        if (!opts.sts) session.setVoiceEnabled(false);
+        stopRecorder();
+      }
+      return;
+    }
+    if (mode === 'tts') {
+      if (on) {
+        opts.tts = true;
+      } else {
+        opts.tts = false;
+        stopTts();
+      }
+      return;
+    }
+    if (mode === 'sts') {
+      if (on) {
+        stopRecorder();
+        stopTts();
+        opts.sts = true;
+        opts.voice = true;
+        opts.tts = true;
+        opts.stt = false;
+        session.setVoiceEnabled(true);
+        startStsLoop();
+      } else {
+        opts.sts = false;
+        opts.voice = !!opts.stt;
+        opts.tts = false;
+        session.setVoiceEnabled(!!opts.stt);
+        stopStsLoop();
+        stopRecorder();
+        stopTts();
+      }
     }
   }
 
   // ── Voice input handler (Ctrl+O hotkey) ──
   // Only active when --voice/--stt is passed without --sts.
   let voiceInProgress = false;
-  if (opts.voice && !opts.sts) {
-    const voiceWarned = { mic: false };
-    session.ev.on('voice', async () => {
-      if (voiceInProgress) return;
+  const voiceWarned = { mic: false };
+  session.ev.on('voice', async () => {
+    if (!opts.voice || voiceInProgress) return;
+
+    // ── STS push-to-talk interrupt ──
+    // User hits Ctrl+O while shmakk is talking (or idle) in STS mode.
+    // Kill TTS + ongoing recording, record PTT clip, run it, then resume.
+    if (opts.sts) {
       voiceInProgress = true;
       try {
         const vs = getVoiceService();
-        if (!voiceWarned.mic) {
-          if (!vs.isAvailable()) {
-            out('\r\n\x1b[33m[shmakk voice] no microphone found. Install sox/arecord.\x1b[0m\r\n');
-            voiceInProgress = false;
-            return;
-          }
-          voiceWarned.mic = true;
-        }
-        // Show recording indicator — stays visible until transcription starts
-        out('\r\n\x1b[36m🎤 [shmakk] Listening... (speak now, stops on silence)\x1b[0m');
-        // Use a handler on the stdin stack so Ctrl-C aborts recording
-        let recordingDone = false;
-        const release = session.captureStdin((data) => {
-          for (let i = 0; i < data.length; i++) {
-            if (data[i] === 0x03 || data[i] === 0x0f || findCtrlC(data) !== -1) {
-              recordingDone = true;
-              // Kill the recorder process immediately
-              try { vs._killRecorder(); } catch {}
-              release();
-              return;
-            }
-          }
-          session.childWrite(data);
-        });
+        const wasBusy = session._stsFlags?.setVoiceBusy ? true : false;
+        try { fullVoiceTeardown(); } catch {}
+        if (session._stsFlags?.setVoiceBusy) session._stsFlags.setVoiceBusy(true);
+        out('\r\n\x1b[36m[shmakk voice] push-to-talk (speak now, stops on silence)\x1b[0m');
         const text = await vs.recordAndTranscribe({
           maxDurationSec: parseInt(opts.voiceMaxDuration || process.env.SHMAKK_VOICE_MAX_SEC || '10', 10),
           language: opts.voiceLanguage || process.env.SHMAKK_VOICE_LANGUAGE,
-          onStart: () => {},
-          onStop: () => {
-            recordingDone = true;
-            try { release(); } catch {}
-          },
         });
         if (text) {
-          // Route to the agent, not the shell, so the correction engine
-          // doesn't try to turn transcripts into commands.
           await runVoiceAsTask(text);
         } else {
           out('\r\x1b[33m[shmakk] no speech detected\x1b[0m\r\n');
@@ -578,10 +754,65 @@ async function runOneSession(opts, registerSession) {
         out(`\r\x1b[31m[shmakk voice] ${err.message}\x1b[0m\r\n`);
         if (opts.debug) out(`\r\x1b[33m${err.stack}\x1b[0m\r\n`);
       } finally {
+        if (session._stsFlags?.setVoiceBusy) session._stsFlags.setVoiceBusy(false);
         voiceInProgress = false;
       }
-    });
-  }
+      return;
+    }
+
+    // ── STT push-to-talk (hotkey-driven voice input) ──
+    voiceInProgress = true;
+    try {
+      const vs = getVoiceService();
+      if (!voiceWarned.mic) {
+        if (!vs.isAvailable()) {
+          out('\r\n\x1b[33m[shmakk voice] no microphone found. Install sox/arecord.\x1b[0m\r\n');
+          voiceInProgress = false;
+          return;
+        }
+        voiceWarned.mic = true;
+      }
+      // Show recording indicator — stays visible until transcription starts
+      out('\r\n\x1b[36m[shmakk voice] Listening... (speak now, stops on silence)\x1b[0m');
+      session.setVoiceEnabled(false);
+      // Use a handler on the stdin stack so Ctrl-C aborts recording
+      let recordingDone = false;
+      const release = session.captureStdin((data) => {
+        for (let i = 0; i < data.length; i++) {
+          if (data[i] === 0x03 || data[i] === 0x0f || findCtrlC(data) !== -1) {
+            recordingDone = true;
+            // Kill the recorder process immediately
+            try { vs._killRecorder(); } catch {}
+            release();
+            return;
+          }
+        }
+        session.childWrite(data);
+      });
+      const text = await vs.recordAndTranscribe({
+        maxDurationSec: parseInt(opts.voiceMaxDuration || process.env.SHMAKK_VOICE_MAX_SEC || '10', 10),
+        language: opts.voiceLanguage || process.env.SHMAKK_VOICE_LANGUAGE,
+        onStart: () => {},
+        onStop: () => {
+          recordingDone = true;
+          try { release(); } catch {}
+        },
+      });
+      if (text) {
+        // Route to the agent, not the shell, so the correction engine
+        // doesn't try to turn transcripts into commands.
+        await runVoiceAsTask(text);
+      } else {
+        out('\r\x1b[33m[shmakk] no speech detected\x1b[0m\r\n');
+      }
+    } catch (err) {
+      out(`\r\x1b[31m[shmakk voice] ${err.message}\x1b[0m\r\n`);
+      if (opts.debug) out(`\r\x1b[33m${err.stack}\x1b[0m\r\n`);
+    } finally {
+      voiceInProgress = false;
+      session.setVoiceEnabled(!!opts.stt && !opts.sts);
+    }
+  });
 
   session.ev.on('command', (c) => {
     lastCommand = c;
@@ -608,6 +839,14 @@ async function runOneSession(opts, registerSession) {
     lastCommand = null;
     if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
 
+    // No command was tracked — precmd can fire at shell startup (especially
+    // in zsh) before any command executes. There's nothing to correct or
+    // route to the agent.
+    if (!lastCmd) {
+      discardPending();
+      return;
+    }
+
     // ── Self-command detection (FIRST — before ANY other processing) ──
     // Self-commands are pure local execution. They MUST bypass:
     //   - the noAi early-return (they don't need an LLM)
@@ -622,6 +861,147 @@ async function runOneSession(opts, registerSession) {
         audit.append({ kind: 'self-command', cmd: lastCmd, action: selfCmd.action, cwd });
         // Clear any stale correction state so it doesn't leak into next command
         correctionOrigin = null;
+
+        // ── Sidebar query: run the agent with context but don't persist to history ──
+        if (selfCmd.action === 'sidebar-query' && selfCmd.arg) {
+          if (!isConfigured()) {
+            out('\r\n\x1b[33m[shmakk] LLM not configured — sidebar query ignored\x1b[0m\r\n');
+            session.childWrite('\r');
+            return;
+          }
+          await withAI(async (ctrl) => {
+            const sidebarRouting = routeToSpecialist(selfCmd.arg, [...history, { role: 'user', content: selfCmd.arg }]);
+            out('\x1b[36m[shmakk sidebar] (Ctrl-C to interrupt)\x1b[0m\r\n');
+            try {
+              const updated = await runAgent({
+                input: selfCmd.arg,
+                roots: currentRoots(),
+                glossary,
+                confirmTool: makeToolConfirm(opts, ask, out, () => ctrl.abort()),
+                write: out,
+                signal: ctrl.signal,
+                history,
+                profile: opts.profile || sidebarRouting.profile || 'balanced',
+                colors: colorsEnabled,
+                markdown: markdownEnabled,
+                specialistHint: sidebarRouting.specialistHint,
+                mcpManager,
+              });
+              // Don't update history — sidebar queries are out-of-band.
+              // (runAgent already records turns in session search internally.)
+            } catch (e) {
+              if (!isAbortError(e)) {
+                out(`\x1b[31m[shmakk sidebar] error: ${e.message}\x1b[0m\r\n`);
+              }
+            }
+          });
+          session.childWrite('\r');
+          return;
+        }
+
+        // ── Vibedit: start in-browser overlay chat + recorder ───────────
+        if (selfCmd.action === 'vibedit' && selfCmd.arg) {
+          // The arg is the app URL (e.g. "http://localhost:3714")
+          // Strip any surrounding whitespace or quotes
+          const arg = selfCmd.arg.trim().replace(/^['"]|['"]$/g, '');
+          // If arg looks like a URL or file path, use it directly
+          let appUrl;
+          const _fs = require('fs');
+          if (/^https?:\/\//.test(arg) || (_fs.existsSync(arg) && (_fs.statSync(arg).isFile() || _fs.statSync(arg).isDirectory()))) {
+            appUrl = arg;
+          } else {
+            // Treat as a natural language request for the visual editing workflow
+            out(`\r\n\x1b[33m[shmakk vibedit] Natural language request: ${arg}\x1b[0m\r\n`);
+            out(`\x1b[33m[shmakk vibedit] To start the overlay, use: /vibedit http://localhost:<port>\x1b[0m\r\n`);
+            session.childWrite('\r');
+            return;
+          }
+
+          try {
+            const { startVibedit } = require('./vibedit');
+            const projectDir = currentRoots()[0] || process.cwd();
+            out(`\x1b[36m[shmakk vibedit] Starting overlay on ${appUrl}...\x1b[0m\r\n`);
+            out(`\x1b[36m[shmakk vibedit] A browser window will open with the chat panel (bottom-right puck).\x1b[0m\r\n`);
+            out(`\x1b[36m[shmakk vibedit] Close the browser window to shut down this vibedit.\x1b[0m\r\n`);
+
+            const vibedit = await startVibedit({
+              projectDir,
+              appUrl,
+              onSpec: (spec, specPath) => {
+                out(`\r\n\x1b[36m[shmakk vibedit] Spec saved!\x1b[0m\r\n`);
+                out(dim(`[shmakk vibedit] spec: ${spec.summary || '(no summary)'}\x1b[0m\r\n`, colorsEnabled));
+                runVibeditSpecNow(spec, specPath);
+              },
+            });
+
+            if (!vibedit) {
+              session.childWrite('\r');
+              return;
+            }
+
+            // vibedit runs until the browser closes or Ctrl-C
+            // Don't block the session - let the user keep typing commands
+            // while vibedit runs in the background
+            out(dim(`[shmakk vibedit] overlay active on control port ${vibedit.port}\r\n`, colorsEnabled));
+
+            // Store for cleanup on exit
+            if (!session._vibeditInstances) session._vibeditInstances = [];
+            session._vibeditInstances.push(vibedit);
+          } catch (e) {
+            if (e.code === 'MODULE_NOT_FOUND' && e.message.includes('playwright')) {
+              out(`\r\n\x1b[31m[shmakk vibedit] Playwright not installed. Run: npm install playwright\x1b[0m\r\n`);
+            } else {
+              out(`\r\n\x1b[31m[shmakk vibedit] error: ${e.message}\x1b[0m\r\n`);
+            }
+          }
+          session.childWrite('\r');
+          return;
+        }
+
+        if (selfCmd.action === 'vibedit-electron') {
+          const arg = (selfCmd.arg || '').trim().replace(/^['"]|['"]$/g, '');
+          let debugPort = 9222;
+          const portRe = /--port[= ](\d+)/i;
+          const portM = arg.match(portRe);
+          if (portM) debugPort = parseInt(portM[1], 10);
+          const projectDir = currentRoots()[0] || process.cwd();
+
+          try {
+            const { startVibeditElectron } = require('./vibedit/electron');
+            out(`\r\n\x1b[36m[shmakk vibedit electron] Connecting to Electron on port ${debugPort}...\x1b[0m\r\n`);
+            out(`\x1b[36m[shmakk vibedit electron] The overlay will appear in the Electron app window.\x1b[0m\r\n`);
+
+            const vibedit = await startVibeditElectron({
+              projectDir,
+              debugPort,
+              onSpec: (spec, specPath) => {
+                out(`\r\n\x1b[36m[shmakk vibedit] Spec saved!\x1b[0m\r\n`);
+                out(dim(`[shmakk vibedit] spec: ${spec.summary || '(no summary)'}\x1b[0m\r\n`, colorsEnabled));
+                runVibeditSpecNow(spec, specPath);
+              },
+            });
+
+            if (!vibedit) {
+              session.childWrite('\r');
+              return;
+            }
+
+            out(dim(`[shmakk vibedit electron] overlay active on control port ${vibedit.port}\r\n`, colorsEnabled));
+
+            if (!session._vibeditInstances) session._vibeditInstances = [];
+            session._vibeditInstances.push(vibedit);
+          } catch (e) {
+            if (e.code === 'MODULE_NOT_FOUND' && e.message.includes('playwright')) {
+              out(`\r\n\x1b[31m[shmakk vibedit electron] Playwright not installed. Run: npm install playwright\x1b[0m\r\n`);
+            } else {
+              out(`\r\n\x1b[31m[shmakk vibedit electron] error: ${e.message}\x1b[0m\r\n`);
+            }
+          }
+          session.childWrite('\r');
+          return;
+        }
+
+
         if (selfCmd.confirm) {
           const go = await ask(`Run ${selfCmd.action}?`, true, { onCancel: () => {} });
           if (!go) { session.childWrite('\r'); return; }
@@ -629,9 +1009,19 @@ async function runOneSession(opts, registerSession) {
         executeSelfCommand(selfCmd, out, {
           opts,
           HELP,
+          HELP_SUMMARY,
+          HELP_SESSION_SUMMARY,
           setColors: (v) => { colorsEnabled = v; },
+          setVoiceMode,
         });
         session.childWrite('\r');
+        return;
+      }
+      // /-prefixed and "shmakk ..." commands that didn't match a known
+      // self-command are invalid shmakk commands. Don't send them to the
+      // correction engine — the user was explicitly addressing shmakk.
+      if (/^\//.test(lastCmd) || /^shmakk\s/i.test(lastCmd)) {
+        flushPending();
         return;
       }
     }
@@ -641,11 +1031,18 @@ async function runOneSession(opts, registerSession) {
     // - Failed  (code != 0): give agent the original command the user typed, not any
     //   corrected variant — if a correction was applied but also failed, correctionOrigin
     //   still holds the user's original input and that's what the agent should reason about.
+    //
+    // After a correction was applied (whether it succeeded or failed), we MUST skip
+    // re-running correction on the original — otherwise it would propose the same fix
+    // again and enter an infinite loop (correct → feed corrected → succeed/fail →
+    // agent sees original → correction proposes same thing → feed again → ...).
     let cmd = lastCmd;
+    let correctionAlreadyTried = false;
     if (code === 0) {
       if (correctionOrigin && !opts.noAi) {
         cmd = correctionOrigin;
         correctionOrigin = null;
+        correctionAlreadyTried = true;
       } else {
         flushPending();
         return;
@@ -657,6 +1054,7 @@ async function runOneSession(opts, registerSession) {
       if (correctionOrigin) {
         cmd = correctionOrigin;
         correctionOrigin = null;
+        correctionAlreadyTried = true;
       }
     }
 
@@ -667,8 +1065,12 @@ async function runOneSession(opts, registerSession) {
     audit.append({ kind: 'failed-command', cmd, exit: code, cwd });
 
     // ── Correction runs standalone (no LLM needed) ──
+    // Skip correction if one was already applied for this input —
+    // re-running correction on the same original would just propose the same fix.
     let decision;
-    if (opts.noCorrection) {
+    if (correctionAlreadyTried) {
+      decision = { category: 'not_a_correction', proposed: null, safety: 'uncertain', reason: 'correction already tried — routing to agent' };
+    } else if (opts.noCorrection) {
       decision = { category: 'not_a_correction', proposed: null, safety: 'uncertain', reason: 'correction disabled' };
     } else {
       try {
@@ -697,6 +1099,7 @@ async function runOneSession(opts, registerSession) {
             `- Reason: ${decision.reason || 'deterministic match'}`,
             '',
           ].join('\r\n')),
+          notifyBody: cmd,
         });
         if (go) { correctionOrigin = cmd; audit.append({ kind: 'correction-run', proposed: decision.proposed }); session.childWrite(decision.proposed + '\r'); }
         return;
@@ -722,6 +1125,7 @@ async function runOneSession(opts, registerSession) {
           `- Reason: ${decision.reason || 'deterministic match'}`,
           '',
         ].join('\r\n')),
+        notifyBody: cmd,
       });
       if (go) { correctionOrigin = cmd; audit.append({ kind: 'correction-run', proposed: decision.proposed }); session.childWrite(decision.proposed + '\r'); }
       return;
@@ -765,6 +1169,7 @@ async function runOneSession(opts, registerSession) {
         signal: ctrl.signal,
         profile: agentProfile,
         colors: colorsEnabled,
+        markdown: markdownEnabled,
         specialistHint: routing.specialistHint,
         mcpManager,
       };
@@ -849,8 +1254,11 @@ async function runOneSession(opts, registerSession) {
             }
 
             const taskInput = `[Task ${i + 1} of ${plan.tasks.length}: ${task.title}]\n${task.description}\n\nOverall goal: ${plan.title}\n\nOriginal request: ${cmd}`;
+            // Inject any pending vibedit specs
+            const specInjection = drainPendingVibeditSpecs(currentRoots());
+            const fullTaskInput = specInjection ? `${specInjection}\n\n---\n\n${taskInput}` : taskInput;
             try {
-              const updated = await runAgent({ ...agentOpts, input: taskInput, history });
+              const updated = await runAgent({ ...agentOpts, input: fullTaskInput, history });
               history = trimHistory(updated || history);
               lastUpdated = updated;
               plan.tasks[i].status = 'completed';
@@ -932,9 +1340,12 @@ async function runOneSession(opts, registerSession) {
         const taskIndicator = routing.indicator
           ? `\x1b[36m[shmakk task · ${routing.indicator}] (Ctrl-C to interrupt)\x1b[0m\r\n`
           : '\x1b[36m[shmakk task] (Ctrl-C to interrupt)\x1b[0m\r\n';
+        // Inject any pending vibedit specs before running the agent
+        const specInjection = drainPendingVibeditSpecs(currentRoots());
+        const fullCmd = specInjection ? `${specInjection}\n\n---\n\nUser also typed: ${cmd}` : cmd;
         out(taskIndicator);
         try {
-          const updated = await runAgent({ ...agentOpts, input: cmd, history });
+          const updated = await runAgent({ ...agentOpts, input: fullCmd, history });
           history = trimHistory(updated || history);
 
           // TTS: speak the agent's response aloud if --tts is active

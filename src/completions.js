@@ -36,6 +36,7 @@ const FLAGS = [
   { flag: '--web', arg: false, desc: 'Start the web UI' },
   { flag: '--desktop', arg: false, desc: 'Open the desktop app (Electron)' },
   { flag: '--no-open', arg: false, desc: "Don't open the browser for --web" },
+  { flag: '--model-recommendation', arg: false, desc: 'Route each model call via main model recommendation' },
 
   // flags with arguments
   { flag: '--workspace', arg: '<path>', desc: 'Override workspace root' },
@@ -43,8 +44,9 @@ const FLAGS = [
   { flag: '--host', arg: '<addr>', desc: 'Bind address for --web' },
   { flag: '--profile', arg: '<name>', desc: 'Startup profile (tiny|balanced|deep|builder|large-app)' },
   { flag: '--profile-set', arg: '<name>', desc: 'Switch profile and restart' },
-  { flag: '--endpoint', arg: '<name>', desc: 'Use endpoint preset from ~/.config/shmakk/endpoints.js' },
+  { flag: '--endpoint', arg: '<name>', desc: 'Use model preset from ~/.config/shmakk/endpoints.json' },
   { flag: '--colors', arg: '<true|false>', desc: 'Toggle ANSI colors' },
+  { flag: '--vim', arg: '<vi|vim|disable>', desc: 'Intercept vi/vim with shmakk Vim mode' },
   { flag: '--load-skill', arg: '<name>', desc: 'Load a skill into workspace state' },
   { flag: '--unload-skill', arg: '<name>', desc: 'Remove skill from registry' },
   { flag: '--install-skill', arg: '<url>', desc: 'Download and install skill from URL' },
@@ -58,6 +60,7 @@ const FLAGS = [
   { flag: '--voice-silence-start-sec', arg: '<sec>', desc: 'Sound before recording starts' },
   { flag: '--voice-pad-start-sec', arg: '<sec>', desc: 'Padding before recording' },
   { flag: '--tts-voice', arg: '<name>', desc: 'Override Kokoro voice' },
+  { flag: '--notify', arg: false, desc: 'Send desktop notifications when shmakk needs your attention' },
 ];
 
 function bash() {
@@ -81,6 +84,9 @@ function bash() {
       lines.push('      return');
     } else if (f.flag === '--colors') {
       lines.push('      COMPREPLY=($(compgen -W "true false" -- "$cur"))');
+      lines.push('      return');
+    } else if (f.flag === '--vim') {
+      lines.push('      COMPREPLY=($(compgen -W "vi vim disable" -- "$cur"))');
       lines.push('      return');
     } else {
       lines.push('      COMPREPLY=()');
@@ -125,6 +131,8 @@ function zsh() {
       lines.push(`    "${f.flag}[${f.desc}]:shell:(bash zsh fish)" \\`);
     } else if (f.flag === '--colors') {
       lines.push(`    "${f.flag}[${f.desc}]:value:(true false)" \\`);
+    } else if (f.flag === '--vim') {
+      lines.push(`    "${f.flag}[${f.desc}]:mode:(vi vim disable)" \\`);
     } else {
       lines.push(`    "${f.flag}[${f.desc}]: :" \\`);
     }
@@ -151,6 +159,8 @@ function fish() {
       lines.push(`complete -c shmakk -l ${f.flag.slice(2)} -d '${f.desc}' -xa 'bash zsh fish'`);
     } else if (f.flag === '--colors') {
       lines.push(`complete -c shmakk -l ${f.flag.slice(2)} -d '${f.desc}' -xa 'true false'`);
+    } else if (f.flag === '--vim') {
+      lines.push(`complete -c shmakk -l ${f.flag.slice(2)} -d '${f.desc}' -xa 'vi vim disable'`);
     } else {
       // arg but no specific completions
       lines.push(`complete -c shmakk -l ${f.flag.slice(2)} -d '${f.desc}' -r`);

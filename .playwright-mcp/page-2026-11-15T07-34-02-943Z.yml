@@ -1,0 +1,316 @@
+- generic [ref=f5e2]:
+  - generic [ref=f5e3]:
+    - link "Skip to message box" [ref=f5e7] [cursor=pointer]:
+      - /url: "#composer-input"
+    - complementary "Navigation" [ref=f5e9]:
+      - generic [ref=f5e10]:
+        - button "shmakk, new chat" [ref=f5e11] [cursor=pointer]:
+          - generic [aria-hidden] [ref=f5e12]: ❯
+          - text: shmakk
+        - button "Hide sidebar" [ref=f5e14] [cursor=pointer]
+      - tablist "Mode" [ref=f5e15]:
+        - tab "Chat" [ref=f5e16] [cursor=pointer]
+        - tab "Code" [ref=f5e19] [cursor=pointer]
+        - tab "Design" [selected] [ref=f5e24] [cursor=pointer]
+        - tab "Cowork" [ref=f5e31] [cursor=pointer]
+      - button "New design" [ref=f5e8292] [cursor=pointer]
+      - generic [ref=f5e40]:
+        - generic [ref=f5e41]:
+          - generic [ref=f5e42]: Projects
+          - button "New project" [ref=f5e43] [cursor=pointer]
+        - button "ShmakkGui" [ref=f5e45] [cursor=pointer]
+        - list "Design conversations" [ref=f5e8293]:
+          - generic [ref=f5e51]:
+            - generic [ref=f5e52]: Today
+            - listitem [ref=f5e8294]:
+              - button "Design a landing page for a saas AI mareting platf…" [ref=f5e8295] [cursor=pointer]
+              - button "Options for Design a landing page for a saas AI mareting platf…" [ref=f5e8297] [cursor=pointer]
+            - listitem [ref=f5e8302]:
+              - button "Design a three-screen mobile onboarding for a habi…" [ref=f5e8303] [cursor=pointer]
+              - button "Options for Design a three-screen mobile onboarding for a habi…" [ref=f5e8305] [cursor=pointer]
+            - listitem [ref=f5e8310]:
+              - button "Design an analytics dashboard for a small online s…" [ref=f5e8311] [cursor=pointer]
+              - button "Options for Design an analytics dashboard for a small online s…" [ref=f5e8313] [cursor=pointer]
+      - generic [ref=f5e180]:
+        - button "Account menu, marcusb" [ref=f5e181] [cursor=pointer]:
+          - generic [aria-hidden] [ref=f5e182]: m
+          - generic [ref=f5e183]:
+            - generic [ref=f5e184]: marcusb
+            - generic [ref=f5e185]: shmakk
+        - button "Settings" [ref=f5e187] [cursor=pointer]
+    - generic [ref=f5e191]:
+      - banner [ref=f5e192]:
+        - heading [level=1] [ref=f5e8318]:
+          - generic "Design mode" [ref=f5e8319]
+          - text: Design a landing page for a saas AI mareting platf…
+        - group "Inspector panels" [ref=f5e201]:
+          - button "Browser" [ref=f5e202] [cursor=pointer]
+          - button "Changes" [ref=f5e203] [cursor=pointer]
+          - button "Plan" [ref=f5e204] [cursor=pointer]
+      - generic [ref=f5e205]:
+        - main [ref=f5e206]:
+          - generic [ref=f5e207]:
+            - generic [ref=f5e208]:
+              - log "Conversation" [ref=f5e8327]:
+                - generic [ref=f5e8328]: Design a landing page for a saas AI mareting platform — warm, editorial, one clear call to action
+                - generic [ref=f5e8330]:
+                  - button "Thought process" [ref=f5e8332] [cursor=pointer]
+                  - generic [ref=f5e8343]:
+                    - paragraph [ref=f5e8344]: "Warm, editorial direction: a magazine-like page for solo founders and small marketing teams. Cream paper tones, an editorial serif for headlines paired with a clean sans for UI, and one repeated CTA: \"Start free trial.\""
+                    - paragraph [ref=f5e8345]: Let me check the workspace first.
+                - button "Listed . 1 entries" [ref=f5e8350] [cursor=pointer]:
+                  - generic [ref=f5e8354]: Listed
+                  - generic [ref=f5e8355]: .
+                  - generic [ref=f5e8356]: 1 entries
+                - generic [ref=f5e8360]:
+                  - button "Thought process" [ref=f5e8362] [cursor=pointer]
+                  - paragraph [ref=f5e8374]:
+                    - text: Workspace is empty, so I'll build the landing page from scratch as
+                    - code [ref=f5e8375]: index.html
+                    - text: .
+                - button "Created index.html +1039 −0" [ref=f5e8380] [cursor=pointer]:
+                  - generic [ref=f5e8385]: Created
+                  - generic [ref=f5e8386]: index.html
+                  - generic [ref=f5e8387]:
+                    - generic [ref=f5e8388]: "+1039"
+                    - generic [ref=f5e8389]: −0
+                - generic [ref=f5e8392]:
+                  - button "Thought process" [ref=f5e8394] [cursor=pointer]
+                  - paragraph [ref=f5e8406]: The page is built. The user rules say to avoid em dashes and double dashes, so let me check and clean those up.
+                - button "Ran bash -c \"grep -n '—' index.html; echo '---'; grep -n -- '--' index.html\" exit 0" [ref=f5e8411] [cursor=pointer]:
+                  - generic [ref=f5e8416]: Ran
+                  - generic [ref=f5e8417]: bash -c "grep -n '—' index.html; echo '---'; grep -n -- '--' index.html"
+                  - generic [ref=f5e8418]: exit 0
+                - generic [ref=f5e8422]:
+                  - button "Thought process" [ref=f5e8424] [cursor=pointer]
+                  - paragraph [ref=f5e8436]:
+                    - text: The
+                    - code [ref=f5e8437]: "--"
+                    - text: matches are all CSS custom properties and comments, which are legitimate code, not prose. The em dashes in copy need replacing. Let me fix them.
+                - button "Edited index.html +1 −1" [ref=f5e8442] [cursor=pointer]:
+                  - generic [ref=f5e8448]: Edited
+                  - generic [ref=f5e8449]: index.html
+                  - generic [ref=f5e8450]:
+                    - generic [ref=f5e8451]: "+1"
+                    - generic [ref=f5e8452]: −1
+                - button "Edited index.html +1 −1" [ref=f5e8459] [cursor=pointer]:
+                  - generic [ref=f5e8465]: Edited
+                  - generic [ref=f5e8466]: index.html
+                  - generic [ref=f5e8467]:
+                    - generic [ref=f5e8468]: "+1"
+                    - generic [ref=f5e8469]: −1
+                - button "Edited index.html +1 −1" [ref=f5e8476] [cursor=pointer]:
+                  - generic [ref=f5e8482]: Edited
+                  - generic [ref=f5e8483]: index.html
+                  - generic [ref=f5e8484]:
+                    - generic [ref=f5e8485]: "+1"
+                    - generic [ref=f5e8486]: −1
+                - button "Edited index.html +1 −1" [ref=f5e8493] [cursor=pointer]:
+                  - generic [ref=f5e8499]: Edited
+                  - generic [ref=f5e8500]: index.html
+                  - generic [ref=f5e8501]:
+                    - generic [ref=f5e8502]: "+1"
+                    - generic [ref=f5e8503]: −1
+                - button "Edited index.html +1 −1" [ref=f5e8510] [cursor=pointer]:
+                  - generic [ref=f5e8516]: Edited
+                  - generic [ref=f5e8517]: index.html
+                  - generic [ref=f5e8518]:
+                    - generic [ref=f5e8519]: "+1"
+                    - generic [ref=f5e8520]: −1
+                - button "Edited index.html +1 −1" [ref=f5e8527] [cursor=pointer]:
+                  - generic [ref=f5e8533]: Edited
+                  - generic [ref=f5e8534]: index.html
+                  - generic [ref=f5e8535]:
+                    - generic [ref=f5e8536]: "+1"
+                    - generic [ref=f5e8537]: −1
+                - button "Edited index.html +1 −1" [ref=f5e8544] [cursor=pointer]:
+                  - generic [ref=f5e8550]: Edited
+                  - generic [ref=f5e8551]: index.html
+                  - generic [ref=f5e8552]:
+                    - generic [ref=f5e8553]: "+1"
+                    - generic [ref=f5e8554]: −1
+                - button "Thought process" [ref=f5e8559] [cursor=pointer]
+                - button "Ran bash -c \"grep -n '—' index.html || echo 'no em dashes remaining'\" exit 0" [ref=f5e8574] [cursor=pointer]:
+                  - generic [ref=f5e8579]: Ran
+                  - generic [ref=f5e8580]: bash -c "grep -n '—' index.html || echo 'no em dashes remaining'"
+                  - generic [ref=f5e8581]: exit 0
+                - generic [ref=f5e8585]:
+                  - generic [ref=f5e8586]:
+                    - paragraph [ref=f5e8587]:
+                      - text: Done. Built
+                      - code [ref=f5e8588]: index.html
+                      - text: as a complete, self-contained landing page.
+                    - paragraph [ref=f5e8589]:
+                      - strong [ref=f5e8590]: "Direction:"
+                      - text: A warm, editorial "quiet engine for busy teams" for Kindred, an AI marketing platform aimed at solo founders and small teams. The single repeated CTA is
+                      - strong [ref=f5e8591]: "\"Start free trial.\""
+                    - paragraph [ref=f5e8592]:
+                      - strong [ref=f5e8593]: Key decisions
+                    - list [ref=f5e8594]:
+                      - listitem [ref=f5e8595]:
+                        - strong [ref=f5e8596]: "System:"
+                        - text: CSS custom properties for a warm cream palette (
+                        - code [ref=f5e8597]: "#FBF6EF"
+                        - text: paper,
+                        - code [ref=f5e8598]: "#221B15"
+                        - text: ink, terracotta
+                        - code [ref=f5e8599]: "#C4552D"
+                        - text: accent, sage
+                        - code [ref=f5e8600]: "#6B7A5A"
+                        - text: secondary), a display serif (Fraunces) paired with Inter for UI, and a consistent radius/spacing rhythm.
+                      - listitem [ref=f5e8601]:
+                        - strong [ref=f5e8602]: "Editorial feel:"
+                        - text: Oversized italic-accent serif headline, "kicker" labels, magazine-style pull quote band, and a muted logo strip, all with generous whitespace.
+                      - listitem [ref=f5e8603]:
+                        - strong [ref=f5e8604]: "One clear CTA:"
+                        - text: The primary button appears in the nav, hero, pricing card, and closing section, all pointing to the same trial action. Secondary links stay quiet so the focus isn't diluted.
+                      - listitem [ref=f5e8605]:
+                        - strong [ref=f5e8606]: "Craft details:"
+                        - text: A fake in-app "campaigns" dashboard and voice-settings panel rendered as real HTML (not images), inline SVG icons throughout, and an AI "briefing" callout to sell the product concretely.
+                      - listitem [ref=f5e8607]:
+                        - strong [ref=f5e8608]: "Responsive + accessible:"
+                        - text: Fluid clamp-based type, breakpoints at 860px and 520px, semantic landmarks, real buttons/links/labels, and visible focus states.
+                    - paragraph [ref=f5e8609]:
+                      - strong [ref=f5e8610]: "Verification:"
+                      - text: Confirmed the file writes and removed all em dashes per your rules (remaining
+                      - code [ref=f5e8611]: "--"
+                      - text: are only CSS variables, which is required syntax). No build step needed, so the preview is ready to view directly.
+                    - paragraph [ref=f5e8612]:
+                      - strong [ref=f5e8613]: "Worth trying next:"
+                    - list [ref=f5e8614]:
+                      - listitem [ref=f5e8615]:
+                        - text: A second variation (
+                        - code [ref=f5e8616]: option-b.html
+                        - text: ) with a cooler, more "premium analytics" palette to compare against the warm editorial take.
+                      - listitem [ref=f5e8617]: Add a tiny scroll-reveal or live number ticker in the stats panel if you want more motion.
+                  - generic [ref=f5e8618]:
+                    - button "Copy message" [ref=f5e8619] [cursor=pointer]
+                    - button "Read aloud" [ref=f5e8620] [cursor=pointer]
+                - generic [ref=f5e8621]: Make it more modern and frosted glass and dark and TECH
+                - generic [ref=f5e8623]:
+                  - button "Thought process" [ref=f5e8625] [cursor=pointer]
+                  - paragraph [ref=f5e8637]: "Switching the whole page to a dark, glassmorphic \"tech\" system: deep near-black background with glow orbs, frosted translucent panels with blur, gradient cyan-to-violet accents, and Space Grotesk for that modern product feel. Same one-CTA structure, restyled."
+                - button "Wrote index.html +441 −486" [ref=f5e8642] [cursor=pointer]:
+                  - generic [ref=f5e8648]: Wrote
+                  - generic [ref=f5e8649]: index.html
+                  - generic [ref=f5e8650]:
+                    - generic [ref=f5e8651]: "+441"
+                    - generic [ref=f5e8652]: −486
+                - button "Thought process" [ref=f5e8657] [cursor=pointer]
+                - button "Ran bash -c \"grep -n '—' index.html || echo 'no em dashes'\" exit 0" [ref=f5e8672] [cursor=pointer]:
+                  - generic [ref=f5e8677]: Ran
+                  - generic [ref=f5e8678]: bash -c "grep -n '—' index.html || echo 'no em dashes'"
+                  - generic [ref=f5e8679]: exit 0
+                - generic [ref=f5e8683]:
+                  - generic [ref=f5e8684]:
+                    - paragraph [ref=f5e8685]:
+                      - text: Done. Redesigned
+                      - code [ref=f5e8686]: index.html
+                      - text: into a dark, glassmorphic, modern-tech look.
+                    - paragraph [ref=f5e8687]:
+                      - strong [ref=f5e8688]: What changed
+                    - list [ref=f5e8689]:
+                      - listitem [ref=f5e8690]:
+                        - strong [ref=f5e8691]: "Palette:"
+                        - text: Deep near-black
+                        - code [ref=f5e8692]: "#05060B"
+                        - text: base with drifting cyan/violet glow orbs and a faint masked grid, replacing the warm cream editorial system.
+                      - listitem [ref=f5e8693]:
+                        - strong [ref=f5e8694]: "Frosted glass:"
+                        - text: Translucent panels (
+                        - code [ref=f5e8695]: "backdrop-filter: blur + saturate"
+                        - text: ), semi-transparent white borders, and soft inner highlights across the nav pill, browser mockup, feature cards, panels, quote band, and pricing card.
+                      - listitem [ref=f5e8696]:
+                        - strong [ref=f5e8697]: "Tech type:"
+                        - text: Space Grotesk for display, Inter for body, JetBrains Mono for code-style labels, kickers, and meta text (e.g.
+                        - code [ref=f5e8698]: // Pricing
+                        - text: ","
+                        - code [ref=f5e8699]: "status: all systems operational"
+                        - text: ).
+                      - listitem [ref=f5e8700]:
+                        - strong [ref=f5e8701]: "Accent:"
+                        - text: A cyan-to-violet gradient (
+                        - code [ref=f5e8702]: "#22D3EE → #38BDF8 → #A78BFA"
+                        - text: ) used on buttons, the logo mark, progress bars, and gradient headline text, with a matching glow on CTAs.
+                      - listitem [ref=f5e8703]:
+                        - strong [ref=f5e8704]: "Motion/details:"
+                        - text: Animated pulsing status dot in the hero eyebrow, glass nav that goes sticky, and glow treatments on the primary CTA and AI spark icons.
+                    - paragraph [ref=f5e8705]:
+                      - strong [ref=f5e8706]: "Kept intact:"
+                      - text: Same product concept, one repeated CTA ("Start free trial"), the same section flow, and realistic copy. No em dashes, no emojis, all SVG icons, mono font only used for code-style labels.
+                    - paragraph [ref=f5e8707]:
+                      - strong [ref=f5e8708]: "Verification:"
+                      - text: Confirmed the file writes cleanly and contains no em dashes. Ready to view in the preview.
+                    - paragraph [ref=f5e8709]:
+                      - strong [ref=f5e8710]: "Worth trying next:"
+                    - list [ref=f5e8711]:
+                      - listitem [ref=f5e8712]: Add a subtle glass "tilt" hover effect or an animated gradient sweep on the primary CTA.
+                      - listitem [ref=f5e8713]: A light-on-glass data-viz (sparkline) in the analytics panel for extra "tech" texture.
+                  - generic [ref=f5e8714]:
+                    - button "Copy message" [ref=f5e8715] [cursor=pointer]
+                    - button "Read aloud" [ref=f5e8716] [cursor=pointer]
+                - generic [ref=f5e8717]: Less AI slop
+                - button "Thought process" [ref=f5e8721] [cursor=pointer]
+              - generic [ref=f5e8735]:
+                - generic [ref=f5e8736]:
+                  - generic [aria-hidden] [ref=f5e8737]: ❯
+                  - textbox "Message shmakk" [active] [ref=f5e8738]:
+                    - /placeholder: Describe what to design
+                - generic [ref=f5e8739]:
+                  - generic [ref=f5e8740]:
+                    - generic [ref=f5e8741]: design
+                    - button "deepseek-v4-pro" [ref=f5e8748] [cursor=pointer]
+                  - button "Attach files" [ref=f5e8754] [cursor=pointer]
+                  - button "Read replies aloud" [ref=f5e8755] [cursor=pointer]
+                  - button "Voice input" [ref=f5e8756] [cursor=pointer]
+                  - button "Send" [disabled] [ref=f5e8757]
+            - generic [ref=f5e8761]:
+              - generic [ref=f5e8762]:
+                - tablist "Screens" [ref=f5e8763]:
+                  - tab "index" [selected] [ref=f5e8764] [cursor=pointer]
+                  - tab "styleguide" [ref=f5e8765] [cursor=pointer]
+                - radiogroup "Preview size" [ref=f5e8766]:
+                  - radio "desktop" [checked] [ref=f5e8767] [cursor=pointer]
+                  - radio "tablet" [ref=f5e8770] [cursor=pointer]
+                  - radio "phone" [ref=f5e8773] [cursor=pointer]
+                - button "v4" [ref=f5e8776] [cursor=pointer]
+                - button "Edit on canvas" [ref=f5e8777] [cursor=pointer]
+                - button "Toggle code" [ref=f5e8778] [cursor=pointer]
+                - button "Save as artefact" [ref=f5e8779] [cursor=pointer]:
+                  - generic [ref=f5e8780]: Save artefact
+                - button "Open in a new tab" [ref=f5e8781] [cursor=pointer]
+              - iframe [ref=f5e8784]
+        - complementary "Inspector":
+          - generic [ref=f5e8257]:
+            - generic [ref=f5e8258]: Browser
+            - button "Close inspector" [ref=f5e8262] [cursor=pointer]
+          - generic:
+            - generic:
+              - generic [ref=f5e8263]:
+                - generic:
+                  - textbox "Preview URL" [ref=f5e8264]:
+                    - /placeholder: http://localhost:5173
+                    - text: http://localhost:5173
+                  - button "Open address" [ref=f5e8265] [cursor=pointer]
+                - button "Reload preview" [ref=f5e8266] [cursor=pointer]
+                - button "Open in a new tab" [ref=f5e8267] [cursor=pointer]
+              - generic [ref=f5e8268]:
+                - generic:
+                  - button ":5173" [ref=f5e8269] [cursor=pointer]
+                  - button ":3000" [ref=f5e8270] [cursor=pointer]
+                  - button ":8080" [ref=f5e8271] [cursor=pointer]
+                - radiogroup "Preview size" [ref=f5e8272]:
+                  - radio "desktop" [checked] [ref=f5e8273] [cursor=pointer]
+                  - radio "tablet" [ref=f5e8276] [cursor=pointer]
+                  - radio "phone" [ref=f5e8279] [cursor=pointer]
+              - generic:
+                - generic:
+                  - iframe
+                - generic [ref=f5e8282]:
+                  - generic: Nothing answered at http://localhost:5173
+                  - paragraph: Start your dev server, or point this pane at the port it prints. Reload once it is up.
+                  - button "Try again" [ref=f5e8289] [cursor=pointer]
+              - generic [ref=f5e8290]:
+                - generic: Chromium — the agent can drive this page with its browser tools.
+                - button "Ask the agent to inspect this page" [ref=f5e8291] [cursor=pointer]
+  - region "Notifications alt+T"

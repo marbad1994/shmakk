@@ -15,6 +15,17 @@ import { Segmented } from '@/components/ui/misc';
 
 const EMPTY: Item[] = [];
 
+// Width of the chat column in design mode, in px, remembered across reloads.
+const SPLIT_KEY = 'shmakk.designSplit';
+const SPLIT_MIN = 300;
+const SPLIT_MAX = 900;
+function loadSplit(): number | null {
+  try {
+    const n = Number(localStorage.getItem(SPLIT_KEY));
+    return Number.isFinite(n) && n >= SPLIT_MIN && n <= SPLIT_MAX ? n : null;
+  } catch { return null; }
+}
+
 export function ChatView() {
   const activeId = useApp((s) => s.activeId);
   const conv = useApp((s) => s.convs.find((c) => c.id === s.activeId));
@@ -27,6 +38,8 @@ export function ChatView() {
   const mode = useApp((s) => conv?.mode ?? s.mode);
   const mobile = useIsMobile();
   const [pane, setPane] = useState<'chat' | 'preview'>('chat');
+  const [split, setSplit] = useState<number | null>(loadSplit);
+  const splitBox = useRef<HTMLDivElement>(null);
   const tick = useApp((s) => (s.activeId ? s.designTick[s.activeId] || 0 : 0));
   // On a phone, jump to the preview the first time a design gets files.
   useEffect(() => { if (mode === 'design' && mobile && tick === 1) setPane('preview'); }, [tick]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -73,8 +86,23 @@ export function ChatView() {
   }, [running]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const design = mode === 'design';
+
+  // Drag the divider to resize the chat column, which resizes the preview.
+  const clampSplit = (w: number, total: number) => Math.round(Math.min(Math.max(SPLIT_MIN, w), Math.max(SPLIT_MIN, Math.min(SPLIT_MAX, total - 320))));
+  // A narrower window must not leave the chat column wider than the pane.
+  useEffect(() => {
+    if (!design || split === null) return;
+    const onResize = () => {
+      const box = splitBox.current;
+      if (box) setSplit(clampSplit(split, box.clientWidth));
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [design, split]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const chat = (
-    <div className={cn('relative flex min-h-0 flex-col', design ? 'w-[min(460px,42%)] shrink-0 border-r border-line max-md:w-full max-md:flex-1 max-md:border-r-0' : 'flex-1', design && mobile && pane !== 'chat' && 'hidden')}>
+    <div className={cn('relative flex min-h-0 flex-col', design ? 'w-[min(460px,42%)] min-w-0 shrink-0 border-r border-line max-md:w-full max-md:flex-1 max-md:border-r-0' : 'flex-1', design && mobile && pane !== 'chat' && 'hidden')}
+      style={design && !mobile && split !== null ? { width: split } : undefined}>
       {conv?.repo ? <RepoBar conv={conv} running={running} /> : null}
       <div ref={scroller} onScroll={onScroll} className="scroll-touch min-h-0 flex-1 overflow-y-auto [overflow-anchor:none]">
         {loading ? (
@@ -104,7 +132,7 @@ export function ChatView() {
 
   // Design mode: chat on the left, live preview on the right (tabs on a phone).
   return (
-    <div className="flex min-h-0 flex-1 max-md:flex-col">
+    <div className="flex min-h-0 min-w-0 flex-1 max-md:flex-col">
       {mobile ? (
         <div className="flex shrink-0 justify-center border-b border-line bg-panel/60 py-1.5">
           <Segmented label="Pane" value={pane} onChange={setPane} options={[{ value: 'chat', label: 'chat' }, { value: 'preview', label: 'preview' }]} />

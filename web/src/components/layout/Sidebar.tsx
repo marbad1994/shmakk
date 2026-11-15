@@ -1,12 +1,12 @@
 import { useMemo, useState } from 'react';
 import {
-  Activity, Brain, ChevronsUpDown, FileDiff, Folder, FolderKanban, FolderMinus, GitBranch, History, ListChecks, MoreHorizontal, PanelLeftClose,
-  Pencil, Pin, PinOff, Plug, Plus, Search, Settings, Sparkles, Trash2, Users, Zap,
+  Activity, Boxes, Brain, Folder, FolderKanban, FolderMinus, GitBranch, History, ListChecks, MoreHorizontal,
+  PanelLeftClose, Pencil, Pin, PinOff, Plug, Plus, Settings, Sparkles, Trash2, Users, Zap,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { MODES, PROJECT_COLORS, modeInfo } from '@/lib/modes';
-import type { ConvMeta, Project, ViewId } from '@/lib/types';
-import { basename, cn, dayBucket, modKey, tildify } from '@/lib/utils';
+import type { ConvMeta, Project } from '@/lib/types';
+import { basename, cn, dayBucket, modKey } from '@/lib/utils';
 import { haptic } from '@/hooks/useMobile';
 import { chooseWorkspace, useApp } from '@/store/app';
 import { Button } from '@/components/ui/button';
@@ -15,18 +15,6 @@ import { Field, Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-
-// Workspace tools belong to the modes that work in a workspace.
-const NAV: { id: ViewId; label: string; icon: React.ReactNode }[] = [
-  { id: 'skills', label: 'Skills', icon: <Sparkles /> },
-  { id: 'memory', label: 'Memory', icon: <Brain /> },
-  { id: 'plan', label: 'Plan', icon: <ListChecks /> },
-  { id: 'changes', label: 'Changes', icon: <FileDiff /> },
-  { id: 'recall', label: 'Recall', icon: <History /> },
-  { id: 'team', label: 'Team', icon: <Users /> },
-  { id: 'mcp', label: 'MCP', icon: <Plug /> },
-  { id: 'activity', label: 'Activity', icon: <Activity /> },
-];
 
 function ConvRow({ conv, active, running, projects, onRename }: { conv: ConvMeta; active: boolean; running: boolean; projects: Project[]; onRename(c: ConvMeta): void }) {
   const openConv = useApp((s) => s.openConv);
@@ -80,14 +68,14 @@ export function Sidebar() {
   const projectId = useApp((s) => s.projectId);
   const workspace = useApp((s) => s.workspace);
   const home = useApp((s) => s.home);
-  const edits = useApp((s) => s.status?.edits ?? 0);
-  const { newChat, setView, setMode, setPalette, toggleSidebar, renameConv, openProject, refreshProjects } = useApp.getState();
+  const { newChat, setView, setMode, toggleSidebar, renameConv, openProject, refreshProjects } = useApp.getState();
   const [renaming, setRenaming] = useState<ConvMeta | null>(null);
   const [title, setTitle] = useState('');
   const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState({ name: '', description: '', shareContext: true });
   const info = modeInfo(mode);
-  const usesWorkspace = mode === 'code' || mode === 'cowork';
+  // The Linux account name, shown in the bottom-left account menu.
+  const user = basename(home) || 'you';
 
   const groups = useMemo(() => {
     const mine = convs.filter((c) => c.mode === mode);
@@ -119,7 +107,7 @@ export function Sidebar() {
   return (
     <aside aria-label="Navigation" className="flex h-full w-[272px] flex-col border-r border-line bg-panel pb-[var(--sab)] pl-[var(--sal)] pt-[var(--sat)] max-lg:w-[min(320px,86vw)]">
       <div className="drag flex min-h-12 items-center justify-between pb-1.5 pr-3 pt-3" style={{ paddingLeft: 'calc(14px + var(--titlebar-pad, 0px))' }}>
-        <button type="button" onClick={() => newChat()} aria-label="shmakk — new chat" className="inline-flex items-baseline gap-1.5 rounded-lg px-1.5 py-1 font-mono text-base font-bold tracking-tight hover:bg-hover">
+        <button type="button" onClick={() => newChat()} aria-label="shmakk, new chat" className="inline-flex items-baseline gap-1.5 rounded-lg px-1.5 py-1 font-mono text-base font-bold tracking-tight hover:bg-hover">
           <span className="text-accent" aria-hidden>❯</span>shmakk<span className="h-[15px] w-2 animate-blink self-center rounded-[1px] bg-accent" aria-hidden />
         </button>
         <Tip label={<>Hide sidebar <kbd>{modKey} B</kbd></>}><Button variant="ghost" size="icon" aria-label="Hide sidebar" className="max-md:hidden" onClick={() => toggleSidebar(false)}><PanelLeftClose /></Button></Tip>
@@ -139,28 +127,13 @@ export function Sidebar() {
 
       <div className="grid gap-1 px-2.5 pb-1 pt-1.5">
         <button type="button" onClick={() => newChat()} className="flex w-full items-center gap-2.5 rounded-[10px] border border-line bg-raised px-2.5 py-2 text-left font-medium hover:border-accent/40">
-          <Plus className={cn('size-4', info.tone)} />{info.newLabel}<kbd className="ml-auto touch:hidden">{modKey} N</kbd>
+          <Plus className={cn('size-4', info.tone)} />{info.newLabel}
         </button>
-        {mode === 'code' ? (
-          <button type="button" aria-current={view === 'github' ? 'page' : undefined} onClick={() => setView('github')} className={cn(navBtn, view === 'github' && navOn)}><GitBranch className="size-4" />GitHub sessions</button>
-        ) : null}
         {mode === 'cowork' ? (
           <button type="button" aria-current={view === 'automations' ? 'page' : undefined} onClick={() => setView('automations')} className={cn(navBtn, view === 'automations' && navOn)}><Zap className="size-4" />Automations</button>
         ) : null}
-        <button type="button" onClick={() => setPalette(true)} className={navBtn}><Search className="size-4" />Search &amp; commands<kbd className="ml-auto touch:hidden">{modKey} K</kbd></button>
       </div>
-
-      {usesWorkspace ? (
-        <nav aria-label="Workspace tools" className="grid grid-cols-4 gap-1 border-b border-line px-2.5 py-1.5">
-          {NAV.map((n) => (
-            <button key={n.id} type="button" aria-current={view === n.id ? 'page' : undefined} onClick={() => setView(n.id)}
-              className={cn('relative grid justify-items-center gap-0.5 rounded-[10px] px-0.5 pb-1.5 pt-2 text-[10.5px] text-dim hover:bg-hover hover:text-fg touch:pb-2 touch:pt-2.5 touch:text-[11px] [&_svg]:size-[17px]', view === n.id && navOn)}>
-              {n.icon}{n.label}
-              {n.id === 'changes' && edits > 0 ? <span className="absolute right-2 top-1 h-[15px] min-w-[15px] rounded-full bg-accent px-1 text-center font-mono text-[9.5px] font-semibold leading-[15px] text-accent-ink">{edits}</span> : null}
-            </button>
-          ))}
-        </nav>
-      ) : <div className="mx-2.5 border-b border-line" />}
+      <div className="mx-2.5 border-b border-line" />
 
       <div className="scroll-touch min-h-0 flex-1 overflow-y-auto px-2.5 pb-3 pt-1">
         {/* Projects span every mode */}
@@ -168,9 +141,7 @@ export function Sidebar() {
           <span className="font-mono text-[10.5px] font-semibold uppercase tracking-wider text-faint">Projects</span>
           <Tip label="New project"><button type="button" aria-label="New project" onClick={() => setCreating(true)} className="grid size-5 place-items-center rounded text-faint hover:bg-hover hover:text-fg touch:size-8"><Plus className="size-3.5" /></button></Tip>
         </div>
-        {projects.length === 0 ? (
-          <button type="button" onClick={() => setCreating(true)} className="w-full rounded-lg px-2 py-1.5 text-left text-[13px] text-faint hover:bg-hover hover:text-fg">Group chats from every mode — and let them share context.</button>
-        ) : projects.map((p) => (
+        {projects.map((p) => (
           <button key={p.id} type="button" aria-current={view === 'project' && projectId === p.id ? 'page' : undefined} onClick={() => openProject(p.id)}
             className={cn('flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-dim hover:bg-hover hover:text-fg touch:py-2.5 touch:text-[15px]', view === 'project' && projectId === p.id && 'bg-raised text-fg')}>
             <FolderKanban className="size-4 shrink-0" /><span className="min-w-0 flex-1 truncate">{p.name}</span>
@@ -179,7 +150,6 @@ export function Sidebar() {
         ))}
 
         <div role="list" aria-label={`${info.label} conversations`}>
-          {groups.length === 0 ? <p className="px-2 pb-2 pt-4 text-[13px] text-faint">Nothing in {info.label} yet. {info.tagline}.</p> : null}
           {groups.map((g) => (
             <div key={g.label}>
               <div className="px-2 pb-1.5 pt-3.5 font-mono text-[10.5px] font-semibold uppercase tracking-wider text-faint">{g.label}</div>
@@ -191,20 +161,45 @@ export function Sidebar() {
         </div>
       </div>
 
-      <div className="grid gap-0.5 border-t border-line px-2.5 py-2">
-        {usesWorkspace ? (
-          <button type="button" onClick={() => void chooseWorkspace()} className="flex w-full items-center gap-2.5 rounded-[10px] p-2 text-left text-dim hover:bg-hover hover:text-fg">
-            <Folder className="size-4 shrink-0" />
-            <span className="grid min-w-0 flex-1 leading-tight">
-              <span className="truncate font-medium text-fg">{basename(workspace)}</span>
-              <span className="truncate font-mono text-[11px] text-faint">{tildify(workspace, home)}</span>
-            </span>
-            <ChevronsUpDown className="size-4 shrink-0" />
-          </button>
-        ) : null}
-        <button type="button" aria-current={view === 'settings' ? 'page' : undefined} onClick={() => setView('settings')} className={cn('flex w-full items-center gap-2.5 rounded-[10px] px-2 py-1.5 text-left text-dim hover:bg-hover hover:text-fg', view === 'settings' && 'bg-accent/10 text-accent')}>
-          <Settings className="size-4" />Settings
-        </button>
+      <div className="border-t border-line px-2.5 py-2">
+        <div className="flex items-stretch gap-0.5 rounded-[10px] border border-line bg-sunken p-0.5">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button type="button" aria-label={`Account menu, ${user}`} className="flex min-w-0 flex-1 items-center gap-2.5 rounded-[8px] px-1.5 py-1.5 text-left hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 data-[state=open]:bg-hover">
+                <span className="grid size-7 shrink-0 place-items-center rounded-full bg-accent/15 font-mono text-[12px] font-semibold uppercase text-accent" aria-hidden>{user.slice(0, 1)}</span>
+                <span className="grid min-w-0 flex-1 leading-tight">
+                  <span className="truncate text-[13.5px] font-medium text-fg">{user}</span>
+                  <span className="truncate font-mono text-[11px] text-faint">{basename(workspace)}</span>
+                </span>
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent side="top" align="start" sideOffset={8} className="w-[252px]">
+              <DropdownMenuLabel>Workspace</DropdownMenuLabel>
+              <DropdownMenuItem onSelect={() => void chooseWorkspace()}><Folder />Change workspace…</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setView('github')}><GitBranch />GitHub sessions</DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => setView('skills')}><Sparkles />Skills</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setView('plan')}><ListChecks />Plan</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setView('activity')}><Activity />Activity</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setView('recall')}><History />Recall</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setView('memory')}><Brain />Memory</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setView('mcp')}><Plug />MCP</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setView('team')}><Users />Team</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setView('artefacts')}><Boxes />Artefacts</DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => setView('settings')}>
+                <Settings />Settings<kbd className="ml-auto font-mono text-[11px] text-faint">{modKey} ,</kbd>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <span className="my-1 w-px shrink-0 bg-line" aria-hidden />
+          <Tip label={<>Settings <kbd>{modKey} ,</kbd></>} side="top">
+            <button type="button" aria-label="Settings" onClick={() => setView('settings')}
+              className={cn('grid w-7 shrink-0 place-items-center rounded-[8px] text-faint hover:bg-hover hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 touch:w-10', view === 'settings' && 'bg-raised text-fg')}>
+              <Settings className="size-4" />
+            </button>
+          </Tip>
+        </div>
       </div>
 
       <Dialog open={!!renaming} onOpenChange={(o) => { if (!o) setRenaming(null); }}>
@@ -225,7 +220,7 @@ export function Sidebar() {
           <form className="flex min-h-0 flex-col" onSubmit={(e) => { e.preventDefault(); void createProject(); }}>
             <DialogHeader>
               <DialogTitle>New project</DialogTitle>
-              <DialogDescription>A project holds chats from every mode — design it, build it, and automate it in one place.</DialogDescription>
+              <DialogDescription>A project holds chats from every mode: design it, build it, and automate it in one place.</DialogDescription>
             </DialogHeader>
             <DialogBody>
               <Field label="Name" htmlFor="proj-name"><Input id="proj-name" autoFocus value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="Website relaunch" /></Field>

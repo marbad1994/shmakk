@@ -1,0 +1,112 @@
+- generic [ref=f1e2]:
+  - generic [ref=f1e3]:
+    - link "Skip to message box" [ref=f1e4] [cursor=pointer]:
+      - /url: "#composer-input"
+    - complementary "Navigation" [ref=f1e6]:
+      - generic [ref=f1e7]:
+        - button "shmakk, new chat" [ref=f1e8] [cursor=pointer]:
+          - generic [aria-hidden] [ref=f1e9]: ❯
+          - text: shmakk
+        - button "Hide sidebar" [ref=f1e11] [cursor=pointer]
+      - tablist "Mode" [ref=f1e12]:
+        - tab "Chat" [ref=f1e13] [cursor=pointer]
+        - tab "Code" [ref=f1e16] [cursor=pointer]
+        - tab "Design" [selected] [ref=f1e21] [cursor=pointer]
+        - tab "Cowork" [ref=f1e28] [cursor=pointer]
+      - button "New design" [ref=f1e190] [cursor=pointer]
+      - generic [ref=f1e37]:
+        - generic [ref=f1e38]:
+          - generic [ref=f1e39]: Projects
+          - button "New project" [ref=f1e40] [cursor=pointer]
+        - list "Design conversations"
+      - generic [ref=f1e61]:
+        - button "Account menu, tmp" [ref=f1e62] [cursor=pointer]:
+          - generic [aria-hidden] [ref=f1e63]: t
+          - generic [ref=f1e64]:
+            - generic [ref=f1e65]: tmp
+            - generic [ref=f1e66]: ws
+        - button "Settings" [ref=f1e68] [cursor=pointer]
+    - generic [ref=f1e72]:
+      - banner [ref=f1e73]:
+        - heading [level=1] [ref=f1e191]:
+          - generic "Design mode" [ref=f1e192]
+          - text: New design
+        - button "Toggle inspector" [ref=f1e82] [cursor=pointer]
+      - generic [ref=f1e83]:
+        - main [ref=f1e84]:
+          - generic [ref=f1e85]:
+            - generic [ref=f1e86]:
+              - generic [ref=f1e200]:
+                - heading "What should we design?" [level=2] [ref=f1e208]
+                - paragraph [ref=f1e209]: Describe a screen or a flow. shmakk builds it as real, clickable HTML next to the chat and keeps every version.
+                - generic [ref=f1e210]:
+                  - generic [ref=f1e214]:
+                    - strong [ref=f1e215]: Connect a model to get started
+                    - text: Add an OpenAI-compatible base URL, key and model.
+                  - button "Open settings" [ref=f1e216] [cursor=pointer]
+                - generic [ref=f1e217]:
+                  - button "landing page Design a landing page for a coffee subscription — warm, editorial, one clear call to action" [ref=f1e218] [cursor=pointer]:
+                    - generic [ref=f1e219]: landing page
+                    - generic [ref=f1e220]: Design a landing page for a coffee subscription — warm, editorial, one clear call to action
+                  - 'button "dashboard Design an analytics dashboard for a small online shop: revenue, orders, top products" [ref=f1e221] [cursor=pointer]':
+                    - generic [ref=f1e222]: dashboard
+                    - generic [ref=f1e223]: "Design an analytics dashboard for a small online shop: revenue, orders, top products"
+                  - button "mobile flow Design a three-screen mobile onboarding for a habit tracker" [ref=f1e224] [cursor=pointer]:
+                    - generic [ref=f1e225]: mobile flow
+                    - generic [ref=f1e226]: Design a three-screen mobile onboarding for a habit tracker
+                  - button "options Give me three different directions for a pricing page, as separate files" [ref=f1e227] [cursor=pointer]:
+                    - generic [ref=f1e228]: options
+                    - generic [ref=f1e229]: Give me three different directions for a pricing page, as separate files
+              - generic [ref=f1e233]:
+                - generic [ref=f1e234]:
+                  - generic [aria-hidden] [ref=f1e235]: ❯
+                  - textbox "Message shmakk" [active] [ref=f1e236]:
+                    - /placeholder: Describe what to design
+                - generic [ref=f1e237]:
+                  - generic [ref=f1e238]:
+                    - generic [ref=f1e239]: design
+                    - button "test-model" [ref=f1e246] [cursor=pointer]
+                  - button "Attach files" [ref=f1e252] [cursor=pointer]
+                  - button "Read replies aloud" [ref=f1e253] [cursor=pointer]
+                  - button "Voice input" [ref=f1e254] [cursor=pointer]
+                  - button "Send" [disabled] [ref=f1e255]
+            - generic [ref=f1e259]:
+              - strong [ref=f1e266]: Your design appears here
+              - paragraph [ref=f1e267]: Describe a screen, a page or a whole flow. shmakk builds it as real HTML you can click through.
+        - complementary "Inspector":
+          - generic [ref=f1e148]:
+            - tablist "Inspector panes":
+              - tab "Browser" [selected] [ref=f1e149] [cursor=pointer]
+              - tab "Changes" [ref=f1e153] [cursor=pointer]
+              - tab "Plan" [ref=f1e156] [cursor=pointer]
+            - button "Hide inspector" [ref=f1e160] [cursor=pointer]
+          - generic:
+            - generic:
+              - generic [ref=f1e161]:
+                - generic:
+                  - textbox "Preview URL" [ref=f1e162]:
+                    - /placeholder: http://localhost:5173
+                    - text: http://localhost:5173
+                  - button "Open address" [ref=f1e163] [cursor=pointer]
+                - button "Reload preview" [ref=f1e164] [cursor=pointer]
+                - button "Open in a new tab" [ref=f1e165] [cursor=pointer]
+              - generic [ref=f1e166]:
+                - generic:
+                  - button ":5173" [ref=f1e167] [cursor=pointer]
+                  - button ":3000" [ref=f1e168] [cursor=pointer]
+                  - button ":8080" [ref=f1e169] [cursor=pointer]
+                - radiogroup "Preview size" [ref=f1e170]:
+                  - radio "desktop" [checked] [ref=f1e171] [cursor=pointer]
+                  - radio "tablet" [ref=f1e174] [cursor=pointer]
+                  - radio "phone" [ref=f1e177] [cursor=pointer]
+              - generic:
+                - generic:
+                  - iframe
+                - generic [ref=f1e180]:
+                  - generic: Nothing answered at http://localhost:5173
+                  - paragraph: Start your dev server, or point this pane at the port it prints. Reload once it is up.
+                  - button "Try again" [ref=f1e187] [cursor=pointer]
+              - generic [ref=f1e188]:
+                - generic: Chromium preview. Browser automation is unavailable (Playwright not found).
+                - button "Ask the agent to inspect this page" [ref=f1e189] [cursor=pointer]
+  - region "Notifications alt+T"
