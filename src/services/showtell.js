@@ -65,7 +65,7 @@ function normalizeAction(action) {
 // settings", "the user says the button is too small") even when asked for
 // direct statements. Strip that framing so summaries and notes read as the
 // point itself, not commentary about whoever recorded it.
-const NARRATION_RE = /^(?:the|this)\s+user(?:'s)?\s+(?:opens|open|says|said|shows|showed|clicks|clicked|navigates|navigated|goes|went|types|typed|presses|pressed|selects|selected|scrolls|scrolled|hovers|hovered|drags|dragged|waits|waited|is|was|has|had|points|pointed|wants|wanted|needs|needed|asks|asked|mentions|mentioned|notes|noted)\s+(?:to\s+|that\s+)?/i;
+const NARRATION_RE = /^(?:the|this)\s+user(?:'s)?\s+(?:opens?|opened|says?|said|shows?|showed|clicks?|clicked|navigates?|navigated|goes?|went|types?|typed|presses?|pressed|selects?|selected|scrolls?|scrolled|hovers?|hovered|drags?|dragged|waits?|waited|is|are|was|were|has|had|points?|pointed|wants?|wanted|needs?|needed|asks?|asked|mentions?|mentioned|notes?|noted|initiates?|initiated|records?|recorded|begins?|began|starts?|started|stops?|stopped|ends?|ended|finishes?|finished|captures?|captured|uses?|used|creates?|created|enters?|entered|describes?|described|demonstrates?|demonstrated|explains?|explained|reports?|reported|discusses?|discussed|taps?|tapped|looks?|looked|sees?|saw|speaks?|spoke|talks?|talked|tells?|told|walks?|walked|moves?|moved|resizes?|resized|changes?|changed|edits?|edited|saves?|saved|searches?|searched)\s+(?:to\s+|that\s+)?/i;
 
 function cleanNarration(text) {
   let s = String(text || '').trim();
@@ -83,7 +83,7 @@ function normalizeStep(s, i) {
   const target = String(s.target || s.element || s.label || '').trim();
   const value = s.value != null ? String(s.value) : null;
   const key = s.key != null ? String(s.key) : null;
-  const detail = String(s.detail || s.description || '').trim();
+  const detail = cleanNarration(String(s.detail || s.description || '').trim());
   // Drop a step only when it carries no actionable information at all.
   if (!target && !detail && !value && !key && action === 'other') return null;
   return {

@@ -21,11 +21,11 @@ export function Empty({ icon, title, children }: { icon?: React.ReactNode; title
 }
 
 /** Segmented control (single choice). */
-export function Segmented<T extends string>({ value, onChange, options, className, label }: {
-  value: T; onChange: (v: T) => void; options: { value: T; label: React.ReactNode }[]; className?: string; label: string;
+export function Segmented<T extends string>({ value, onChange, options, className, label, fullWidth }: {
+  value: T; onChange: (v: T) => void; options: { value: T; label: React.ReactNode }[]; className?: string; label: string; fullWidth?: boolean;
 }) {
   return (
-    <div role="radiogroup" aria-label={label} className={cn('inline-flex rounded-full border border-line bg-sunken p-0.5', className)}>
+    <div role="radiogroup" aria-label={label} className={cn('inline-flex rounded-full border border-line bg-sunken p-0.5', fullWidth && 'flex w-full', className)}>
       {options.map((o) => (
         <button
           key={o.value}
@@ -33,7 +33,7 @@ export function Segmented<T extends string>({ value, onChange, options, classNam
           role="radio"
           aria-checked={value === o.value}
           onClick={() => onChange(o.value)}
-          className={cn('rounded-full px-2.5 py-0.5 font-mono text-xs text-dim transition-colors touch:px-3.5 touch:py-1.5 touch:text-[13px]', value === o.value && 'bg-accent font-semibold text-accent-ink')}
+          className={cn('rounded-full px-2.5 py-0.5 font-sans text-xs text-dim transition-colors touch:px-3.5 touch:py-1.5 touch:text-[13px]', fullWidth && 'flex flex-1 items-center justify-center', value === o.value && 'bg-accent font-semibold text-accent-ink')}
         >
           {o.label}
         </button>

@@ -55,7 +55,11 @@ const CSP = [
   "img-src 'self' data: blob: https://avatars.githubusercontent.com",
   "media-src 'self' blob:",
   "font-src 'self' data:",
-  "connect-src 'self' ws: wss:",
+  // The Browser pane embeds any workspace URL (a dev server, a preview, docs),
+  // and probes reachability with a no-cors fetch, so both frames and connects
+  // need http(s). WebSockets stay open for the app's own stream.
+  "connect-src 'self' http: https: ws: wss:",
+  "frame-src 'self' http: https:",
   "frame-ancestors 'none'",
   "base-uri 'none'",
   "form-action 'self'",

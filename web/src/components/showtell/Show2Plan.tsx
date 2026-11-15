@@ -369,7 +369,6 @@ export function Show2Plan({ onSendPlan, onSaveAutomation }: Show2PlanProps = {})
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [sending, setSending] = useState(false);
-  const [instructions, setInstructions] = useState('');
   const [draftTasks, setDraftTasks] = useState<PlanTask[]>([]);
   const [draftActions, setDraftActions] = useState<AutomationAction[]>([]);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
@@ -426,7 +425,6 @@ export function Show2Plan({ onSendPlan, onSaveAutomation }: Show2PlanProps = {})
     setError(null);
     setBusy(false);
     setSending(false);
-    setInstructions('');
     setDraftTasks([]);
     setDraftActions([]);
     setEditingIndex(null);
@@ -485,16 +483,15 @@ export function Show2Plan({ onSendPlan, onSaveAutomation }: Show2PlanProps = {})
     setProgressIndex(0);
     setError(null);
     try {
-      const hint = instructions.trim() ? { instructions: instructions.trim() } : {};
       await api.post(`/api/capture/${id}/stop`);
       setProgressIndex(1);
       await api.post(`/api/capture/${id}/transcribe`);
       setProgressIndex(2);
-      await api.post(`/api/capture/${id}/analyze`, hint);
+      await api.post(`/api/capture/${id}/analyze`, {});
       setProgressIndex(3);
       const res = chosen === 'plan'
-        ? await api.post<PlanResult>(`/api/capture/${id}/plan`, hint)
-        : await api.post<AutomationResult>(`/api/capture/${id}/automation`, hint);
+        ? await api.post<PlanResult>(`/api/capture/${id}/plan`, {})
+        : await api.post<AutomationResult>(`/api/capture/${id}/automation`, {});
       setResult(res);
       if (res.kind === 'plan') {
         setDraftTasks(res.tasks.map((t) => ({ ...t, page: t.page || res.page, evidence: { ...t.evidence } })));
@@ -515,7 +512,7 @@ export function Show2Plan({ onSendPlan, onSaveAutomation }: Show2PlanProps = {})
       setError(errMsg(e));
       // Stay in the processing phase so the user can retry or back out.
     }
-  }, [instructions]);
+  }, []);
 
   const stopRecording = useCallback(async () => {
     if (!sessionId) return;
@@ -661,25 +658,12 @@ export function Show2Plan({ onSendPlan, onSaveAutomation }: Show2PlanProps = {})
                 label="Deliverable"
                 value={mode}
                 onChange={setMode}
+                fullWidth
                 options={[
-                  { value: 'plan', label: <span className="inline-flex items-center gap-1.5"><ListChecks className="size-3.5" />Notes</span> },
+                  { value: 'plan', label: <span className="inline-flex items-center gap-1.5"><ListChecks className="size-3.5" />Tasks</span> },
                   { value: 'automation', label: <span className="inline-flex items-center gap-1.5"><Workflow className="size-3.5" />Automation</span> },
                 ]}
               />
-
-              <div className="grid gap-1.5">
-                <label htmlFor="s2p-instructions" className="text-[12.5px] font-medium text-dim">
-                  What needs to change? <span className="text-faint">(optional)</span>
-                </label>
-                <Textarea
-                  id="s2p-instructions"
-                  className="min-h-16 resize-y font-sans text-[13px]"
-                  placeholder="e.g. This Save button is too small and needs a bigger font"
-                  value={instructions}
-                  onChange={(e) => setInstructions(e.target.value)}
-                />
-                <p className="m-0 text-[12px] text-faint">Say it while pointing at the screen. Screenshots are kept as context, not as instructions.</p>
-              </div>
 
               {loadingCapabilities ? (
                 <div className="flex items-center gap-2 text-[13px] text-dim"><Spinner className="size-4" />Checking capture support…</div>

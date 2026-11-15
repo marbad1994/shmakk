@@ -2589,6 +2589,7 @@ test('webui server: project, design and automation routes; artifact and webhook 
     assert.strictEqual(cleanNarration('The user opens the settings page and says the Save button is too small'), 'The settings page and says the Save button is too small');
     assert.strictEqual(cleanNarration('the user says the Save button is too small'), 'The Save button is too small');
     assert.strictEqual(cleanNarration('The user needs to save the movement'), 'Save the movement');
+    assert.strictEqual(cleanNarration('The user initiates a screen recording session'), 'A screen recording session');
     assert.strictEqual(cleanNarration('the user wants the font to be bigger'), 'The font to be bigger');
     assert.strictEqual(cleanNarration('The Save button is too small'), 'The Save button is too small');
     assert.strictEqual(cleanNarration(''), '');
