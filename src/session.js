@@ -10,14 +10,14 @@ const { shouldPlan, generatePlan, formatPlan, savePlan, clearPlan } = require('.
 const { clearIndex } = require('./workspace-index');
 const { loadGlossary } = require('./glossary');
 const { isConfigured } = require('./llm');
-const { makePrompter, decisionBanner } = require('./review');
+const { makePrompter, makeLinePrompter, decisionBanner } = require('./review');
 const { workspaceWarning } = require('./safety');
 const { createMCPManager } = require('./mcp-client');
-const { clearEdits } = require('./edit-tracker');
+const { clearEdits, getEdits } = require('./edit-tracker');
 const { matchSelfCommand, executeSelfCommand } = require('./self-commands');
 const { runTeam, looksMultiDomain } = require('./team');
-const { addPlanTasks, markTaskComplete, markTaskSkipped } = require('./task-file');
-const { captureGitSha, runPostPlanReview } = require('./code-reviewer');
+const { createCliPlan, runCliPlan, legacyPlanView, lastAssistantText, summarizePlan } = require('./plan-runner');
+const { reviewTask } = require('./webui/plans');
 const sessionSearch = require('./session-search');
 const { HELP, HELP_SUMMARY, HELP_SESSION_SUMMARY } = require('./cli');
 const { vibeditState } = require('./vibedit/state');
@@ -206,6 +206,7 @@ async function runOneSession(opts, registerSession) {
   let markdownEnabled = opts.markdown !== false;
   const out = (s) => session.stdoutWrite(colorsEnabled ? s : stripAnsi(s));
   const ask = makePrompter(session, out, opts);
+  const askText = makeLinePrompter(session, out);
   const glossary = loadGlossary();
   // Workspace tracking: explicit --workspace is "pinned"; otherwise cwd
   // floats with the inner shell's `cd`. When both pinned and cwd differ,
@@ -1226,88 +1227,54 @@ async function runOneSession(opts, registerSession) {
             return;
           }
 
-          // Execute each task in order
-          plan.status = 'executing';
-          savePlan(currentRoots()[0], plan);
+          // Review-gated execution (same lifecycle and store as the web UI's
+          // Plans view, see src/plan-runner.js): a task is done only once its
+          // measured diff has passed review and, with sign-off on, you accept it.
           usedPlan = true;
-
-          // Capture git SHA before any changes — used by post-plan code review
-          const planBaseSha = captureGitSha(currentRoots()[0]);
-
-          // Write the plan tasks to TASKS.md so they're visible in the project
-          try {
-            addPlanTasks(currentRoots()[0], plan);
-            out(dim('[shmakk] tasks written to TASKS.md', colorsEnabled) + '\r\n');
-          } catch {}
+          const planRoot = currentRoots()[0];
+          const requireSignoff = opts.planSignoff !== false && !/^(0|false|no|off)$/i.test(String(process.env.SHMAKK_PLAN_SIGNOFF || ''));
+          const gated = createCliPlan(planRoot, plan, { request: cmd, requireSignoff });
+          out(dim(`[shmakk] plan saved (${gated.id}); tasks mirrored to TASKS.md, also visible in the web UI Plans view`, colorsEnabled) + '\r\n');
 
           let lastUpdated = null;
-          for (let i = 0; i < plan.tasks.length; i++) {
-            if (ctrl.signal.aborted) break;
-            const task = plan.tasks[i];
-            plan.currentTaskIndex = i;
-            plan.tasks[i].status = 'in_progress';
-            savePlan(currentRoots()[0], plan);
-
-            out(`\x1b[36m[${i + 1}/${plan.tasks.length}] ${task.title}\x1b[0m\r\n`);
-            if (task.description) {
-              out(dim(`    ${task.description}`, colorsEnabled) + '\r\n');
+          const reviewLlm = { client: null, model: null };
+          try {
+            await runCliPlan(gated, {
+              signal: ctrl.signal,
+              write: out,
+              color: (code, s) => (colorsEnabled ? `\x1b[${code}m${s}\x1b[0m` : s),
+              getEdits,
+              isAbort: isAbortError,
+              onChange: (p) => savePlan(planRoot, legacyPlanView(p)),
+              runAgentTask: async (prompt) => {
+                const specInjection = drainPendingVibeditSpecs(currentRoots());
+                const input = `${specInjection ? `${specInjection}\n\n---\n\n` : ''}${prompt}\n\nOriginal request: ${cmd}`;
+                const updated = await runAgent({ ...agentOpts, input, history });
+                history = trimHistory(updated || history);
+                lastUpdated = updated;
+                return lastAssistantText(updated);
+              },
+              reviewer: async ({ task, diff, report, signal }) => {
+                if (!reviewLlm.client) {
+                  const llm = require('./llm');
+                  if (!llm.isConfigured()) throw new Error('no AI provider configured for the reviewer');
+                  reviewLlm.client = llm.makeClient();
+                  reviewLlm.model = llm.modelFor();
+                }
+                return reviewTask({ task, diff, report, client: reviewLlm.client, model: reviewLlm.model, signal });
+              },
+              confirm: (q, defaultYes) => ask(q, defaultYes, { onCancel: () => ctrl.abort() }),
+              askText: (q) => askText(q, { onCancel: () => ctrl.abort() }),
+            });
+          } catch (e) {
+            if (isAbortError(e)) {
+              out('\x1b[33m[shmakk] plan paused; resume it from the web UI Plans view\x1b[0m\r\n');
+              throw e;
             }
-
-            const taskInput = `[Task ${i + 1} of ${plan.tasks.length}: ${task.title}]\n${task.description}\n\nOverall goal: ${plan.title}\n\nOriginal request: ${cmd}`;
-            // Inject any pending vibedit specs
-            const specInjection = drainPendingVibeditSpecs(currentRoots());
-            const fullTaskInput = specInjection ? `${specInjection}\n\n---\n\n${taskInput}` : taskInput;
-            try {
-              const updated = await runAgent({ ...agentOpts, input: fullTaskInput, history });
-              history = trimHistory(updated || history);
-              lastUpdated = updated;
-              plan.tasks[i].status = 'completed';
-              plan.tasks[i].completedAt = new Date().toISOString();
-              savePlan(currentRoots()[0], plan);
-              try { markTaskComplete(currentRoots()[0], plan.tasks[i].title, plan.tasks[i].completedAt); } catch {}
-            } catch (e) {
-              if (isAbortError(e)) {
-                plan.tasks[i].status = 'failed';
-                savePlan(currentRoots()[0], plan);
-                throw e;
-              }
-              plan.tasks[i].status = 'failed';
-              savePlan(currentRoots()[0], plan);
-              out(`\r\n\x1b[31m[shmakk] task ${i + 1} failed: ${e.message}\x1b[0m\r\n`);
-              const skip = await ask(`Skip task ${i + 1} and continue?`, false, {
-                onCancel: () => ctrl.abort(),
-              });
-              if (!skip) {
-                plan.status = 'aborted';
-                savePlan(currentRoots()[0], plan);
-                out('\x1b[33m[shmakk] plan aborted\x1b[0m\r\n');
-                session.childWrite('\r');
-                return;
-              }
-              plan.tasks[i].status = 'skipped';
-              savePlan(currentRoots()[0], plan);
-              try { markTaskSkipped(currentRoots()[0], plan.tasks[i].title); } catch {}
-            }
+            out(`\r\n\x1b[31m[shmakk] plan error: ${e.message}\x1b[0m\r\n`);
           }
-
-          const completed = plan.tasks.filter((t) => t.status === 'completed').length;
-          const skipped = plan.tasks.filter((t) => t.status === 'skipped').length;
-          plan.status = 'completed';
-          savePlan(currentRoots()[0], plan);
-          out(`\x1b[32m[shmakk] plan done: ${completed}/${plan.tasks.length} tasks completed${skipped ? `, ${skipped} skipped` : ''}\x1b[0m\r\n`);
-
-          // ── Post-plan code review ──
-          // Runs automatically after a plan completes. Examines git diff for the
-          // changes made by the plan and flags critical/important/minor issues.
-          if (completed > 0 && !ctrl.signal.aborted) {
-            try {
-              await runPostPlanReview({ plan, baseSha: planBaseSha, agentOpts, write: out });
-            } catch (e) {
-              if (isAbortError(e)) throw e;
-              out(`\x1b[33m[shmakk · review] error: ${e.message}\x1b[0m\r\n`);
-            }
-          }
-
+          const doneColor = gated.status === 'done' ? '\x1b[32m' : '\x1b[33m';
+          out(`${doneColor}[shmakk] plan ${gated.status.replace('_', ' ')}: ${summarizePlan(gated)}\x1b[0m\r\n`);
           // TTS for the last task's response
           if (opts.tts && lastUpdated && lastUpdated.length) {
             const lastAssistant = [...lastUpdated].reverse().find((m) => m.role === 'assistant');

@@ -797,5 +797,8 @@ module.exports = {
   syncTaskFile,
   createPlanManager,
   readPlan,
+  writePlan,
   listPlans,
+  newId,
+  assetsDir,
 };

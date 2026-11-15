@@ -2859,6 +2859,244 @@ function highlightDiffLines(text) {
   });
 }
 
+// ── CLI plans: the terminal path uses the same review gate ──────────────────
+{
+  const os = require('os');
+  const path = require('path');
+  const { execSync } = require('child_process');
+  const P = require('../src/webui/plans');
+  const R = require('../src/plan-runner');
+
+  const gitRepo = () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cliplan-'));
+    try { execSync('git init -q && git config user.email a@b && git config user.name t && echo a > a.txt && git add . && git commit -qm i', { cwd: root, stdio: 'ignore' }); } catch { fs.rmSync(root, { recursive: true, force: true }); return null; }
+    return root;
+  };
+  const draft = (n = 1) => ({ title: 'Ship it', tasks: Array.from({ length: n }, (_, i) => ({ id: String(i + 1), title: `Step ${i + 1}`, description: `do step ${i + 1}`, layer: 'backend', acceptance: [`step ${i + 1} works`] })) });
+  const pass = (task) => ({ verdict: 'pass', summary: 'ok', criteria: task.acceptance.map((text) => ({ text, met: true, note: null })), issues: [], overridden: null });
+  const fail = (task, why) => P.normalizeVerdict({ verdict: 'fail', summary: why, criteria: task.acceptance.map((text) => ({ text, met: false, note: why })), issues: [] });
+  const tasksMd = (root) => { try { return fs.readFileSync(path.join(root, 'TASKS.md'), 'utf8'); } catch { return ''; } };
+
+  test('cli plan: the planner draft becomes a store plan visible to the web UI', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cliplan-'));
+    try {
+      const plan = R.createCliPlan(root, draft(2), { request: 'build it', requireSignoff: true });
+      assert.strictEqual(plan.source, 'cli');
+      assert.strictEqual(plan.tasks[0].instructions, 'do step 1');
+      assert.deepStrictEqual(plan.tasks[1].acceptance, ['step 2 works']);
+      assert.strictEqual(plan.tasks[1].layer, 'backend');
+      assert.strictEqual(plan.tasks[0].status, 'todo');
+      R.savePlanState(plan);
+      assert.deepStrictEqual(P.listPlans(root).map((p) => p.id), [plan.id]);
+      assert.ok(fs.existsSync(path.join(root, '.shmakk', 'plans', `${plan.id}.json`)));
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test('cli plan: a failed review re-runs the agent with the feedback; done only after review and sign-off', async () => {
+    const root = gitRepo();
+    if (!root) return;
+    try {
+      const plan = R.createCliPlan(root, draft(1), { requireSignoff: true });
+      const prompts = [];
+      const diffs = [];
+      let reviews = 0;
+      let mdAtSignoff = null;
+      let statusAtSignoff = null;
+      await R.runCliPlan(plan, {
+        runAgentTask: async (prompt) => {
+          prompts.push(prompt);
+          fs.writeFileSync(path.join(root, 'feature.txt'), prompts.length === 1 ? 'half\n' : 'whole\n');
+          return 'changed feature.txt';
+        },
+        reviewer: async ({ task, diff }) => {
+          diffs.push(diff);
+          reviews += 1;
+          return reviews === 1 ? fail(task, 'only half of it') : pass(task);
+        },
+        confirm: async () => {
+          mdAtSignoff = tasksMd(root);
+          statusAtSignoff = plan.tasks[0].status;
+          return true;
+        },
+      });
+      const t = plan.tasks[0];
+      assert.strictEqual(prompts.length, 2);
+      assert.ok(!prompts[0].includes('Changes requested'));
+      assert.ok(prompts[1].includes('Changes requested') && prompts[1].includes('only half of it'));
+      // The uncommitted edit is what got reviewed, and attempt 2 sees the task's whole change.
+      assert.deepStrictEqual(diffs[0].files.map((f) => f.path), ['feature.txt']);
+      assert.ok(diffs[1].patch.includes('+whole'));
+      assert.strictEqual(statusAtSignoff, 'awaiting_approval');
+      assert.ok(mdAtSignoff.includes('- [ ] Step 1 (backend) _awaiting your sign-off_'));
+      assert.ok(!mdAtSignoff.includes('- [x] Step 1'));
+      assert.strictEqual(t.status, 'done');
+      assert.ok(t.approvedAt);
+      assert.strictEqual(t.reviews.length, 2);
+      assert.strictEqual(t.attempts, 2);
+      assert.ok(tasksMd(root).includes('- [x] Step 1 (backend)'));
+      const stored = P.readPlan(root, plan.id);
+      assert.strictEqual(stored.status, 'done');
+      assert.strictEqual(stored.tasks[0].status, 'done');
+      assert.ok(fs.existsSync(path.join(P.assetsDir(root, plan.id), `${t.id}-1.diff`)));
+      // The user's index is left alone.
+      assert.strictEqual(execSync('git diff --cached --name-only', { cwd: root }).toString().trim(), '');
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test('cli plan: declining sign-off with a note sends the task back to the agent', async () => {
+    const root = gitRepo();
+    if (!root) return;
+    try {
+      const plan = R.createCliPlan(root, draft(1), { requireSignoff: true });
+      const prompts = [];
+      let confirms = 0;
+      await R.runCliPlan(plan, {
+        runAgentTask: async (prompt) => { prompts.push(prompt); fs.writeFileSync(path.join(root, 'b.txt'), String(prompts.length)); return 'ok'; },
+        reviewer: async ({ task }) => pass(task),
+        confirm: async () => (++confirms > 1),
+        askText: async () => 'use the brand colour',
+      });
+      assert.strictEqual(prompts.length, 2);
+      assert.ok(prompts[1].includes('use the brand colour') && prompts[1].includes('the person who owns this plan'));
+      assert.strictEqual(plan.tasks[0].status, 'done');
+      assert.ok(plan.tasks[0].history.some((h) => h.note === 'you requested changes'));
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test('cli plan: declining sign-off without a note leaves it awaiting approval, not done', async () => {
+    const root = gitRepo();
+    if (!root) return;
+    try {
+      const plan = R.createCliPlan(root, draft(1), { requireSignoff: true });
+      await R.runCliPlan(plan, {
+        runAgentTask: async () => { fs.writeFileSync(path.join(root, 'c.txt'), 'c'); return 'ok'; },
+        reviewer: async ({ task }) => pass(task),
+        confirm: async () => false,
+        askText: async () => '',
+      });
+      assert.strictEqual(plan.tasks[0].status, 'awaiting_approval');
+      assert.strictEqual(P.readPlan(root, plan.id).status, 'awaiting_review');
+      assert.ok(!tasksMd(root).includes('- [x]'));
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test('cli plan: three failed reviews block the task and it never shows as done', async () => {
+    const root = gitRepo();
+    if (!root) return;
+    try {
+      const plan = R.createCliPlan(root, draft(2), { requireSignoff: true });
+      let runs = 0;
+      const questions = [];
+      await R.runCliPlan(plan, {
+        runAgentTask: async () => { runs += 1; fs.writeFileSync(path.join(root, 'd.txt'), String(runs)); return 'done!'; },
+        reviewer: async ({ task }) => fail(task, 'nope'),
+        confirm: async (q) => { questions.push(q); return false; },
+      });
+      assert.strictEqual(runs, P.MAX_ATTEMPTS);
+      assert.strictEqual(plan.tasks[0].status, 'blocked');
+      assert.strictEqual(plan.tasks[1].status, 'todo');
+      assert.ok(questions[0].includes('Skip it'));
+      assert.strictEqual(plan.paused, true);
+      assert.strictEqual(P.readPlan(root, plan.id).status, 'needs_attention');
+      assert.ok(tasksMd(root).includes('- [ ] Step 1 (backend) _blocked_'));
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test('cli plan: without sign-off a passing review is done; reviewTask gates the verdict', async () => {
+    const root = gitRepo();
+    if (!root) return;
+    try {
+      const plan = R.createCliPlan(root, draft(1), { requireSignoff: false });
+      // The real reviewTask helper with a model that says "pass" but leaves a criterion unmet first.
+      const replies = [
+        { verdict: 'pass', summary: 'looks fine', criteria: [{ text: 'step 1 works', met: false }], issues: [] },
+        { verdict: 'pass', summary: 'fine now', criteria: [{ text: 'step 1 works', met: true }], issues: [] },
+      ];
+      const client = { chat: { completions: { create: async () => ({ choices: [{ message: { content: JSON.stringify(replies.shift()) } }] }) } } };
+      let confirmed = 0;
+      let runs = 0;
+      await R.runCliPlan(plan, {
+        runAgentTask: async () => { runs += 1; fs.writeFileSync(path.join(root, 'e.txt'), String(runs)); return 'ok'; },
+        reviewer: ({ task, diff, report }) => P.reviewTask({ task, diff, report, client, model: 'm' }),
+        confirm: async () => { confirmed += 1; return true; },
+      });
+      assert.strictEqual(runs, 2);
+      assert.strictEqual(plan.tasks[0].reviews[0].verdict, 'fail');
+      assert.ok(plan.tasks[0].reviews[0].overridden);
+      assert.strictEqual(plan.tasks[0].status, 'done');
+      assert.strictEqual(confirmed, 0);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test('cli plan: an agent error counts as a failed attempt; an abort puts the task back and pauses', async () => {
+    const root = gitRepo();
+    if (!root) return;
+    try {
+      const plan = R.createCliPlan(root, draft(1), { requireSignoff: false });
+      let runs = 0;
+      const ctrl = new AbortController();
+      let threw = null;
+      try {
+        await R.runCliPlan(plan, {
+          signal: ctrl.signal,
+          runAgentTask: async () => {
+            runs += 1;
+            if (runs === 1) throw new Error('tool crashed');
+            ctrl.abort();
+            const e = new Error('aborted'); e.name = 'AbortError'; throw e;
+          },
+          reviewer: async () => { throw new Error('reviewer must not run on an agent error'); },
+          confirm: async () => true,
+        });
+      } catch (e) { threw = e; }
+      assert.ok(threw && threw.name === 'AbortError');
+      const t = plan.tasks[0];
+      assert.strictEqual(t.reviews.length, 1);
+      assert.ok(t.reviews[0].summary.includes('tool crashed'));
+      assert.strictEqual(t.status, 'rework');
+      assert.strictEqual(t.attempts, 1);
+      const stored = P.readPlan(root, plan.id);
+      assert.strictEqual(stored.paused, true);
+      assert.strictEqual(stored.tasks[0].status, 'rework');
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test('cli plan: outside git the session edit log is the reviewed diff', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cliplan-nogit-'));
+    try {
+      const plan = R.createCliPlan(root, draft(1), { requireSignoff: false });
+      const edits = [];
+      let seen = null;
+      await R.runCliPlan(plan, {
+        getEdits: () => edits,
+        runAgentTask: async () => { edits.push({ filePath: path.join(root, 'x.js'), oldContent: null, newContent: 'let x = 1;\n' }); return 'ok'; },
+        reviewer: async ({ task, diff }) => { seen = diff; return pass(task); },
+        confirm: async () => true,
+      });
+      assert.deepStrictEqual(seen.files.map((f) => f.path), ['x.js']);
+      assert.strictEqual(plan.tasks[0].status, 'done');
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test('cli plan: legacy active-plan view and report extraction', () => {
+    const plan = R.createCliPlan(os.tmpdir(), draft(3));
+    plan.tasks[0].status = 'done'; plan.tasks[0].approvedAt = Date.now();
+    plan.tasks[1].status = 'awaiting_approval';
+    plan.tasks[2].status = 'blocked';
+    const v = R.legacyPlanView(plan);
+    assert.deepStrictEqual(v.tasks.map((t) => t.status), ['completed', 'pending', 'failed']);
+    assert.ok(v.tasks[0].completedAt && !v.tasks[1].completedAt);
+    assert.strictEqual(R.lastAssistantText([{ role: 'user', content: 'q' }, { role: 'assistant', content: [{ type: 'text', text: 'report' }] }]), 'report');
+    assert.strictEqual(R.summarizePlan(plan), '1/3 done, 1 awaiting sign-off, 1 blocked');
+  });
+
+  test('cli: --no-plan-signoff turns off sign-off', () => {
+    const { parseArgs } = require('../src/cli');
+    assert.strictEqual(parseArgs([]).planSignoff, true);
+    assert.strictEqual(parseArgs(['--no-plan-signoff']).planSignoff, false);
+  });
+}
+
 // ── show & tell: frame choice and transcripts ───────────────────────────────
 {
   const s2p = require('../src/services/show2plan');

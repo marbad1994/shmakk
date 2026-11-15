@@ -8,6 +8,7 @@ function parseArgs(argv) {
     workspace: null,
     noAi: false,
     noCorrection: false,
+    planSignoff: true,
     printConfig: false,
     status: false,
     buildHistory: null,
@@ -102,6 +103,7 @@ function parseArgs(argv) {
       case '--debug': opts.debug = true; break;
       case '--no-ai': opts.noAi = true; break;
       case '--no-correction': opts.noCorrection = true; break;
+      case '--no-plan-signoff': opts.planSignoff = false; break;
       case '--print-config': opts.printConfig = true; break;
       case '--workspace': opts.workspace = argv[++i] || null; break;
       case '--status': opts.status = true; break;
@@ -341,6 +343,7 @@ HELP_SECTIONS.launch = `══════════════════�
   --shell <fish|bash|zsh>          Use a specific shell (default: current $SHELL)
   --no-ai                          Disable AI entirely (pure passthrough)
   --no-correction                  Disable command correction
+  --no-plan-signoff                Mark plan tasks done once review passes (no y/n sign-off)
   --debug                          Verbose logging to stderr
   --print-config                   Print resolved configuration and exit
 

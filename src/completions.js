@@ -16,6 +16,7 @@ const FLAGS = [
   { flag: '--yes-files', arg: false, desc: 'Auto-accept AI file writes/edits' },
   { flag: '--no-ai', arg: false, desc: 'Disable AI entirely (pure passthrough)' },
   { flag: '--no-correction', arg: false, desc: 'Disable command correction' },
+  { flag: '--no-plan-signoff', arg: false, desc: 'Skip y/n sign-off on reviewed plan tasks' },
   { flag: '--help', arg: false, desc: 'Show help' },
   { flag: '--debug', arg: false, desc: 'Verbose logging' },
   { flag: '--print-config', arg: false, desc: 'Print resolved config and exit' },
