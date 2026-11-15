@@ -213,7 +213,7 @@ Environment:
   SHMAKK_API_KEY                  API key
   SHMAKK_MODEL                    Default model
   SHMAKK_HEADERS                  Comma-separated extra headers (k=v,k=v)
-  SHMAKK_REGISTRY                 Comma-separated model registry filter (for makkorch)
+  SHMAKK_MODELS                   Comma-separated list of models for the active endpoint
 
 Web interface environment (shmakk --web / Docker):
   SHMAKK_WEB_TOKEN                Access token (generated and saved if unset)

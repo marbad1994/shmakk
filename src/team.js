@@ -384,10 +384,10 @@ function looksMultiDomain(input) {
 
 // ── PM planning ───────────────────────────────────────────────────────────────
 
-async function planTeam(input, client, roots, signal) {
+async function planTeam(input, client, roots, signal, model = null) {
   try {
     const resp = await client.chat.completions.create({
-      model: modelFor('agent'),
+      model: model || modelFor('agent'),
       temperature: 0,
       stream: false,
       tool_choice: 'none',
@@ -413,6 +413,7 @@ async function runSubAgent({
   handoffs = null,     // [{ role, output }] — outputs from prior pipeline agents
   topology = 'parallel',
   skill = null,        // optional: explicit skill name override (PM can pick any)
+  model = null,
 }) {
   // Step 1: figure out which skill file to load.
   // Explicit `skill` param wins; otherwise map role → skill via ROLE_TO_SKILL;
@@ -508,6 +509,7 @@ async function runSubAgent({
       specialistHint: hintOverride !== undefined ? hintOverride : specialistHint,
       mcpManager,
       requireToolUse: requireTool,
+      model,
     });
   };
 
@@ -564,7 +566,7 @@ function stripAnsi(s) {
   return String(s || '').replace(/\x1b\[[0-9;]*m/g, '');
 }
 
-async function synthesizeResults({ overallInput, agentResults, client, signal }) {
+async function synthesizeResults({ overallInput, agentResults, client, signal, model = null }) {
   const context = agentResults.map((r) => {
     const status = r.error ? `ERROR: ${r.error}` : `✓ completed (${r.toolCount} tool calls)`;
     const preview = stripAnsi(r.output).trim().slice(0, 1500);
@@ -573,7 +575,7 @@ async function synthesizeResults({ overallInput, agentResults, client, signal })
 
   try {
     const resp = await client.chat.completions.create({
-      model: modelFor('agent'),
+      model: model || modelFor('agent'),
       temperature: 0,
       stream: false,
       tool_choice: 'none',
@@ -604,7 +606,7 @@ Be specific. No fluff. No restating the task.`,
 // ── Main entry point ──────────────────────────────────────────────────────────
 
 // Run agents sequentially with handoffs — each agent sees prior outputs.
-async function runPipelineAgents({ agents, overallInput, roots, signal, mcpManager, write, emit = null }) {
+async function runPipelineAgents({ agents, overallInput, roots, signal, mcpManager, write, emit = null, model = null }) {
   const handoffs = [];
   const results = [];
   const startTime = Date.now();
@@ -626,6 +628,7 @@ async function runPipelineAgents({ agents, overallInput, roots, signal, mcpManag
       mcpManager,
       handoffs: [...handoffs],   // pass copy of prior outputs
       topology: 'pipeline',
+      model,
     });
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
@@ -653,7 +656,7 @@ async function runPipelineAgents({ agents, overallInput, roots, signal, mcpManag
 }
 
 // Run agents simultaneously via Promise.all.
-async function runParallelAgents({ agents, overallInput, roots, signal, mcpManager, write, emit = null }) {
+async function runParallelAgents({ agents, overallInput, roots, signal, mcpManager, write, emit = null, model = null }) {
   const startTime = Date.now();
   if (emit) agents.forEach((a, index) => emit({ type: 'team_agent', index, role: a.role, status: 'running' }));
 
@@ -669,6 +672,7 @@ async function runParallelAgents({ agents, overallInput, roots, signal, mcpManag
         signal,
         mcpManager,
         topology: 'parallel',
+        model,
       });
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
       const icon = result.error ? '\x1b[31m✗\x1b[0m' : '\x1b[32m✓\x1b[0m';
@@ -687,7 +691,7 @@ async function runParallelAgents({ agents, overallInput, roots, signal, mcpManag
 // Returns false → PM declined (caller falls through to single-agent execution).
 // onEvent (optional): structured progress sink for GUI front-ends. When set,
 // progress is reported as objects instead of ANSI text through `write`.
-async function runTeam({ input, roots, write, signal, mcpManager, onEvent = null }) {
+async function runTeam({ input, roots, write, signal, mcpManager, onEvent = null, model = null }) {
   if (!isConfigured()) return false;
   const emit = typeof onEvent === 'function' ? (ev) => { try { onEvent(ev); } catch {} } : null;
 
@@ -710,7 +714,7 @@ async function runTeam({ input, roots, write, signal, mcpManager, onEvent = null
     // Phase 1b: PM plans a custom team via LLM
     if (emit) emit({ type: 'status', label: 'planning team' });
     else write('\x1b[36m[shmakk · pm]\x1b[0m Planning team…\r\n');
-    const plan = await planTeam(input, client, roots, signal);
+    const plan = await planTeam(input, client, roots, signal, model);
 
     if (!plan.needsTeam || !Array.isArray(plan.agents) || plan.agents.length < 2) {
       if (!emit) write('\x1b[2m[shmakk · pm] Routing to single agent\x1b[0m\r\n');
@@ -735,10 +739,10 @@ async function runTeam({ input, roots, write, signal, mcpManager, onEvent = null
   if (emit) {
     emit({ type: 'team_start', topology, reason, source, agents: agents.map((a) => ({ role: a.role, task: a.task, fileScope: a.fileScope || null, skill: a.skill || null })) });
     const agentResults = topology === 'pipeline'
-      ? await runPipelineAgents({ agents, overallInput: input, roots, signal, mcpManager, write, emit })
-      : await runParallelAgents({ agents, overallInput: input, roots, signal, mcpManager, write, emit });
+      ? await runPipelineAgents({ agents, overallInput: input, roots, signal, mcpManager, write, emit, model })
+      : await runParallelAgents({ agents, overallInput: input, roots, signal, mcpManager, write, emit, model });
     emit({ type: 'status', label: 'synthesizing results' });
-    const summary = await synthesizeResults({ overallInput: input, agentResults, client, signal });
+    const summary = await synthesizeResults({ overallInput: input, agentResults, client, signal, model });
     emit({ type: 'team_summary', content: summary });
     return true;
   }
@@ -755,14 +759,14 @@ async function runTeam({ input, roots, write, signal, mcpManager, onEvent = null
 
   // Phase 2: Execute based on topology
   const agentResults = topology === 'pipeline'
-    ? await runPipelineAgents({ agents, overallInput: input, roots, signal, mcpManager, write })
-    : await runParallelAgents({ agents, overallInput: input, roots, signal, mcpManager, write });
+    ? await runPipelineAgents({ agents, overallInput: input, roots, signal, mcpManager, write, model })
+    : await runParallelAgents({ agents, overallInput: input, roots, signal, mcpManager, write, model });
 
   write('\r\n');
 
   // Phase 3: PM synthesizes
   write('\x1b[36m[shmakk · pm]\x1b[0m Synthesizing results…\r\n\r\n');
-  const summary = await synthesizeResults({ overallInput: input, agentResults, client, signal });
+  const summary = await synthesizeResults({ overallInput: input, agentResults, client, signal, model });
   write(summary + '\r\n');
 
   return true;

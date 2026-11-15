@@ -82,9 +82,9 @@ function shouldPlan(input) {
 
 // generatePlan calls the LLM to decompose the user's request into a plan.
 // Returns a plan object or throws.
-async function generatePlan(input, { signal } = {}) {
+async function generatePlan(input, { signal, model: modelOverride } = {}) {
   const client = makeClient('agent');
-  const model = modelFor('agent');
+  const model = modelOverride || modelFor('agent');
 
   // Estimate complexity: longer requests with more context likely need more steps
   const textLen = String(input).length;

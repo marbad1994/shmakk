@@ -86,19 +86,35 @@ function createApi(app) {
   const github = createGitHub({ settings: app.settings, saveSettings: app.saveSettings });
   app.github = github;
 
+  function modelsList() {
+    const raw = (endpoints.getCurrentEndpoint()?.models
+      || endpoints.getCurrentEndpoint()?.registry
+      || process.env.SHMAKK_MODELS
+      || process.env.SHMAKK_REGISTRY
+      || '');
+    return String(raw).split(',').map((m) => m.trim()).filter(Boolean);
+  }
+
   function providerInfo() {
     const active = endpoints.getCurrentEndpoint();
     const key = active?.api_key || process.env.SHMAKK_API_KEY || '';
+    const model = process.env.SHMAKK_MODEL || active?.model || '';
+    const modelList = active?.models || active?.registry || process.env.SHMAKK_MODELS || process.env.SHMAKK_REGISTRY || '';
+    // Models the user can pick per space, sourced from the endpoint's model list
+    // (~/.config/shmakk/endpoints.js). Default model first, then the listed models.
+    const models = [];
+    for (const m of [model, ...modelsList()]) if (m && !models.includes(m)) models.push(m);
     return {
       configured: llm.isConfigured(),
       endpoint: endpoints.getCurrentEndpointName(),
       endpoints: endpoints.listEndpoints(ws()),
       baseUrl: active?.base_url || process.env.SHMAKK_BASE_URL || '',
-      model: process.env.SHMAKK_MODEL || active?.model || '',
+      model,
       apiKeyMasked: maskKey(key),
       hasApiKey: !!key,
       headers: active?.headers || process.env.SHMAKK_HEADERS || '',
-      registry: active?.registry || process.env.SHMAKK_REGISTRY || '',
+      modelList,
+      models,
     };
   }
   app.providerInfo = providerInfo;
@@ -184,7 +200,7 @@ function createApi(app) {
       review: !!app.settings.review, yesFiles: !!app.settings.yesFiles, noAi: !!app.settings.noAi,
       noCorrection: !!app.settings.noCorrection, workspace: ws(), shell: process.env.SHELL || null,
       term: process.env.TERM || null, endpoint: p.endpoint, baseUrl: p.baseUrl || null, apiKey: p.apiKeyMasked,
-      model: p.model || null, registry: p.registry || null, profile: app.settings.profile || 'auto',
+      model: p.model || null, modelList: p.modelList || null, profile: app.settings.profile || 'auto',
       debug: !!app.settings.debug, ttsAuto: !!app.settings.ttsAuto, ttsVoice: app.settings.ttsVoice || null,
     };
   });
@@ -205,6 +221,16 @@ function createApi(app) {
     }
     if ('ttsVoice' in body) app.settings.ttsVoice = body.ttsVoice ? String(body.ttsVoice).slice(0, 60) : null;
     if ('voiceLanguage' in body) app.settings.voiceLanguage = body.voiceLanguage ? String(body.voiceLanguage).slice(0, 20) : null;
+    if (body.modelByMode && typeof body.modelByMode === 'object') {
+      const cur = app.settings.modelByMode || {};
+      const next = { ...cur };
+      for (const k of store.MODES) {
+        if (!(k in body.modelByMode)) continue;
+        const v = body.modelByMode[k];
+        next[k] = (v === null || v === '') ? null : String(v).slice(0, 120);
+      }
+      app.settings.modelByMode = next;
+    }
     app.saveSettings();
     return publicSettings(app.settings);
   });
@@ -219,7 +245,6 @@ function createApi(app) {
   add('POST', '/api/endpoints/use', ({ body }) => {
     if (!body.name) { endpoints.clearEndpoint(); app.broadcastProvider(); return providerInfo(); }
     if (!endpoints.applyEndpoint(String(body.name), ws())) throw new HttpError(404, `endpoint "${body.name}" not found`);
-    llm.ensureMakkorch().catch(() => {});
     app.broadcastProvider();
     return providerInfo();
   });

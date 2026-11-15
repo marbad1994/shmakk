@@ -47,6 +47,7 @@ const DEFAULT_SETTINGS = {
   debug: false,
   colors: true,
   profile: null, // null = let the coordinator pick per task
+  modelByMode: { chat: null, code: null, design: null, cowork: null }, // per-space model override (null = default)
   // voice
   ttsAuto: false,
   ttsVoice: null,

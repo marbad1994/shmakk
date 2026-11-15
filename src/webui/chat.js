@@ -84,6 +84,26 @@ function titleFrom(text) {
   return t.length > 52 ? `${t.slice(0, 50).trimEnd()}…` : (t || 'New chat');
 }
 
+// Render attached files into a text block the model can reference. Text files
+// are inlined (clipped); anything binary/unreadable is reported as such.
+const MAX_ATTACHMENT_CHARS = 60000;
+
+function attachmentBlock(a, i) {
+  const label = (a && a.name) || `attachment-${i + 1}`;
+  const size = a && typeof a.size === 'number' ? a.size : 0;
+  const content = a && typeof a.content === 'string' ? a.content : '';
+  if (content) {
+    const clipped = content.length > MAX_ATTACHMENT_CHARS ? `${content.slice(0, MAX_ATTACHMENT_CHARS)}\n… (truncated)` : content;
+    return `[Attached file ${i + 1}: ${label}]\n<<< ${label}\n${clipped}\n${label} >>>`;
+  }
+  return `[Attached file ${i + 1}: ${label} (${size} bytes, binary or unreadable — not shown)]`;
+}
+
+function attachmentContext(attachments) {
+  if (!Array.isArray(attachments) || !attachments.length) return '';
+  return attachments.map(attachmentBlock).join('\n\n');
+}
+
 // Keep transcripts light: large string arguments (file bodies) are clipped.
 function previewArgs(args) {
   const out = {};
@@ -122,6 +142,13 @@ class ChatManager {
     this.ctx = ctx;
     this.convs = new Map(); // id → live conversation
     this.glossary = loadGlossary();
+  }
+
+  // Per-mode model override from settings, falling back to the default model.
+  _modelFor(conv) {
+    const byMode = this.ctx.settings && this.ctx.settings.modelByMode;
+    const override = byMode && byMode[conv.mode];
+    return override || modelFor();
   }
 
   // ── conversation lifecycle ──────────────────────────────────────────────
@@ -356,12 +383,14 @@ class ChatManager {
 
   // mode: 'ask' (default) or 'shell'. A leading "$ " also means shell.
   // unattended: 'auto' | 'ask' | 'full' — set for automation runs (see _confirmTool).
-  async send(convId, rawText, { mode = 'ask', unattended = null, askTimeoutMs = null } = {}) {
+  async send(convId, rawText, { mode = 'ask', unattended = null, askTimeoutMs = null, attachments = null } = {}) {
     const conv = this.get(convId);
     if (!conv) return { ok: false, error: 'conversation not found' };
     if (conv.run) return { ok: false, error: 'a run is already in progress' };
     let text = String(rawText || '').trim();
-    if (!text) return { ok: false, error: 'empty message' };
+    const refs = Array.isArray(attachments) ? attachments.filter((a) => a && (a.name || a.content)) : [];
+    const refContext = attachmentContext(refs);
+    if (!text && !refContext) return { ok: false, error: 'empty message' };
 
     if (/^\$\s+/.test(text)) { mode = 'shell'; text = text.replace(/^\$\s+/, ''); }
 
@@ -372,10 +401,11 @@ class ChatManager {
     conv.run = { ctrl, activity: 'starting', unattended, askTimeoutMs, error: null, finish };
     this.ctx.broadcast({ t: 'run', convId: conv.id, running: true, activity: 'starting' });
 
-    this._add(conv, { type: 'user', text, mode });
+    this._add(conv, { type: 'user', text, mode, attachments: refs.map((a) => ({ name: a.name || 'file', size: typeof a.size === 'number' ? a.size : 0 })) });
     if (!conv.preview || conv.title === 'New chat') {
-      if (conv.title === 'New chat') conv.title = titleFrom(text);
-      conv.preview = text.slice(0, 140);
+      const label = text || (refs.length ? `📎 ${refs.map((a) => a.name).join(', ')}` : '');
+      if (conv.title === 'New chat') conv.title = titleFrom(label);
+      conv.preview = label.slice(0, 140);
       this.ctx.broadcast({ t: 'conv', conv: { ...store.metaOf(conv), running: true } });
     }
 
@@ -386,7 +416,8 @@ class ChatManager {
     }
 
     // Fire and forget — progress flows through broadcasts.
-    this._run(conv, text, mode, ctrl).catch(() => {});
+    const prompt = refContext ? `${text}\n\n${refContext}`.trim() : text;
+    this._run(conv, prompt, mode, ctrl).catch(() => {});
     return { ok: true, done };
   }
 
@@ -834,6 +865,7 @@ class ChatManager {
       specialistHint: hint(routing.specialistHint),
       mcpManager: tools,
       onEvent: sink,
+      model: this._modelFor(conv),
     };
 
     // ── Team mode ──
@@ -843,7 +875,7 @@ class ChatManager {
       let handled = false;
       try {
         handled = await runTeam({
-          input: cmd, roots, write, signal: ctrl.signal, mcpManager,
+          input: cmd, roots, write, signal: ctrl.signal, mcpManager, model: this._modelFor(conv),
           onEvent: (ev) => {
             if (ev.type === 'status') this._activity(conv, ev.label);
             else if (ev.type === 'team_start') {
@@ -877,7 +909,7 @@ class ChatManager {
     if (!settings.review && shouldPlan(cmd)) {
       this._activity(conv, 'generating plan');
       let plan = null;
-      try { plan = await generatePlan(cmd, { signal: ctrl.signal }); }
+      try { plan = await generatePlan(cmd, { signal: ctrl.signal, model: this._modelFor(conv) }); }
       catch (e) {
         if (isAbortError(e) || ctrl.signal.aborted) throw e;
         this._notice(conv, 'Plan generation failed — running directly.', 'warn');
@@ -982,7 +1014,7 @@ class ChatManager {
 
     for (let round = 0; round < 6; round++) {
       sink({ type: 'status', label: round === 0 ? 'thinking' : 'reading' });
-      const stream = await client.chat.completions.create({ model: modelFor(), messages, tools, stream: true }, { signal: ctrl.signal });
+      const stream = await client.chat.completions.create({ model: this._modelFor(conv), messages, tools, stream: true }, { signal: ctrl.signal });
       let content = '';
       const calls = [];
       for await (const chunk of stream) {
@@ -1044,6 +1076,7 @@ class ChatManager {
       history: conv.history,
       profile: this.ctx.settings.profile || 'builder',
       colors: false,
+      model: this._modelFor(conv),
       specialistHint: [design.DESIGN_HINT, this._projectContext(conv)].filter(Boolean).join('\n\n'),
       mcpManager: null,
       onEvent: (ev) => {

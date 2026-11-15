@@ -1,7 +1,6 @@
 const { parseArgs, HELP } = require('./cli');
 const { normalizeProfile, resolveProfile } = require('./profiles');
 const { applyEndpoint, getCurrentEndpoint, getCurrentEndpointName } = require('./endpoints');
-const { ensureMakkorch } = require('./llm');
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
@@ -40,8 +39,6 @@ async function main() {
     if (!applyEndpoint(opts.endpoint, opts.workspace || process.cwd())) {
       process.stderr.write(`[shmakk] endpoint "${opts.endpoint}" not found in ${configDir}\n`);
     }
-    // Auto-start makkorch if needed
-    await ensureMakkorch();
   }
 
   if (opts.colors !== null) {
@@ -86,7 +83,7 @@ async function main() {
       baseUrl: activeEndpoint?.base_url || process.env.SHMAKK_BASE_URL || null,
       apiKey: activeEndpoint?.api_key ? (activeEndpoint.api_key.slice(0, 8) + '...' + activeEndpoint.api_key.slice(-4)) : null,
       model: activeEndpoint?.model || process.env.SHMAKK_MODEL || null,
-      registry: activeEndpoint?.registry || process.env.SHMAKK_REGISTRY || null,
+      models: activeEndpoint?.models || process.env.SHMAKK_MODELS || process.env.SHMAKK_REGISTRY || null,
       profile: profile.name,
       colors: opts.colors,
       stt: opts.stt,

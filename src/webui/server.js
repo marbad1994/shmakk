@@ -174,14 +174,14 @@ async function startWebServer(opts = {}) {
     set('SHMAKK_BASE_URL', p.baseUrl);
     set('SHMAKK_MODEL', p.model);
     set('SHMAKK_HEADERS', p.headers);
-    set('SHMAKK_REGISTRY', p.registry);
+    set('SHMAKK_MODELS', p.modelList !== undefined ? p.modelList : p.registry);
     if (p.apiKey !== undefined) set('SHMAKK_API_KEY', p.apiKey);
     if (persist) {
       settings.provider = {
         baseUrl: process.env.SHMAKK_BASE_URL || '',
         model: process.env.SHMAKK_MODEL || '',
         headers: process.env.SHMAKK_HEADERS || '',
-        registry: process.env.SHMAKK_REGISTRY || '',
+        modelList: process.env.SHMAKK_MODELS || '',
         apiKey: process.env.SHMAKK_API_KEY || '',
       };
       store.saveSettings(settings);
@@ -196,7 +196,8 @@ async function startWebServer(opts = {}) {
     if (p.apiKey && !process.env.SHMAKK_API_KEY) process.env.SHMAKK_API_KEY = p.apiKey;
     if (p.model && !process.env.SHMAKK_MODEL) process.env.SHMAKK_MODEL = p.model;
     if (p.headers && !process.env.SHMAKK_HEADERS) process.env.SHMAKK_HEADERS = p.headers;
-    if (p.registry && !process.env.SHMAKK_REGISTRY) process.env.SHMAKK_REGISTRY = p.registry;
+    const savedModels = p.modelList ?? p.registry;
+    if (savedModels && !process.env.SHMAKK_MODELS) process.env.SHMAKK_MODELS = savedModels;
   }
 
   app.projects = createProjects();
@@ -436,7 +437,7 @@ async function startWebServer(opts = {}) {
       try {
         switch (msg.t) {
           case 'chat.send': {
-            const r = await app.chat.send(msg.convId, msg.text, { mode: msg.mode });
+            const r = await app.chat.send(msg.convId, msg.text, { mode: msg.mode, attachments: msg.attachments });
             if (!r.ok) reply({ t: 'toast', level: 'error', text: r.error });
             break;
           }

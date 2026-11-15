@@ -4,12 +4,12 @@
 //
 // Format (~/.config/shmakk/endpoints.js):
 // {
-//   "makkorch": {
+//   "my-endpoint": {
 //     "base_url": "https://api.example.com/v1",
 //     "api_key": "sk-...",
 //     "model": "gpt-4o-mini",
 //     "headers": "x-custom=value",
-//     "registry": "claudeHaiku,claudeSonnet,ministral"
+//     "models": "claudeHaiku,claudeSonnet,ministral"
 //   }
 // }
 
@@ -62,7 +62,7 @@ function applyEndpoint(name, cwd) {
     api_key: cfg.api_key || cfg.apiKey,
     model: cfg.model,
     headers: cfg.headers,
-    registry: cfg.registry,
+    models: cfg.models ?? cfg.registry,
   };
 
   currentEndpointConfig = normalized;
@@ -73,7 +73,10 @@ function applyEndpoint(name, cwd) {
   if (normalized.api_key)   process.env.SHMAKK_API_KEY   = normalized.api_key;
   if (normalized.model)     process.env.SHMAKK_MODEL     = normalized.model;
   if (normalized.headers)   process.env.SHMAKK_HEADERS   = normalized.headers;
-  if (normalized.registry)  process.env.SHMAKK_REGISTRY  = normalized.registry;
+  if (normalized.models) {
+    process.env.SHMAKK_MODELS = normalized.models;
+    process.env.SHMAKK_REGISTRY = normalized.models; // deprecated alias
+  }
 
   return true;
 }

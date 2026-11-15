@@ -106,7 +106,7 @@ function highlightCodeBlocks(text, enabled = true) {
 
 // ── Main agent entry point ──────────────────────────────────────────────────
 
-async function runAgent({ input, roots, glossary, confirmTool, write, signal, history = [], profile = 'balanced', colors = true, voiceMode = false, specialistHint = null, mcpManager = null, requireToolUse = false, onEvent = null }) {
+async function runAgent({ input, roots, glossary, confirmTool, write, signal, history = [], profile = 'balanced', colors = true, voiceMode = false, specialistHint = null, mcpManager = null, requireToolUse = false, onEvent = null, model = null }) {
   // onEvent: optional structured-event sink used by GUI front-ends (web UI).
   // When present, streaming text, tool calls and results are reported as
   // objects instead of being rendered to `write` as terminal text.
@@ -119,6 +119,7 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
     return history;
   }
   const client = makeClient('agent');
+  const modelName = model || modelFor('agent');
   const rootList = roots.length === 1 ? roots[0] : roots.join(', ');
   const priorJournal = loadTaskJournal(roots[0]);
   const activeSkillText = renderActiveSkillForPrompt(roots[0], Number(process.env.SHMAKK_SKILL_PROMPT_MAX_BYTES) || 12000);
@@ -227,7 +228,7 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
     if (signal && signal.aborted) return messages.slice(1);
 
     // Stream the response so the user sees text as it generates.
-    const cacheKey = promptCacheEnabled ? promptCache.makeKey({ model: modelFor('agent'), messages, toolChoice: 'auto' }) : null;
+    const cacheKey = promptCacheEnabled ? promptCache.makeKey({ model: modelName, messages, toolChoice: 'auto' }) : null;
     if (promptCacheEnabled && cacheKey) {
       const hit = promptCache.get(roots[0], cacheKey);
       if (hit && hit.content) {
@@ -255,7 +256,7 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
       // can be either tool or text.
       const toolChoiceForThisIter = (requireToolUse && i === 0) ? 'required' : 'auto';
       stream = await client.chat.completions.create({
-        model: modelFor('agent'),
+        model: modelName,
         messages, tools: allTools, tool_choice: toolChoiceForThisIter,
         temperature: 0, stream: true,
       }, { signal });
@@ -439,7 +440,7 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
   // Finalization pass: force a no-tools answer before giving up.
   try {
     const final = await client.chat.completions.create({
-      model: modelFor('agent'),
+      model: modelName,
       messages: [
         ...messages,
         { role: 'user', content: 'Finalize now without using any tools. Summarize completed work and exact next actionable step if blocked.' },
