@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUp, ChevronDown, Gauge, Mic, ShieldCheck, Square, Volume2, VolumeX, Zap } from 'lucide-react';
+import { ArrowUp, ChevronDown, Cpu, FileText, Mic, Paperclip, Square, Volume2, VolumeX, X } from 'lucide-react';
 import { COMMANDS, filterCommands, matchSlash, type Command } from '@/lib/commands';
 import { cn, modKey } from '@/lib/utils';
 import { modeInfo } from '@/lib/modes';
@@ -23,20 +23,25 @@ interface Props {
 }
 
 const HISTORY_KEY = 'shmakk.inputHistory';
+const MAX_ATTACH_BYTES = 200 * 1024;
+const MAX_ATTACH_CHARS = 60000;
+const MAX_ATTACH_COUNT = 8;
 function loadHistory(): string[] { try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch { return []; } }
 
 export function Composer({ mode: space, running, activity, mic, speaking, onMic, onStopSpeaking }: Props) {
-  // Shell input, profiles and approval switches only make sense where there is a workspace.
+  // Shell input only makes sense where there is a workspace.
   const agentic = space === 'code' || space === 'cowork';
   const send = useApp((s) => s.send);
   const stop = useApp((s) => s.stop);
   const settings = useApp((s) => s.settings);
   const patchSettings = useApp((s) => s.patchSettings);
-  const profiles = useApp((s) => s.profiles);
+  const provider = useApp((s) => s.provider);
   const draft = useApp((s) => s.draft);
   const activeId = useApp((s) => s.activeId);
 
   const [text, setText] = useState('');
+  const [files, setFiles] = useState<{ name: string; size: number; content: string }[]>([]);
+  const fileRef = useRef<HTMLInputElement>(null);
   const [mode, setMode] = useState<'ask' | 'shell'>('ask');
   const shell = agentic && mode === 'shell';
   useEffect(() => { if (!agentic && mode === 'shell') setMode('ask'); }, [agentic, mode]);
@@ -79,22 +84,25 @@ export function Composer({ mode: space, running, activity, mic, speaking, onMic,
 
   const submit = useCallback(() => {
     const value = text.trim();
-    if (!value || running) return;
-    if (mode === 'ask') {
+    if ((!value && !files.length) || running) return;
+    if (value && mode === 'ask') {
       const m = matchSlash(value);
       if (m) {
         const cmd = COMMANDS.find((c) => c.slash === m.query) || (matches.length === 1 ? matches[0] : undefined);
         if (cmd) return runCommand(cmd, m.arg);
       }
     }
-    history.current = [value, ...history.current.filter((h) => h !== value)].slice(0, 100);
-    try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history.current)); } catch { /* private mode */ }
-    histIdx.current = -1;
+    if (value) {
+      history.current = [value, ...history.current.filter((h) => h !== value)].slice(0, 100);
+      try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history.current)); } catch { /* private mode */ }
+      histIdx.current = -1;
+    }
     setText('');
+    setFiles([]);
     setMenuDismissed(false);
     haptic();
-    void send(value, shell ? 'shell' : 'ask');
-  }, [text, running, mode, shell, matches, runCommand, send]);
+    void send(value, shell ? 'shell' : 'ask', files);
+  }, [text, files, running, mode, shell, matches, runCommand, send]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.nativeEvent.isComposing) return;
@@ -132,6 +140,48 @@ export function Composer({ mode: space, running, activity, mic, speaking, onMic,
     if (agentic && mode === 'ask' && /^\$\s/.test(value)) { setMode('shell'); setText(value.replace(/^\$\s+/, '')); return; }
     setText(value);
   };
+
+  // Attach files for reference: read text files into the message, keep others
+  // as name/size only (the model gets a note that they're binary).
+  const onFiles = useCallback(async (list: FileList | null) => {
+    if (!list || !list.length) return;
+    const picked: { name: string; size: number; content: string }[] = [];
+    for (const f of Array.from(list)) {
+      if (picked.length >= MAX_ATTACH_COUNT) break;
+      if (f.size > MAX_ATTACH_BYTES) { picked.push({ name: f.name, size: f.size, content: '' }); continue; }
+      let content = '';
+      try { content = await f.text(); } catch { content = ''; }
+      const binary = content.includes('\u0000');
+      picked.push({ name: f.name, size: f.size, content: binary ? '' : content.slice(0, MAX_ATTACH_CHARS) });
+    }
+    setFiles((prev) => [...prev, ...picked].slice(0, MAX_ATTACH_COUNT));
+  }, []);
+
+  // Per-space model picker. The list of models comes from the endpoint's model
+  // list in ~/.config/shmakk/endpoints.js; "default" clears the override.
+  const DEFAULT_MODEL = '__default';
+  const modelByMode = settings.modelByMode || ({} as Record<Mode, string | null>);
+  const currentModel = modelByMode[space] || provider.model || 'default';
+  const setModel = (v: string) => patchSettings({ modelByMode: { ...modelByMode, [space]: v === DEFAULT_MODEL ? null : v } });
+
+  const modelMenu = (
+    <DropdownMenu>
+      <Tip label={`Model for ${modeInfo(space).label.toLowerCase()}`} side="top">
+        <DropdownMenuTrigger asChild>
+          <button type="button" className="inline-flex items-center gap-1.5 rounded-full border border-line px-2.5 py-0.5 font-mono text-xs text-dim touch:px-3 touch:py-1.5 touch:text-[13px] hover:border-line-strong hover:bg-hover hover:text-fg">
+            <Cpu className="size-3.5" />{currentModel}<ChevronDown className="size-3" />
+          </button>
+        </DropdownMenuTrigger>
+      </Tip>
+      <DropdownMenuContent align="start">
+        <DropdownMenuLabel>Model · {modeInfo(space).label}</DropdownMenuLabel>
+        <DropdownMenuRadioGroup value={modelByMode[space] || DEFAULT_MODEL} onValueChange={setModel}>
+          <DropdownMenuRadioItem value={DEFAULT_MODEL}>default <span className="text-faint">· {provider.model || 'gpt-4o-mini'}</span></DropdownMenuRadioItem>
+          {provider.models.map((m) => <DropdownMenuRadioItem key={m} value={m}>{m}</DropdownMenuRadioItem>)}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 
   return (
     <div className="relative shrink-0 px-5.5 pb-3 max-md:px-2 max-md:pb-2">
@@ -189,46 +239,49 @@ export function Composer({ mode: space, running, activity, mic, speaking, onMic,
               className={cn('max-h-[40vh] min-h-6 flex-1 resize-none bg-transparent leading-[1.6] outline-none placeholder:text-faint', shell && 'font-mono text-[13.5px] leading-[1.75]')}
             />
           </div>
+          {files.length > 0 ? (
+            <div className="flex flex-col gap-2 px-4 pb-2">
+              {files.map((f, i) => (
+                <div key={`${f.name}-${i}`} className="group relative overflow-hidden rounded-xl border border-line bg-panel">
+                  <button type="button" aria-label={`Remove ${f.name}`} onClick={() => setFiles((p) => p.filter((_, j) => j !== i))} className="absolute right-1.5 top-1.5 z-10 grid size-6 place-items-center rounded-full bg-raised/90 text-faint shadow-sm opacity-0 transition-opacity hover:text-fg focus-visible:opacity-100 group-hover:opacity-100">
+                    <X className="size-3.5" />
+                  </button>
+                  {f.content ? (
+                    <div className="relative">
+                      <pre className="m-0 max-h-40 overflow-y-auto whitespace-pre-wrap break-words p-3 pr-9 font-mono text-[11.5px] leading-relaxed text-dim">{f.content}</pre>
+                      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-panel to-transparent" />
+                    </div>
+                  ) : (
+                    <div className="flex h-20 items-center justify-center gap-2 text-faint">
+                      <FileText className="size-4" />
+                      <span className="text-xs">no preview</span>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : null}
           <div className="flex items-center gap-1.5 px-2.5 pb-2 pt-1">
             <div className="no-scrollbar flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto [mask-image:linear-gradient(to_right,black_calc(100%-16px),transparent)] [&>*]:shrink-0">
-            {!agentic ? <span className={cn('inline-flex items-center gap-1.5 rounded-full border border-line px-2.5 py-0.5 font-mono text-xs touch:py-1.5 [&_svg]:size-3.5', modeInfo(space).tone)}>{modeInfo(space).icon}{modeInfo(space).label.toLowerCase()}</span> : null}
+            {!agentic ? <>
+              <span className={cn('inline-flex items-center gap-1.5 rounded-full border border-line px-2.5 py-0.5 font-mono text-xs touch:py-1.5 [&_svg]:size-3.5', modeInfo(space).tone)}>{modeInfo(space).icon}{modeInfo(space).label.toLowerCase()}</span>
+              {modelMenu}
+            </> : null}
             {agentic ? <>
             <Segmented label="Input mode" value={mode} onChange={(m) => { setMode(m); ref.current?.focus(); }} options={[{ value: 'ask', label: 'ask' }, { value: 'shell', label: 'shell' }]} />
 
-            <DropdownMenu>
-              <Tip label="Profile — how much context and how many tool rounds" side="top">
-                <DropdownMenuTrigger asChild>
-                  <button type="button" className="inline-flex items-center gap-1.5 rounded-full border border-line px-2.5 py-0.5 font-mono text-xs text-dim touch:px-3 touch:py-1.5 touch:text-[13px] hover:border-line-strong hover:bg-hover hover:text-fg">
-                    <Gauge className="size-3.5" />{settings.profile || 'auto'}<ChevronDown className="size-3" />
-                  </button>
-                </DropdownMenuTrigger>
-              </Tip>
-              <DropdownMenuContent align="start">
-                <DropdownMenuLabel>Profile</DropdownMenuLabel>
-                <DropdownMenuRadioGroup value={settings.profile || 'auto'} onValueChange={(v) => patchSettings({ profile: v === 'auto' ? null : v })}>
-                  <DropdownMenuRadioItem value="auto">auto <span className="text-faint">· picked per task</span></DropdownMenuRadioItem>
-                  {profiles.map((p) => <DropdownMenuRadioItem key={p.name} value={p.name}>{p.name} <span className="text-faint">· {p.maxToolIters} rounds</span></DropdownMenuRadioItem>)}
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-
-            <Tip label="Review mode — confirm every AI action" side="top">
-              <button type="button" aria-pressed={settings.review} onClick={() => patchSettings({ review: !settings.review })}
-                className={cn('inline-flex items-center gap-1.5 rounded-full border border-line px-2.5 py-0.5 font-mono text-xs text-dim touch:px-3 touch:py-1.5 touch:text-[13px] hover:bg-hover hover:text-fg', settings.review && 'border-accent/40 bg-accent/10 text-accent hover:text-accent')}>
-                <ShieldCheck className="size-3.5" />review
-              </button>
-            </Tip>
-            <Tip label="Auto-accept file writes and edits" side="top">
-              <button type="button" aria-pressed={settings.yesFiles} onClick={() => patchSettings({ yesFiles: !settings.yesFiles })}
-                className={cn('inline-flex items-center gap-1.5 rounded-full border border-line px-2.5 py-0.5 font-mono text-xs text-dim touch:px-3 touch:py-1.5 touch:text-[13px] hover:bg-hover hover:text-fg', settings.yesFiles && 'border-accent/40 bg-accent/10 text-accent hover:text-accent')}>
-                <Zap className="size-3.5" />yes-files
-              </button>
-            </Tip>
+            {modelMenu}
             </> : null}
 
             <span className="w-3" />
             </div>
 
+            <Tip label="Attach files for reference" side="top">
+              <Button variant="ghost" size="icon" aria-label="Attach files" onClick={() => fileRef.current?.click()}>
+                <Paperclip />
+              </Button>
+            </Tip>
+            <input ref={fileRef} type="file" multiple hidden onChange={(e) => { void onFiles(e.target.files); e.target.value = ''; }} />
             {speaking ? (
               <Tip label="Stop speaking" side="top"><Button variant="ghost" size="icon" aria-label="Stop speaking" onClick={onStopSpeaking}><VolumeX className="text-accent" /></Button></Tip>
             ) : (
@@ -249,7 +302,7 @@ export function Composer({ mode: space, running, activity, mic, speaking, onMic,
               </Tip>
             ) : (
               <Tip label="Send (Enter)" side="top">
-                <button type="button" aria-label="Send" disabled={!text.trim()} onClick={submit} className="grid size-[34px] shrink-0 place-items-center rounded-full bg-accent text-accent-ink transition-transform enabled:hover:scale-105 disabled:opacity-35 touch:size-10"><ArrowUp className="size-[18px]" strokeWidth={2.4} /></button>
+                <button type="button" aria-label="Send" disabled={!text.trim() && !files.length} onClick={submit} className="grid size-[34px] shrink-0 place-items-center rounded-full bg-accent text-accent-ink transition-transform enabled:hover:scale-105 disabled:opacity-35 touch:size-10"><ArrowUp className="size-[18px]" strokeWidth={2.4} /></button>
               </Tip>
             )}
           </div>

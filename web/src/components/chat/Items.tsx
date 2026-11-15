@@ -2,12 +2,12 @@ import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Collapsible } from 'radix-ui';
 import {
   Brain, Check, ChevronRight, CircleSlash, Copy, FilePen, FilePlus2, FileText, FolderOpen, FolderPlus, Globe, Info,
-  ListChecks, MousePointerClick, Plug, Search, ShieldAlert, ShieldCheck, TerminalSquare, Trash2, TriangleAlert, Users, Volume2, Wand2, X,
+  ListChecks, MousePointerClick, Paperclip, Plug, Search, ShieldAlert, ShieldCheck, TerminalSquare, Trash2, TriangleAlert, Users, Volume2, Wand2, X,
 } from 'lucide-react';
 import type {
   AskItem, AssistantItem, Item, LogItem, NoticeItem, OutputItem, PlanItem, RouteItem, ShellItem, StepItem, TeamItem, ToolItem, UserItem, ViewId,
 } from '@/lib/types';
-import { cn, copyText } from '@/lib/utils';
+import { bytes, cn, copyText } from '@/lib/utils';
 import { useApp } from '@/store/app';
 import { haptic } from '@/hooks/useMobile';
 import { Badge } from '@/components/ui/badge';
@@ -23,11 +23,24 @@ import { Diff, diffStats } from './Diff';
 function User({ item }: { item: UserItem }) {
   const shell = item.mode === 'shell';
   return (
-    <div className="mt-2 max-w-[86%] self-end">
-      <div className={cn('whitespace-pre-wrap break-words rounded-[18px] rounded-br-[5px] border border-line bg-raised px-3.5 py-2', shell && 'border-accent/35 font-mono text-[13px]')}>
-        {shell ? <span className="text-accent">$ </span> : null}
-        {item.text}
-      </div>
+    <div className="mt-2 flex max-w-[86%] flex-col items-end gap-1 self-end">
+      {item.text ? (
+        <div className={cn('whitespace-pre-wrap break-words rounded-[18px] rounded-br-[5px] border border-line bg-raised px-3.5 py-2', shell && 'border-accent/35 font-mono text-[13px]')}>
+          {shell ? <span className="text-accent">$ </span> : null}
+          {item.text}
+        </div>
+      ) : null}
+      {item.attachments?.length ? (
+        <div className="flex max-w-full flex-wrap justify-end gap-1.5">
+          {item.attachments.map((a, i) => (
+            <span key={`${a.name}-${i}`} className="inline-flex items-center gap-1.5 rounded-full border border-line bg-raised px-2.5 py-0.5 font-mono text-[11px] text-dim">
+              <Paperclip className="size-3" />
+              <span className="max-w-44 truncate">{a.name}</span>
+              <span className="text-faint">{bytes(a.size)}</span>
+            </span>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

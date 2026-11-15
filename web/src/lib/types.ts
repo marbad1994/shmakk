@@ -6,7 +6,8 @@ export type AskStatus = 'pending' | 'yes' | 'no' | 'expired';
 
 interface Base { id: string; at: number }
 
-export interface UserItem extends Base { type: 'user'; text: string; mode?: 'ask' | 'shell' }
+export interface AttachmentRef { name: string; size: number; content: string }
+export interface UserItem extends Base { type: 'user'; text: string; mode?: 'ask' | 'shell'; attachments?: { name: string; size: number }[] }
 export interface AssistantItem extends Base {
   type: 'assistant'; text: string; reasoning?: string; streaming?: boolean;
   agent?: string | null; cached?: boolean; interim?: boolean;
@@ -68,10 +69,12 @@ export interface Settings {
   review: boolean; yesFiles: boolean; noCorrection: boolean; noAi: boolean; debug: boolean;
   profile: string | null; ttsAuto: boolean; ttsVoice: string | null; voiceLanguage: string | null;
   voiceHandsFree: boolean; recentWorkspaces: string[];
+  modelByMode: Record<Mode, string | null>; // per-space model override (null = default)
 }
 export interface Provider {
   configured: boolean; endpoint: string | null; endpoints: string[]; baseUrl: string; model: string;
-  apiKeyMasked: string | null; hasApiKey: boolean; headers: string; registry: string;
+  apiKeyMasked: string | null; hasApiKey: boolean; headers: string; modelList: string;
+  models: string[]; // available model names, from the endpoint's model list (~/.config/shmakk/endpoints.js)
 }
 export interface Features {
   terminal: boolean; terminalReason: string | null; sessionSearch: boolean; stt: boolean; tts: boolean;

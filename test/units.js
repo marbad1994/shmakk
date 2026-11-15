@@ -1319,6 +1319,43 @@ test('webui chat: self-commands and shell mode run without an LLM', () => withTe
   }
 }));
 
+test('webui chat: attachments are inlined into the prompt and kept off the stored item', () => withTempHome(async (dir) => {
+  const savedUrl = process.env.SHMAKK_BASE_URL;
+  delete process.env.SHMAKK_BASE_URL;
+  const { ChatManager } = require('../src/webui/chat');
+  const settings = { ...require('../src/webui/store').DEFAULT_SETTINGS };
+  const chat = new ChatManager({ settings, saveSettings() {}, broadcast() {}, mcpManager: null, getWorkspace: () => dir, onProviderChanged() {} });
+  const conv = chat.create();
+  let captured = null;
+  chat._run = async (c, prompt) => { captured = prompt; c.run = null; };
+  try {
+    await chat.send(conv.id, 'summarize', { attachments: [
+      { name: 'notes.md', size: 10, content: '# hello\nworld' },
+      { name: 'img.png', size: 999, content: '' },
+    ] });
+    // Prompt carries both files; the binary one is described, not inlined.
+    assert.match(captured, /summarize/);
+    assert.match(captured, /<<< notes\.md/);
+    assert.match(captured, /# hello/);
+    assert.match(captured, /img\.png \(\d+ bytes, binary or unreadable/);
+    // Stored user item only keeps display metadata, never file contents.
+    const user = conv.items.find((i) => i.type === 'user');
+    assert.deepStrictEqual(user.attachments, [{ name: 'notes.md', size: 10 }, { name: 'img.png', size: 999 }]);
+    assert.strictEqual(JSON.stringify(conv.items).includes('# hello'), false);
+
+    // Attachments alone (no text) are a valid message and derive a title.
+    const c2 = chat.create();
+    await chat.send(c2.id, '', { attachments: [{ name: 'plan.md', size: 5, content: 'do it' }] });
+    assert.strictEqual(c2.title, '📎 plan.md');
+    assert.strictEqual(c2.preview, '📎 plan.md');
+    assert.strictEqual((await chat.send(c2.id, '   ', { attachments: [] })).ok, false);
+    chat.remove(c2.id);
+  } finally {
+    chat.remove(conv.id);
+    if (savedUrl !== undefined) process.env.SHMAKK_BASE_URL = savedUrl;
+  }
+}));
+
 test('webui github: repository and branch names are validated', () => {
   const { parseRepo, validBranch } = require('../src/webui/github');
   assert.deepStrictEqual(parseRepo('octo/demo'), { owner: 'octo', repo: 'demo', fullName: 'octo/demo' });

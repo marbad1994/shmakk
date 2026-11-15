@@ -19,15 +19,15 @@ import { Page, Row, Rows, Section } from './Page';
 
 function ProviderSection() {
   const provider = useApp((s) => s.provider);
-  const [form, setForm] = useState({ baseUrl: '', model: '', apiKey: '', headers: '', registry: '' });
+  const [form, setForm] = useState({ baseUrl: '', model: '', apiKey: '', headers: '', modelList: '' });
   const [test, setTest] = useState<{ ok: boolean; ms?: number; error?: string; model?: string } | null>(null);
   useEffect(() => {
-    setForm({ baseUrl: provider.baseUrl || '', model: provider.model || '', apiKey: '', headers: provider.headers || '', registry: provider.registry || '' });
-  }, [provider.baseUrl, provider.model, provider.headers, provider.registry, provider.endpoint]);
+    setForm({ baseUrl: provider.baseUrl || '', model: provider.model || '', apiKey: '', headers: provider.headers || '', modelList: provider.modelList || '' });
+  }, [provider.baseUrl, provider.model, provider.headers, provider.modelList, provider.endpoint]);
 
   const models = useQuery({ queryKey: ['models', provider.baseUrl, provider.endpoint], queryFn: () => api.get<{ models: string[]; error?: string }>('/api/models'), enabled: provider.configured, staleTime: 60_000 });
   const save = useMutation({
-    mutationFn: () => api.put<Provider>('/api/provider', { baseUrl: form.baseUrl.trim(), model: form.model.trim(), headers: form.headers.trim(), registry: form.registry.trim(), ...(form.apiKey ? { apiKey: form.apiKey } : {}) }),
+    mutationFn: () => api.put<Provider>('/api/provider', { baseUrl: form.baseUrl.trim(), model: form.model.trim(), headers: form.headers.trim(), modelList: form.modelList.trim(), ...(form.apiKey ? { apiKey: form.apiKey } : {}) }),
     onSuccess: () => { toast.success('Provider saved'); setForm((f) => ({ ...f, apiKey: '' })); setTest(null); },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -41,7 +41,7 @@ function ProviderSection() {
     onSuccess: setTest,
     onError: (e: Error) => setTest({ ok: false, error: e.message }),
   });
-  const dirty = form.baseUrl !== (provider.baseUrl || '') || form.model !== (provider.model || '') || !!form.apiKey || form.headers !== (provider.headers || '') || form.registry !== (provider.registry || '');
+  const dirty = form.baseUrl !== (provider.baseUrl || '') || form.model !== (provider.model || '') || !!form.apiKey || form.headers !== (provider.headers || '') || form.modelList !== (provider.modelList || '');
 
   return (
     <Section title="Model provider" aside={provider.configured ? <Badge tone="ok">connected</Badge> : <Badge tone="warn">not configured</Badge>}>
@@ -70,8 +70,8 @@ function ProviderSection() {
         <Field label="Extra headers" htmlFor="p-headers" hint="k=v,k=v (SHMAKK_HEADERS)">
           <Input id="p-headers" value={form.headers} onChange={(e) => setForm({ ...form, headers: e.target.value })} className="font-mono text-[13px]" spellCheck={false} />
         </Field>
-        <Field label="Model registry" htmlFor="p-reg" hint="Comma-separated filter for makkorch (SHMAKK_REGISTRY)">
-          <Input id="p-reg" value={form.registry} onChange={(e) => setForm({ ...form, registry: e.target.value })} className="font-mono text-[13px]" spellCheck={false} />
+        <Field label="Models" htmlFor="p-models" hint="Comma-separated list of models (from ~/.config/shmakk/endpoints.js)">
+          <Input id="p-models" value={form.modelList} onChange={(e) => setForm({ ...form, modelList: e.target.value })} className="font-mono text-[13px]" spellCheck={false} />
         </Field>
         <div className="col-span-full flex flex-wrap items-center gap-2.5">
           <Button type="submit" variant="primary" disabled={!dirty || save.isPending}>Save</Button>

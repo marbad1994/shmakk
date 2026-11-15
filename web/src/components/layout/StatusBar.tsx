@@ -30,6 +30,8 @@ export function StatusBar() {
   const patchSettings = useApp((s) => s.patchSettings);
   const toggleDock = useApp((s) => s.toggleDock);
 
+  const activeModel = (settings.modelByMode?.[mode]) || provider.model || 'default model';
+
   return (
     <footer aria-label="Status" className="flex h-[26px] shrink-0 items-center max-md:hidden overflow-hidden whitespace-nowrap border-t border-line bg-panel px-1.5 font-mono text-[11.5px] text-dim">
       <Cell label={online ? 'Connected to shmakk' : 'Reconnecting…'}>
@@ -42,8 +44,8 @@ export function StatusBar() {
           <Folder /><span className="max-w-60 truncate">{tildify(workspace, home)}</span>
         </Cell>
       ) : null}
-      <Cell label={provider.configured ? `Model${provider.endpoint ? ` · endpoint ${provider.endpoint}` : ''} — click to change` : 'No model configured — click to set up'} onClick={() => setView('settings')} className={!provider.configured ? 'text-warn' : undefined}>
-        <Cpu /><span className="max-w-52 truncate">{provider.configured ? provider.model || 'default model' : 'no model'}</span>
+      <Cell label={provider.configured ? `Model for ${modeInfo(mode).label.toLowerCase()}${provider.endpoint ? ` · endpoint ${provider.endpoint}` : ''} — click to change` : 'No model configured — click to set up'} onClick={() => setView('settings')} className={!provider.configured ? 'text-warn' : undefined}>
+        <Cpu /><span className="max-w-52 truncate">{provider.configured ? activeModel : 'no model'}</span>
       </Cell>
       {agentic ? <Cell label="Profile" className="max-md:hidden"><Gauge />{settings.profile || 'auto'}</Cell> : null}
       {agentic ? <Cell label={settings.review ? 'Review mode: every AI action needs confirmation' : 'Auto mode: safe actions run without asking'} onClick={() => patchSettings({ review: !settings.review })} className={settings.review ? 'text-accent' : undefined}>
