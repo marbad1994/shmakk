@@ -94,6 +94,7 @@ interface AppState {
   folderPickerOpen: boolean;
   keyboardOpen: boolean;
   show2planOpen: boolean;
+  focusPlanId: string | null;      // plan the Plans view opens on
   draft: { text: string; mode: 'ask' | 'shell'; nonce: number } | null;
 
   init(): Promise<void>;
@@ -126,6 +127,7 @@ interface AppState {
   setFolderPicker(open: boolean): void;
   setKeyboard(open: boolean): void;
   setShow2plan(open: boolean): void;
+  openPlan(id: string | null): void;
   startSession(opts: { repo: string; branch?: string; newBranch?: string; prompt?: string }): Promise<void>;
 }
 
@@ -203,6 +205,11 @@ export const useApp = create<AppState>((set, get) => {
       case 'design.changed':
         set((s) => ({ designTick: { ...s.designTick, [msg.convId]: (s.designTick[msg.convId] || 0) + 1 } }));
         break;
+      case 'plans.changed':
+        void queryClient.invalidateQueries({ queryKey: ['plans'] });
+        void queryClient.invalidateQueries({ queryKey: ['plan-full', msg.planId] });
+        break;
+      case 'show2plan': void queryClient.invalidateQueries({ queryKey: ['show2plan', msg.id] }); break;
       case 'toast': (msg.level === 'error' ? toast.error : toast)(msg.text); break;
       default:
     }
@@ -245,6 +252,7 @@ export const useApp = create<AppState>((set, get) => {
     sidebarOpen: window.innerWidth >= 1024 && localStorage.getItem('shmakk.sidebar') !== '0',
     keyboardOpen: false,
     show2planOpen: false,
+    focusPlanId: null,
     dockOpen: false,
     rightOpen: draftRight.open,
     rightPane: draftRight.pane,
@@ -459,6 +467,7 @@ export const useApp = create<AppState>((set, get) => {
     setFolderPicker(open) { set({ folderPickerOpen: open }); },
     setKeyboard(open) { set({ keyboardOpen: open }); },
     setShow2plan(open) { set({ show2planOpen: open }); },
+    openPlan(id) { set({ focusPlanId: id }); get().setView('plan'); },
 
     // Clone a GitHub repository on the server and open a conversation on it.
     async startSession(opts) {

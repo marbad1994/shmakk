@@ -25,7 +25,7 @@ export interface AskItem extends Base {
 }
 export interface PlanTask { id: string; title: string; description: string; status: string; completedAt?: string | null }
 export interface Plan { id: string; title: string; status: string; tasks: PlanTask[]; updatedAt?: string; originalRequest?: string }
-export interface PlanItem extends Base { type: 'plan'; plan: Plan }
+export interface PlanItem extends Base { type: 'plan'; plan: Plan; planId?: string }
 export interface StepItem extends Base { type: 'step'; index: number; total: number; title: string; description?: string }
 export interface TeamAgent {
   role: string; task: string; fileScope?: string | null; status: string; error?: string | null;
@@ -104,7 +104,7 @@ export interface Provider {
 }
 export interface Features {
   terminal: boolean; terminalReason: string | null; sessionSearch: boolean; stt: boolean; tts: boolean;
-  browser: boolean; desktop: boolean;
+  browser: boolean; desktop: boolean; preview?: boolean;
 }
 export interface Status {
   pid: number; version: string; workspace: string; workspaceWarning: string | null; uptimeSec: number;
@@ -140,6 +140,8 @@ export type ServerMsg =
   | { t: 'toast'; level: 'error' | 'info' | 'ok'; text: string }
   | { t: 'term.data'; id: string; data: string }
   | { t: 'term.exit'; id: string; code: number; error?: string }
+  | { t: 'plans.changed'; planId: string }
+  | { t: 'show2plan'; id: string; stage: string }
   | { t: 'pong' };
 
 export type ViewId = 'chat' | 'project' | 'automations' | 'github' | 'skills' | 'memory' | 'plan' | 'changes' | 'recall' | 'team' | 'mcp' | 'activity' | 'artefacts' | 'settings';

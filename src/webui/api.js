@@ -30,6 +30,7 @@ const { AutomationError } = require('./automations');
 const store = require('./store');
 const artefacts = require('./artefacts');
 const capture = require('../services/capture');
+const { registerWorkRoutes } = require('./work-routes');
 
 class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -161,6 +162,7 @@ function createApi(app) {
       browser: canResolve('playwright'),
       desktop: !!process.versions.electron,
       capture: capture.isAvailable(),
+      preview: !!app.preview,
     };
   }
 
@@ -970,6 +972,8 @@ function createApi(app) {
     if (status.branch === conv.repo.baseBranch) throw new HttpError(400, 'create a branch first — this session is on the base branch');
     return github.createPullRequest(conv.repo.fullName, { head: status.branch, base: body.base || conv.repo.baseBranch, title: body.title, body: body.body, draft: body.draft });
   });
+
+  registerWorkRoutes(add, app, { HttpError, ws });
 
   // ── lifecycle (--exit) ────────────────────────────────────────────────
 

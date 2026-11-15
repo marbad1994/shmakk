@@ -43,7 +43,7 @@ export const COMMANDS: Command[] = [
   { id: 'plan-force', slash: 'plan-first', title: 'Plan first, then execute', hint: 'Generate a step-by-step plan for approval (+ prefix)', group: 'Chat', icon: <ListChecks />, arg: 'task', argRequired: true, run: (a) => app().send(`+${a}`, 'ask') },
   { id: 'recall', slash: 'recall', title: 'Recall from past sessions', hint: 'Full-text search across every session', group: 'Chat', icon: <History />, arg: 'query', argRequired: true, run: (a) => say(`recall ${a}`) },
   { id: 'help', slash: 'help', title: 'Help', hint: 'Show the full CLI reference', group: 'Chat', icon: <CircleHelp />, run: () => say('help') },
-  { id: 'show2plan', slash: 'show2plan', title: 'Show & tell → notes', hint: 'Show a screen and say what needs changing, then keep a reference or build an automation', group: 'Chat', icon: <MonitorPlay />, run: () => app().setShow2plan(true) },
+  { id: 'show2plan', slash: 'show2plan', title: 'Show & tell → tasks', hint: 'Record your screen and talk through bugs or changes; get reviewed tasks for Plans', group: 'Chat', icon: <MonitorPlay />, run: () => app().setShow2plan(true) },
 
   { id: 'clone', slash: 'clone', title: 'Start a GitHub session', hint: 'Clone owner/repo on the server and open a session on it', group: 'Chat', icon: <GitBranch />, arg: 'owner/repo [branch]', argRequired: true, run: (a) => { const [repo, branch] = a.split(/\s+/); const id = toast.loading(`Cloning ${repo}…`); return app().startSession({ repo, branch }).then(() => { toast.success(`Session ready on ${repo}`, { id }); }).catch((e: Error) => { toast.error(e.message, { id }); }); } },
 

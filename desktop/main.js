@@ -4,7 +4,7 @@
 // a one-off token; the window is the only client. Closing the app stops the
 // server and everything it started.
 
-const { app, BrowserWindow, Menu, dialog, ipcMain, shell, nativeTheme, session } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, shell, nativeTheme, session, desktopCapturer } = require('electron');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -66,10 +66,21 @@ async function start() {
     onShutdown: () => app.quit(), // "Quit shmakk" in the UI
   });
 
-  // Mic access is requested by voice input; nothing else is granted.
+  // Mic access is requested by voice input, screen capture by Show & tell;
+  // nothing else is granted, and only to the shmakk UI itself.
   session.defaultSession.setPermissionRequestHandler((wc, permission, cb) => {
-    cb(wc.getURL().startsWith(server.baseUrl) && (permission === 'media' || permission === 'notifications' || permission === 'clipboard-sanitized-write'));
+    cb(wc.getURL().startsWith(server.baseUrl) && (permission === 'media' || permission === 'display-capture' || permission === 'notifications' || permission === 'clipboard-sanitized-write'));
   });
+
+  // getDisplayMedia() needs a handler in Electron. Use the OS picker where
+  // there is one (macOS); otherwise share the primary screen.
+  session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
+    if (!request.frame || !request.frame.url || !request.frame.url.startsWith(server.baseUrl)) return callback({});
+    desktopCapturer.getSources({ types: ['screen', 'window'] }).then((sources) => {
+      const screen = sources.find((s) => s.id.startsWith('screen:')) || sources[0];
+      callback(screen ? { video: screen } : {});
+    }).catch(() => callback({}));
+  }, { useSystemPicker: true });
 
   const mac = process.platform === 'darwin';
   win = new BrowserWindow({

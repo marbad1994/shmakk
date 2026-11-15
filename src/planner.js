@@ -116,7 +116,9 @@ Output format (JSON only):
     {
       "id": "1",
       "title": "Short action title (under 10 words)",
-      "description": "What this step does and why"
+      "description": "What this step does and why, specific enough to execute",
+      "layer": "database | backend | frontend | infra | tests",
+      "acceptance": ["1-4 checkable statements a reviewer can verify from the diff"]
     }
   ]
 }`;
@@ -151,7 +153,9 @@ Output format (JSON only):
     tasks: parsed.tasks.slice(0, 15).map((t, i) => ({
       id: String(t.id || i + 1),
       title: String(t.title || `Step ${i + 1}`).slice(0, 100),
-      description: String(t.description || '').slice(0, 300),
+      description: String(t.description || '').slice(0, 1200),
+      layer: typeof t.layer === 'string' ? t.layer : undefined,
+      acceptance: Array.isArray(t.acceptance) ? t.acceptance.map(String).slice(0, 6) : [],
       status: 'pending',
       completedAt: null,
     })),

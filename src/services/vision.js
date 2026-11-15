@@ -45,6 +45,7 @@ Respond with ONLY a single JSON object, no markdown fences, no commentary:
       "page": "the page or view this finding is on",
       "element": "the specific UI element being discussed, described so it can be found again, e.g. the Save button in the top-right toolbar",
       "note": "what the user said needs to change, in their own words, phrased as a statement about the element, e.g. the Save button is too small and needs a bigger font",
+      "kind": "bug | change | feature | chore",
       "quote": "the transcript words this came from, verbatim, or null",
       "frames": [1],
       "confidence": 0.9
@@ -119,7 +120,7 @@ function framesToImages(frames) {
     try { data = fs.readFileSync(p).toString('base64'); } catch { continue; }
     images.push({
       name: f.file || path.basename(p),
-      mimeType: 'image/png',
+      mimeType: /\.jpe?g$/i.test(p) ? 'image/jpeg' : /\.webp$/i.test(p) ? 'image/webp' : 'image/png',
       data,
       frameIndex: f.index,
       t: Number(f.t) || 0,

@@ -26,12 +26,16 @@ const { createProjects } = require('./projects');
 const { createAutomations } = require('./automations');
 const design = require('./design');
 const { injectInspector } = require('./inspector');
+const { createPreviewServer } = require('./preview');
 const endpoints = require('../endpoints');
 const sessionSearch = require('../session-search');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const COOKIE = 'shmakk_token';
 const DEFAULT_PORT = 4317;
+// The browser pane's preview proxy gets its own port (its own origin). Not
+// sequential to the app port on purpose; SHMAKK_PREVIEW_PORT overrides it.
+const DEFAULT_PREVIEW_PORT = 4386;
 
 const PUBLIC_FILES = new Set(['/favicon.svg', '/manifest.webmanifest', '/icon-180.png', '/icon-192.png', '/icon-512.png', '/icon-maskable-512.png']);
 
@@ -55,10 +59,9 @@ const CSP = [
   "img-src 'self' data: blob: https://avatars.githubusercontent.com",
   "media-src 'self' blob:",
   "font-src 'self' data:",
-  // The Browser pane embeds any workspace URL (a dev server, a preview, docs),
-  // and probes reachability with a no-cors fetch, so both frames and connects
-  // need http(s). WebSockets stay open for the app's own stream.
-  "connect-src 'self' http: https: ws: wss:",
+  // Reachability is probed server-side (/api/preview/probe), so connects
+  // stay same-origin; only frames need http(s): the preview proxy's origin.
+  "connect-src 'self' ws: wss:",
   "frame-src 'self' http: https:",
   "frame-ancestors 'none'",
   "base-uri 'none'",
@@ -210,6 +213,7 @@ async function startWebServer(opts = {}) {
   app.chat = new ChatManager({
     projects: app.projects,
     get automations() { return app.automations; },
+    get plans() { return app.plans; },
     settings,
     saveSettings: app.saveSettings,
     broadcast,
@@ -217,6 +221,13 @@ async function startWebServer(opts = {}) {
     getWorkspace: () => workspace,
     onProviderChanged: () => app.broadcastProvider(),
   });
+
+  const { createShow2PlanManager } = require('../services/show2plan');
+  app.show2plan = createShow2PlanManager({ getWorkspace: () => workspace, broadcast, getModel: () => settings.modelByMode && settings.modelByMode.code });
+
+  const { createPlanManager } = require('./plans');
+  app.plans = createPlanManager({ chat: app.chat, getWorkspace: () => workspace, broadcast, settings });
+  try { app.plans.recover(); } catch {}
 
   app.automations = createAutomations({ chat: app.chat, projects: app.projects, broadcast, getWorkspace: () => workspace });
 
@@ -507,6 +518,17 @@ async function startWebServer(opts = {}) {
     else throw e;
   }
   const port = server.address().port;
+
+  // ── preview proxy for the browser pane ──
+  const envPreview = process.env.SHMAKK_PREVIEW_PORT;
+  const previewPort = opts.previewPort != null ? Number(opts.previewPort)
+    : envPreview ? Number(envPreview)
+    : wantPort === DEFAULT_PORT ? DEFAULT_PREVIEW_PORT : 0;
+  app.preview = createPreviewServer({ secret: `preview:${token}`, host, port: previewPort, tls, log });
+  try { await app.preview.start(); } catch (e) { log(`[shmakk web] preview proxy unavailable: ${e.message}`); app.preview = null; }
+  app.previewPublicUrl = String(process.env.SHMAKK_PREVIEW_URL || '').trim().replace(/\/$/, '') || null;
+  app.ownPorts = [port, app.preview && app.preview.port].filter(Boolean);
+
   const shownHost = host === '0.0.0.0' || host === '::' ? 'localhost' : (host.includes(':') ? `[${host}]` : host);
   const baseUrl = `${tls ? 'https' : 'http'}://${shownHost}:${port}`;
   const url = `${baseUrl}/?token=${token}`;
@@ -526,6 +548,9 @@ async function startWebServer(opts = {}) {
     clearInterval(heartbeat);
     app.automations.stop();
     try { app.capture.shutdown(); } catch {}
+    try { app.plans.shutdown(); } catch {}
+    try { app.show2plan.shutdown(); } catch {}
+    try { if (app.preview) await app.preview.close(); } catch {}
     try { app.chat.shutdown(); } catch {}
     terminals.closeAll();
     for (const ws of clients) { try { ws.close(1001); } catch {} }
@@ -552,6 +577,7 @@ async function startWebServer(opts = {}) {
       }
       log(`  \x1b[33mwarning\x1b[0m    listening on ${host} — anyone who can reach this port and has the token can run commands here.`);
     }
+    if (app.preview) log(`  \x1b[2mpreview\x1b[0m    port ${app.preview.port}${app.previewPublicUrl ? ` (${app.previewPublicUrl})` : ''}`);
     if (!built) log('  \x1b[33mnote\x1b[0m       front-end not built — run `npm run build:web` first');
     log('  \x1b[2mCtrl+C to stop\x1b[0m');
     log('');

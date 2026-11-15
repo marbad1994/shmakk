@@ -15,9 +15,15 @@ services:
     # Not published directly — the proxy service below is the only way in.
     expose:
       - "1029"
+      - "1087"
     env_file: .env
     environment:
       PORT: "1029"
+      # The browser pane's preview proxy (its own origin, see src/webui/preview.js).
+      # Behind a TLS front door, set SHMAKK_PREVIEW_URL to the public address
+      # that reaches it, e.g. https://preview.sh.makketing.com
+      SHMAKK_PREVIEW_PORT: "1087"
+      SHMAKK_PREVIEW_URL: ${SHMAKK_PREVIEW_URL:-}
       SHMAKK_PUBLIC_URL: ${SHMAKK_PUBLIC_URL:-https://sh.makketing.com,http://sh.makketing.com:1029}
       SHMAKK_TRUST_PROXY: ${SHMAKK_TRUST_PROXY:-1}
     volumes:
@@ -40,6 +46,16 @@ services:
     command: ["caddy", "reverse-proxy", "--from", ":1029", "--to", "shmakk:1029"]
     ports:
       - "${SHMAKK_BIND:-127.0.0.1}:1029:1029"
+    depends_on:
+      - shmakk
+
+  # Front door for the browser pane's preview proxy.
+  preview:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    command: ["caddy", "reverse-proxy", "--from", ":1087", "--to", "shmakk:1087"]
+    ports:
+      - "${SHMAKK_BIND:-127.0.0.1}:1087:1087"
     depends_on:
       - shmakk
 

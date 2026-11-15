@@ -1,953 +1,371 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  AlertTriangle, Camera, Check, ChevronLeft, ImagePlus, ListChecks, MapPin, Mic, MonitorPlay, Pencil, Play, Plus, RefreshCw, Save, Send, Square, Trash2, Workflow, X,
-} from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { AlertTriangle, Bookmark, Camera, Check, ChevronDown, ChevronRight, Mic, MicOff, MonitorPlay, Pause, Play, Plus, Square, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
-import { useApp } from '@/store/app';
 import { cn } from '@/lib/utils';
+import { useApp } from '@/store/app';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Spinner } from '@/components/ui/misc';
+import { Switch } from '@/components/ui/switch';
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Card, Empty, Segmented, Spinner } from '@/components/ui/misc';
-import { Input, Textarea } from '@/components/ui/input';
+import { TaskDrafts } from '@/components/work/TaskDrafts';
+import { ScreenRecorder, speechRecognitionAvailable, toWav16k, type LiveSegment } from '@/lib/recorder';
+import type { PlanFull, ProposedTask } from '@/lib/work';
 
-// ── wire types (mirror src/webui/api.js capture routes) ──────────────────────
+type Phase = 'setup' | 'recording' | 'uploading' | 'processing' | 'review';
 
-export type Show2PlanMode = 'plan' | 'automation';
-export type Show2PlanPhase = 'setup' | 'recording' | 'processing' | 'review';
-
-export interface CaptureVideo {
-  backend: string;
-  label: string;
-  note?: string | null;
-  display?: string;
-}
-
-export interface CaptureAudio {
-  backend: string;
-  label: string;
-  device?: string;
-}
-
-export interface CaptureCapabilities {
-  available: boolean;
-  platform: string;
-  sessionType: string | null;
-  ffmpeg: string | null;
-  ffprobe: string | null;
-  video: CaptureVideo | null;
-  audio: CaptureAudio | null;
-  reasons: string[];
-}
-
-export interface CaptureSession {
-  id: string;
-  state: 'idle' | 'recording' | 'paused' | 'stopping' | 'done' | 'error';
-  fps: number;
-  width: number | null;
-  height: number | null;
-  traceAudio: boolean;
-  video: { backend: string; label: string; note?: string | null } | null;
-  audio: { backend: string; label: string } | null;
-  startedAt: string | null;
-  stoppedAt: string | null;
-  frameCount: number;
-  audioBlocks: number;
-  durationSec: number;
-  paths: Record<string, string>;
-  error: string | null;
-}
-
-export interface FrameEntry {
-  index: number;
-  t: number;
-  path: string;
-  file: string;
-  bytes: number;
-  transcript?: string | null;
-  width?: number | null;
-  height?: number | null;
-  [k: string]: unknown;
-}
-
-export interface FramesSummary {
-  id: string;
-  mediaPath: string;
-  durationSec: number;
-  fps: number | null;
-  budget: number;
-  requested: number;
-  extracted: number;
-  frames: FrameEntry[];
-  skipped: unknown[];
-  createdAt: string;
-}
-
-export interface PlanTask {
-  id: string;
-  /** Location line, "page > element". */
+interface S2PResult {
   title: string;
-  /** What the user said needs to change. */
-  description: string;
-  page: string | null;
-  element: string | null;
-  evidence?: { frames?: number[]; transcript?: string | null; confidence?: number | null };
-}
-
-export interface PlanResult {
-  id: string;
-  kind: 'plan';
-  title: string;
-  goal: string;
   summary: string;
   app: string | null;
-  page: string | null;
-  status: string;
-  createdAt: string;
-  tasks: PlanTask[];
+  transcript: { text: string; segments: LiveSegment[]; source: string };
+  frames: { file: string; t: number; reason: string; transcript: string | null }[];
+  allFrames: number;
+  tasks: ProposedTask[];
+  via: 'model' | 'fallback';
   uncertain: string[];
-  notes: string[];
-  sourceAnalysis?: unknown;
 }
+interface S2PStatus { id: string; stage: string; error: string | null; warnings: string[]; frames: number; result: S2PResult | null }
 
-export interface AutomationAction {
-  action: string;
-  description: string;
-  target?: string;
-  value?: string | null;
-  key?: string | null;
-  confidence?: number | null;
-  frames?: number[];
-}
+const STAGES: { id: string; label: string }[] = [
+  { id: 'uploading', label: 'Uploading audio' },
+  { id: 'transcribing', label: 'Transcribing what you said' },
+  { id: 'selecting', label: 'Picking the key moments' },
+  { id: 'analyzing', label: 'Reading the screenshots' },
+  { id: 'planning', label: 'Turning it into tasks for this codebase' },
+];
 
-export interface AutomationResult {
-  id: string;
-  kind: 'automation';
-  summary: string;
-  goal: string;
-  app: string | null;
-  status: string;
-  createdAt: string;
-  actions: AutomationAction[];
-  script: string;
-  warnings: string[];
-  uncertain: string[];
-  notes: string[];
-  sourceAnalysis?: unknown;
-}
+const fmt = (sec: number) => { const s = Math.max(0, Math.floor(sec)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+const field = 'w-full rounded-[10px] border border-line-strong bg-sunken px-3 py-2 font-sans text-[13px] leading-relaxed text-fg outline-none placeholder:text-faint focus:border-accent/45 focus:ring-[3px] focus:ring-accent/15';
 
-export type Show2PlanResult = PlanResult | AutomationResult;
-
-export interface Show2PlanProps {
-  /** Override the default plan → Code chat handoff. */
-  onSendPlan?: (result: PlanResult) => void | Promise<void>;
-  /** Override the default automation → Cowork handoff. */
-  onSaveAutomation?: (result: AutomationResult) => void | Promise<void>;
-}
-
-// ── helpers ──────────────────────────────────────────────────────────────────
-
-function errMsg(e: unknown): string {
-  if (e instanceof Error && e.message) return e.message;
-  return String(e ?? 'Something went wrong');
-}
-
-function fmtElapsed(sec: number): string {
-  const s = Math.max(0, Math.floor(sec));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const ss = s % 60;
-  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
-  return `${m}:${String(ss).padStart(2, '0')}`;
-}
-
-function stateLabel(state: CaptureSession['state']): string {
-  switch (state) {
-    case 'idle': return 'Idle';
-    case 'recording': return 'Recording';
-    case 'paused': return 'Paused';
-    case 'stopping': return 'Stopping';
-    case 'done': return 'Done';
-    case 'error': return 'Error';
-    default: return state;
-  }
-}
-
-function actionVerb(action: string): string {
-  const v: Record<string, string> = {
-    click: 'Click', type: 'Type into', press: 'Press', select: 'Select', scroll: 'Scroll',
-    hover: 'Hover over', drag: 'Drag', navigate: 'Open', wait: 'Wait for', waitSelector: 'Wait for', other: 'Act on',
-  };
-  return v[action] || 'Act on';
-}
-
-function automationPrompt(a: AutomationAction): string {
-  const target = a.target ? ` on "${a.target}"` : '';
-  switch (a.action) {
-    case 'click': return `Click ${a.target || a.description}`;
-    case 'type': return `Type "${a.value ?? ''}"${target}`;
-    case 'press': return `Press ${a.key || 'Enter'}${target}`;
-    case 'select': return `Select "${a.value ?? ''}"${target}`;
-    case 'scroll': return `Scroll to ${a.target || 'the target element'}`;
-    case 'hover': return `Hover over ${a.target || 'the target element'}`;
-    case 'drag': return `Drag ${a.target || 'the element'}`;
-    case 'navigate': return `Open ${a.value || a.target || 'the page'}`;
-    case 'wait':
-    case 'waitSelector': return `Wait for ${a.target || 'the element'}`;
-    default: return a.description || a.action;
-  }
-}
-
-function planMessage(p: PlanResult): string {
-  const head = p.title || p.summary || 'Show and tell notes';
-  const lines = [head];
-  if (p.summary && p.summary !== head) lines.push(p.summary);
-  if (p.page) lines.push(`Page: ${p.page}`);
-  lines.push('', 'What needs changing:');
-  p.tasks.forEach((t, i) => {
-    lines.push(`${i + 1}. ${t.title || t.description}`);
-    if (t.description && t.description !== t.title) lines.push(`   ${t.description}`);
-    const said = t.evidence?.transcript;
-    if (said) lines.push(`   said: "${said}"`);
-  });
-  if (p.uncertain && p.uncertain.length) {
-    lines.push('', 'Open questions:');
-    p.uncertain.forEach((u) => lines.push(`- ${u}`));
-  }
-  return lines.join('\n');
-}
-
-// ── editable evidence helpers ───────────────────────────────────────────────
-
-function taskFrameNumbers(t: PlanTask): number[] {
-  return Array.isArray(t.evidence?.frames) ? t.evidence.frames : [];
-}
-function withTaskFrames(t: PlanTask, frames: number[]): PlanTask {
-  return { ...t, evidence: { ...t.evidence, frames } };
-}
-function actionFrameNumbers(a: AutomationAction): number[] {
-  return Array.isArray(a.frames) ? a.frames : [];
-}
-function withActionFrames(a: AutomationAction, frames: number[]): AutomationAction {
-  return { ...a, frames };
-}
-
-// ── small review pieces ─────────────────────────────────────────────────────
-
-function EvidenceStrip({
-  entries, frameSrc, onRemove, onPickerToggle, canAdd,
-}: {
-  entries: { n: number; file: string }[];
-  frameSrc: (file: string) => string;
-  onRemove: (n: number) => void;
-  onPickerToggle: () => void;
-  canAdd: boolean;
-}) {
-  return (
-    <div className="mt-2 flex flex-wrap items-center gap-1.5">
-      {entries.map((e) => (
-        <span key={e.file} className="relative">
-          <img
-            src={frameSrc(e.file)}
-            alt={`Context screenshot ${e.n}`}
-            loading="lazy"
-            className="h-16 w-auto rounded-md border border-line object-contain"
-          />
-          <button
-            type="button"
-            onClick={() => onRemove(e.n)}
-            aria-label={`Remove context screenshot ${e.n}`}
-            className="absolute -right-1.5 -top-1.5 grid size-5 place-items-center rounded-full border border-line bg-raised text-dim hover:border-danger hover:bg-danger hover:text-white"
-          >
-            <X className="size-3" />
-          </button>
-        </span>
-      ))}
-      {canAdd ? (
-        <button
-          type="button"
-          onClick={onPickerToggle}
-          aria-label="Add context screenshot"
-          className="inline-flex h-16 w-16 flex-col items-center justify-center gap-0.5 rounded-md border border-dashed border-line text-[11px] text-dim hover:border-accent hover:text-accent"
-        >
-          <ImagePlus className="size-4" />
-          Add
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
-function FramePicker({
-  frames, frameSrc, selected, onToggle, onClose,
-}: {
-  frames: FrameEntry[];
-  frameSrc: (file: string) => string;
-  selected: number[];
-  onToggle: (n: number) => void;
-  onClose: () => void;
-}) {
-  return (
-    <div className="mt-2 rounded-lg border border-line-strong bg-sunken p-2">
-      <div className="mb-1.5 flex items-center justify-between gap-2">
-        <span className="text-[12px] text-dim">Attach screenshots as context</span>
-        <Button variant="ghost" size="icon-sm" aria-label="Close screenshot picker" onClick={onClose}>
-          <X className="size-3.5" />
-        </Button>
-      </div>
-      <div className="grid max-h-56 grid-cols-4 gap-1.5 overflow-y-auto sm:grid-cols-5">
-        {frames.map((f, idx) => {
-          const n = idx + 1;
-          const on = selected.includes(n);
-          return (
-            <button
-              key={f.file}
-              type="button"
-              onClick={() => onToggle(n)}
-              aria-pressed={on}
-              aria-label={`Frame ${n}`}
-              className={cn(
-                'relative overflow-hidden rounded-md border transition-colors',
-                on ? 'border-accent ring-2 ring-accent/40' : 'border-line hover:border-line-strong',
-              )}
-            >
-              <img src={frameSrc(f.file)} alt={`Frame ${n}`} loading="lazy" className="aspect-video w-full object-cover" />
-              <span className="absolute bottom-0.5 left-0.5 rounded bg-black/60 px-1 text-[10px] text-white">{n}</span>
-              {on ? <Check className="absolute right-0.5 top-0.5 size-3.5 text-accent" /> : null}
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-// ── default handoffs (used when the parent does not pass an override) ────────
-
-async function defaultSendPlan(result: PlanResult) {
-  const app = useApp.getState();
-  app.newChat({ mode: 'code' });
-  await app.send(planMessage(result), 'ask');
-}
-
-async function defaultSaveAutomation(result: AutomationResult) {
-  const steps = result.actions.map((a) => ({
-    title: a.description || a.target || actionVerb(a.action),
-    prompt: automationPrompt(a),
-  }));
-  await api.post('/api/automations', {
-    name: result.goal || result.summary || 'Recorded automation',
-    description: result.summary || result.goal || '',
-    steps,
-    approval: 'ask',
-    projectId: null,
-    workspace: null,
-    trigger: { type: 'manual' },
-  });
-  const app = useApp.getState();
-  app.setMode('cowork');
-  app.setView('automations');
-}
-
-// ── component ────────────────────────────────────────────────────────────────
-
-export function Show2Plan({ onSendPlan, onSaveAutomation }: Show2PlanProps = {}) {
+/**
+ * Show & tell: record the screen and talk through bugs, changes or tasks.
+ * shmakk keeps the moments that matter (speech cues, your marks, visual
+ * changes), reads them with the transcript, and drafts tasks grounded in the
+ * workspace. You review them, then they go to Plans, where every task is
+ * reviewed before it counts as done.
+ */
+export function Show2Plan() {
   const open = useApp((s) => s.show2planOpen);
   const setOpen = useApp((s) => s.setShow2plan);
+  const openPlan = useApp((s) => s.openPlan);
+  const voiceLanguage = useApp((s) => s.settings.voiceLanguage);
 
-  const [phase, setPhase] = useState<Show2PlanPhase>('setup');
-  const [mode, setMode] = useState<Show2PlanMode>('plan');
-  const [capabilities, setCapabilities] = useState<CaptureCapabilities | null>(null);
-  const [capError, setCapError] = useState<string | null>(null);
-  const [loadingCapabilities, setLoadingCapabilities] = useState(false);
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [session, setSession] = useState<CaptureSession | null>(null);
-  const [elapsed, setElapsed] = useState(0);
-  const [progressIndex, setProgressIndex] = useState(0);
-  const [result, setResult] = useState<Show2PlanResult | null>(null);
-  const [frames, setFrames] = useState<FramesSummary | null>(null);
+  const [phase, setPhase] = useState<Phase>('setup');
+  const [note, setNote] = useState('');
+  const [useMic, setUseMic] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [sending, setSending] = useState(false);
-  const [draftTasks, setDraftTasks] = useState<PlanTask[]>([]);
-  const [draftActions, setDraftActions] = useState<AutomationAction[]>([]);
-  const [editingIndex, setEditingIndex] = useState<number | null>(null);
-  const [pickerIndex, setPickerIndex] = useState<number | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+  const [paused, setPaused] = useState(false);
+  const [frames, setFrames] = useState(0);
+  const [marks, setMarks] = useState(0);
+  const [level, setLevel] = useState(0);
+  const [segments, setSegments] = useState<LiveSegment[]>([]);
+  const [interim, setInterim] = useState('');
+  const [micNote, setMicNote] = useState<string | null>(null);
+  const [tasks, setTasks] = useState<ProposedTask[]>([]);
+  const [title, setTitle] = useState('');
+  const [signoff, setSignoff] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [showTranscript, setShowTranscript] = useState(false);
+  const recRef = useRef<ScreenRecorder | null>(null);
+  const previewRef = useRef<HTMLVideoElement>(null);
+  const stoppingRef = useRef(false);
+  const sessionRef = useRef<string | null>(null);
+  sessionRef.current = sessionId;
 
-  const phaseRef = useRef(phase);
-  const sessionIdRef = useRef(sessionId);
-  const abortRef = useRef<AbortController | null>(null);
-  phaseRef.current = phase;
-  sessionIdRef.current = sessionId;
+  const status = useQuery({
+    queryKey: ['show2plan', sessionId],
+    queryFn: () => api.get<S2PStatus>(`/api/show2plan/${sessionId}`),
+    enabled: !!sessionId && phase === 'processing',
+    refetchInterval: 1200,
+  });
 
-  const progressSteps = useMemo(
-    () => [
-      { id: 'stop', label: 'Stop recording' },
-      { id: 'transcribe', label: 'Transcribe audio' },
-      { id: 'analyze', label: 'Analyze recording' },
-      { id: 'generate', label: mode === 'plan' ? 'Collect notes' : 'Generate automation' },
-    ],
-    [mode],
-  );
-
-  const close = useCallback(() => {
-    abortRef.current?.abort();
-    if (phaseRef.current === 'recording' && sessionIdRef.current) {
-      void api.del(`/api/capture/${sessionIdRef.current}`).catch(() => {});
-    }
-    setOpen(false);
-  }, [setOpen]);
-
-  const loadCapabilities = useCallback(async () => {
-    setLoadingCapabilities(true);
-    setCapError(null);
-    try {
-      const r = await api.get<{ capabilities: CaptureCapabilities; sessions: CaptureSession[] }>('/api/capture');
-      setCapabilities(r.capabilities);
-    } catch (e) {
-      setCapError(errMsg(e));
-    } finally {
-      setLoadingCapabilities(false);
-    }
+  const reset = useCallback(() => {
+    recRef.current?.release();
+    recRef.current = null;
+    stoppingRef.current = false;
+    setPhase('setup'); setError(null); setSessionId(null); setElapsed(0); setPaused(false); setFrames(0); setMarks(0);
+    setLevel(0); setSegments([]); setInterim(''); setMicNote(null); setTasks([]); setTitle(''); setShowTranscript(false);
   }, []);
 
-  // Reset to a clean slate each time the modal opens.
+  useEffect(() => { if (open) { reset(); setNote(''); } }, [open, reset]);
+
+  const discard = useCallback(() => {
+    const id = sessionId;
+    recRef.current?.release();
+    recRef.current = null;
+    if (id) void api.del(`/api/show2plan/${id}`).catch(() => {});
+  }, [sessionId]);
+
+  const close = () => { discard(); setOpen(false); };
+
+  // Timer while recording.
   useEffect(() => {
-    if (!open) return;
-    setPhase('setup');
-    setMode('plan');
-    setSessionId(null);
-    setSession(null);
-    setElapsed(0);
-    setProgressIndex(0);
-    setResult(null);
-    setFrames(null);
-    setError(null);
-    setBusy(false);
-    setSending(false);
-    setDraftTasks([]);
-    setDraftActions([]);
-    setEditingIndex(null);
-    setPickerIndex(null);
-    setCapabilities(null);
-    void loadCapabilities();
-  }, [open, loadCapabilities]);
+    if (phase !== 'recording') return;
+    const t = window.setInterval(() => setElapsed(recRef.current?.elapsed() ?? 0), 250);
+    return () => window.clearInterval(t);
+  }, [phase]);
 
-  // Abort in-flight work on unmount and stop an orphaned recording.
-  useEffect(() => () => {
-    abortRef.current?.abort();
-    if (phaseRef.current === 'recording' && sessionIdRef.current) {
-      void api.del(`/api/capture/${sessionIdRef.current}`).catch(() => {});
+  // Show what is being shared once the preview element exists.
+  useEffect(() => {
+    if (phase !== 'recording') return;
+    const v = previewRef.current;
+    const stream = recRef.current?.stream;
+    if (v && stream && v.srcObject !== stream) { v.srcObject = stream; void v.play().catch(() => {}); }
+  }, [phase]);
+
+  // Done processing → review.
+  useEffect(() => {
+    const d = status.data;
+    if (!d || phase !== 'processing') return;
+    if (d.stage === 'done' && d.result) {
+      setTasks(d.result.tasks);
+      setTitle(d.result.title);
+      setPhase('review');
+    } else if (d.stage === 'error') {
+      setError(d.error || 'Processing failed');
     }
-  }, []);
+  }, [status.data, phase]);
 
-  const startRecording = useCallback(async () => {
-    setBusy(true);
+  const start = async () => {
     setError(null);
+    let id: string | null = null;
     try {
-      const m = await api.post<CaptureSession>('/api/capture', {});
-      setSessionId(m.id);
-      setSession(m);
-      setElapsed(m.durationSec || 0);
+      const s = await api.post<{ id: string }>('/api/show2plan');
+      id = s.id;
+      sessionRef.current = id;
+      setSessionId(id);
+      const rec = new ScreenRecorder(id, {
+        onFrame: (n, marked) => { setFrames(n); if (marked) setMarks((m) => m + 1); },
+        onLevel: setLevel,
+        onTranscript: (segs, live) => { setSegments(segs); setInterim(live); },
+        onEnded: () => { void stop(); },
+        onError: setMicNote,
+      }, voiceLanguage && /^[a-z]{2}(-[A-Z]{2})?$/.test(voiceLanguage) ? voiceLanguage : navigator.language || 'en-US');
+      await rec.start({ microphone: useMic });
+      recRef.current = rec;
       setPhase('recording');
     } catch (e) {
-      setError(errMsg(e));
-    } finally {
-      setBusy(false);
+      if (id) void api.del(`/api/show2plan/${id}`).catch(() => {});
+      setSessionId(null);
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(/denied|NotAllowed|Permission/i.test(msg) ? 'Screen sharing was cancelled or blocked. Click Start and choose a screen, window or tab to share.' : msg);
     }
-  }, []);
+  };
 
-  // Live status + elapsed timer while recording.
-  useEffect(() => {
-    if (phase !== 'recording' || !sessionId) return;
-    const id = sessionId;
-    let alive = true;
-    const tick = async () => {
-      if (!alive) return;
-      try {
-        const m = await api.get<CaptureSession>(`/api/capture/${id}`);
-        if (!alive) return;
-        setSession(m);
-        setElapsed(m.durationSec || 0);
-      } catch {
-        // Keep ticking locally even if a poll fails; the next one may recover.
-      }
-    };
-    const t = window.setInterval(() => { void tick(); }, 1000);
-    void tick();
-    return () => { alive = false; window.clearInterval(t); };
-  }, [phase, sessionId]);
-
-  const runProcessing = useCallback(async (id: string, chosen: Show2PlanMode) => {
-    setPhase('processing');
-    setProgressIndex(0);
-    setError(null);
+  const stop = async () => {
+    const rec = recRef.current;
+    const sessionId = sessionRef.current;
+    if (!rec || !sessionId || stoppingRef.current) return;
+    stoppingRef.current = true;
+    setPhase('uploading');
     try {
-      await api.post(`/api/capture/${id}/stop`);
-      setProgressIndex(1);
-      await api.post(`/api/capture/${id}/transcribe`);
-      setProgressIndex(2);
-      await api.post(`/api/capture/${id}/analyze`, {});
-      setProgressIndex(3);
-      const res = chosen === 'plan'
-        ? await api.post<PlanResult>(`/api/capture/${id}/plan`, {})
-        : await api.post<AutomationResult>(`/api/capture/${id}/automation`, {});
-      setResult(res);
-      if (res.kind === 'plan') {
-        setDraftTasks(res.tasks.map((t) => ({ ...t, page: t.page || res.page, evidence: { ...t.evidence } })));
-        setDraftActions([]);
-      } else {
-        setDraftActions(res.actions.map((a) => ({ ...a })));
-        setDraftTasks([]);
+      const r = await rec.stop();
+      recRef.current = null;
+      if (r.audio && r.audio.size > 2000) {
+        try {
+          const wav = await toWav16k(r.audio);
+          await api.upload(`/api/show2plan/${sessionId}/audio`, wav, 'audio/wav');
+        } catch {
+          toast.message('The audio could not be converted; using the live transcript instead.');
+        }
       }
-      setEditingIndex(null);
-      setPickerIndex(null);
-      try {
-        setFrames(await api.get<FramesSummary>(`/api/capture/${id}/frames`));
-      } catch {
-        setFrames(null); // degrade gracefully: no evidence thumbnails
-      }
-      setPhase('review');
+      await api.post(`/api/show2plan/${sessionId}/process`, {
+        instructions: note,
+        durationSec: r.durationSec,
+        liveTranscript: { segments: r.segments },
+      });
+      setPhase('processing');
     } catch (e) {
-      setError(errMsg(e));
-      // Stay in the processing phase so the user can retry or back out.
+      setError(e instanceof Error ? e.message : String(e));
+      setPhase('processing');
     }
-  }, []);
+  };
 
-  const stopRecording = useCallback(async () => {
+  const retry = async () => {
     if (!sessionId) return;
-    setBusy(true);
     setError(null);
-    const id = sessionId;
-    const chosen = mode;
     try {
-      await runProcessing(id, chosen);
-    } finally {
-      setBusy(false);
-    }
-  }, [sessionId, mode, runProcessing]);
+      await api.post(`/api/show2plan/${sessionId}/process`, { instructions: note, liveTranscript: { segments } });
+      void status.refetch();
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+  };
 
-  const backToSetup = useCallback(() => {
-    if (sessionIdRef.current) {
-      void api.del(`/api/capture/${sessionIdRef.current}`).catch(() => {});
-    }
-    setPhase('setup');
-    setSessionId(null);
-    setSession(null);
-    setElapsed(0);
-    setProgressIndex(0);
-    setResult(null);
-    setFrames(null);
-    setError(null);
-    setDraftTasks([]);
-    setDraftActions([]);
-    setEditingIndex(null);
-    setPickerIndex(null);
-    void loadCapabilities();
-  }, [loadCapabilities]);
+  const togglePause = () => {
+    const rec = recRef.current;
+    if (!rec) return;
+    if (rec.paused) rec.resume(); else rec.pause();
+    setPaused(rec.paused);
+  };
 
-  // The reviewed, editable payload. Drafts start as a copy of the model result
-  // and diverge as the user edits, reorders frames, or discards steps.
-  const editedResult = useMemo<Show2PlanResult | null>(() => {
-    if (!result) return null;
-    return result.kind === 'plan'
-      ? { ...result, tasks: draftTasks }
-      : { ...result, actions: draftActions };
-  }, [result, draftTasks, draftActions]);
+  // M marks the moment while recording (when the dialog has focus).
+  useEffect(() => {
+    if (phase !== 'recording') return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.key === 'm' || e.key === 'M') && !(e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement)) { e.preventDefault(); recRef.current?.mark(); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [phase]);
 
-  const updateTask = useCallback((i: number, next: PlanTask) => {
-    setDraftTasks((prev) => prev.map((t, idx) => (idx === i ? next : t)));
-  }, []);
-  const updateAction = useCallback((i: number, next: AutomationAction) => {
-    setDraftActions((prev) => prev.map((a, idx) => (idx === i ? next : a)));
-  }, []);
-  const discardTask = useCallback((i: number) => {
-    setDraftTasks((prev) => prev.filter((_, idx) => idx !== i));
-    // Indices shift after a discard, so close any open editor rather than
-    // risk editing the wrong note.
-    setEditingIndex(null);
-    setPickerIndex(null);
-  }, []);
-  const addFinding = useCallback(() => {
-    const page = result && result.kind === 'plan' ? result.page : null;
-    setDraftTasks((prev) => [...prev, { id: `note-${Date.now()}`, title: '', description: '', page, element: null, evidence: {} }]);
-    setEditingIndex(draftTasks.length);
-    setPickerIndex(null);
-  }, [draftTasks.length, result]);
-  const discardAction = useCallback((i: number) => {
-    setDraftActions((prev) => prev.filter((_, idx) => idx !== i));
-    setEditingIndex(null);
-    setPickerIndex(null);
-  }, []);
-  const toggleTaskFrame = useCallback((i: number, n: number) => {
-    setDraftTasks((prev) => prev.map((t, idx) => {
-      if (idx !== i) return t;
-      const cur = taskFrameNumbers(t);
-      const next = cur.includes(n) ? cur.filter((x) => x !== n) : [...cur, n].sort((a, b) => a - b);
-      return withTaskFrames(t, next);
-    }));
-  }, []);
-  const toggleActionFrame = useCallback((i: number, n: number) => {
-    setDraftActions((prev) => prev.map((a, idx) => {
-      if (idx !== i) return a;
-      const cur = actionFrameNumbers(a);
-      const next = cur.includes(n) ? cur.filter((x) => x !== n) : [...cur, n].sort((x, y) => x - y);
-      return withActionFrames(a, next);
-    }));
-  }, []);
-
-  const frameSrc = useCallback((file: string) => `/api/capture/${sessionId}/frames/${file}`, [sessionId]);
-  const frameEntries = useCallback((numbers?: number[]): { n: number; file: string }[] => {
-    if (!frames || !Array.isArray(numbers)) return [];
-    return numbers
-      .map((n) => ({ n, file: frames.frames[n - 1]?.file ?? '' }))
-      .filter((e) => Boolean(e.file));
-  }, [frames]);
-
-  const handleSendPlan = useCallback(async () => {
-    if (!editedResult || editedResult.kind !== 'plan') return;
-    setSending(true);
+  const createPlan = async (startNow: boolean) => {
+    if (!sessionId) return;
+    setCreating(true);
     try {
-      if (onSendPlan) await onSendPlan(editedResult);
-      else await defaultSendPlan(editedResult);
-      close();
+      const result = status.data?.result;
+      const plan = await api.post<PlanFull>('/api/plans', {
+        title, source: 'show2plan', requireSignoff: signoff, show2planId: sessionId, tasks,
+        summary: [result?.summary, result?.transcript.text ? `Narration: "${result.transcript.text.slice(0, 1500)}"` : null].filter(Boolean).join('\n\n'),
+      });
+      if (startNow) await api.post(`/api/plans/${plan.id}/run`);
+      discard();
+      setOpen(false);
+      toast.success(startNow ? 'Plan started' : 'Plan created', { action: { label: 'Open', onClick: () => openPlan(plan.id) } });
+      openPlan(plan.id);
     } catch (e) {
-      toast.error(errMsg(e));
+      toast.error(e instanceof Error ? e.message : String(e));
     } finally {
-      setSending(false);
+      setCreating(false);
     }
-  }, [editedResult, onSendPlan, close]);
+  };
 
-  const handleSaveAutomation = useCallback(async () => {
-    if (!editedResult || editedResult.kind !== 'automation') return;
-    setSending(true);
-    try {
-      if (onSaveAutomation) await onSaveAutomation(editedResult);
-      else await defaultSaveAutomation(editedResult);
-      close();
-    } catch (e) {
-      toast.error(errMsg(e));
-    } finally {
-      setSending(false);
-    }
-  }, [editedResult, onSaveAutomation, close]);
+  const frameSrc = (file: string) => `/api/show2plan/${sessionId}/frames/${file}`;
+  const result = status.data?.result ?? null;
+  const warnings = status.data?.warnings ?? [];
+  const stageIdx = phase === 'uploading' ? 0 : Math.max(0, STAGES.findIndex((s) => s.id === status.data?.stage));
+  const hasSpeech = speechRecognitionAvailable();
 
-  const canStart = Boolean(capabilities?.available) && !busy;
-
-  const header = {
-    setup: { title: 'Show & tell', desc: 'Show the screen and say what needs to change. You get a reference of what to fix and where.' },
-    recording: { title: 'Recording…', desc: 'Show the screen and point at what you mean. Say what is wrong or what should change.' },
-    processing: { title: 'Processing…', desc: 'Transcribing, extracting frames and collecting your notes.' },
-    review: mode === 'plan'
-      ? { title: 'What needs changing', desc: 'What you pointed out and where. Edit it, attach screenshots as context, then send it to Code.' }
-      : { title: 'Your automation', desc: 'The spoken steps turned into executable actions. Review them before saving.' },
-  }[phase];
+  const header: Record<Phase, { title: string; desc: string }> = {
+    setup: { title: 'Show & tell', desc: 'Record your screen and talk through bugs, changes or tasks. shmakk keeps the key moments and turns what you say into tasks for this workspace.' },
+    recording: { title: 'Recording', desc: 'Point at things and say what is wrong or what should change. Press Mark when the screen shows exactly what you mean.' },
+    uploading: { title: 'Finishing up', desc: 'Sending the recording to shmakk.' },
+    processing: { title: 'Making tasks', desc: 'This usually takes under a minute.' },
+    review: { title: 'Review the tasks', desc: 'Edit anything that is off. Each task is reviewed against its acceptance criteria before it counts as done.' },
+  };
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) close(); }}>
-      <DialogContent>
+      <DialogContent className={cn(phase === 'review' && 'md:w-[min(760px,calc(100vw-32px))]')} onInteractOutside={(e) => { if (phase === 'recording' || phase === 'uploading') e.preventDefault(); }}>
         <DialogHeader>
-          <DialogTitle>{header.title}</DialogTitle>
-          <DialogDescription>{header.desc}</DialogDescription>
+          <DialogTitle className="flex items-center gap-2">{phase === 'recording' ? <span className={cn('size-2.5 rounded-full bg-danger', !paused && 'animate-pulse')} /> : null}{header[phase].title}</DialogTitle>
+          <DialogDescription>{header[phase].desc}</DialogDescription>
         </DialogHeader>
 
         <DialogBody>
           {phase === 'setup' ? (
-            <div className="grid gap-4">
-              <Segmented<Show2PlanMode>
-                label="Deliverable"
-                value={mode}
-                onChange={setMode}
-                fullWidth
-                options={[
-                  { value: 'plan', label: <span className="inline-flex items-center gap-1.5"><ListChecks className="size-3.5" />Tasks</span> },
-                  { value: 'automation', label: <span className="inline-flex items-center gap-1.5"><Workflow className="size-3.5" />Automation</span> },
-                ]}
-              />
-
-              {loadingCapabilities ? (
-                <div className="flex items-center gap-2 text-[13px] text-dim"><Spinner className="size-4" />Checking capture support…</div>
-              ) : capError ? (
-                <Empty icon={<AlertTriangle />} title="Could not reach the recorder">
-                  <p>{capError}</p>
-                </Empty>
-              ) : capabilities ? (
-                <div className="grid gap-2.5">
-                  <Card className="p-3">
-                    <div className="grid gap-2 text-[13px]">
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="inline-flex items-center gap-2 text-dim"><MonitorPlay className="size-4" />Screen</span>
-                        <span className={cn('font-medium', capabilities.video ? 'text-fg' : 'text-danger')}>{capabilities.video?.label ?? 'Unavailable'}</span>
-                      </div>
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="inline-flex items-center gap-2 text-dim"><Mic className="size-4" />Microphone</span>
-                        <span className={cn('font-medium', capabilities.audio ? 'text-fg' : 'text-danger')}>{capabilities.audio?.label ?? 'Unavailable'}</span>
-                      </div>
-                    </div>
-                  </Card>
-
-                  {capabilities.video?.note ? (
-                    <p className="m-0 flex items-start gap-2 rounded-lg border border-warn/40 bg-warn/10 px-3 py-2 text-[12.5px] text-warn">
-                      <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-                      <span>{capabilities.video.note}</span>
-                    </p>
-                  ) : null}
-
-                  {!capabilities.available && capabilities.reasons.length ? (
-                    <p className="m-0 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-[12.5px] text-danger">
-                      {capabilities.reasons.join(' · ')}
-                    </p>
-                  ) : null}
-                </div>
-              ) : null}
-
+            <div className="grid gap-3.5">
+              <ol className="m-0 grid gap-1.5 pl-5 text-[13px] text-dim">
+                <li>Choose the screen, window or tab that shows the problem.</li>
+                <li>Talk while you click around: "this button is too small", "this should show the date", "saving here throws an error".</li>
+                <li>Stop. You get tasks with instructions and acceptance criteria to check before they go to Plans.</li>
+              </ol>
+              <div className="grid gap-1.5">
+                <label htmlFor="s2p-note" className="text-[12.5px] font-medium text-dim">Anything to say up front? <span className="text-faint">(optional)</span></label>
+                <textarea id="s2p-note" className={cn(field, 'min-h-16 resize-y')} value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Checkout flow on mobile, the bugs we saw in yesterday's demo" />
+              </div>
+              <label className="inline-flex items-center gap-2 text-[13px] text-dim">
+                <Switch checked={useMic} onCheckedChange={setUseMic} />
+                {useMic ? <Mic className="size-4" /> : <MicOff className="size-4" />}
+                Record my microphone
+              </label>
+              {useMic && !hasSpeech ? <p className="m-0 text-[12px] text-faint">This browser has no live speech recognition, so transcription relies on the server's speech-to-text (npm run setup:voice).</p> : null}
               {error ? <p className="m-0 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-[12.5px] text-danger">{error}</p> : null}
             </div>
           ) : null}
 
           {phase === 'recording' ? (
-            <div className="grid gap-4">
-              <div className="grid grid-cols-2 gap-3 text-center">
-                <Card className="p-4">
-                  <div className="font-mono text-3xl tabular-nums">{fmtElapsed(elapsed)}</div>
-                  <div className="mt-1 text-[12px] text-dim">elapsed</div>
-                </Card>
-                <Card className="p-4">
-                  <div className="flex items-center justify-center gap-2 text-fg">
-                    <span className="size-2.5 animate-pulse rounded-full bg-danger" />
-                    <span className="text-[14px] font-semibold">{stateLabel(session?.state ?? 'recording')}</span>
-                  </div>
-                  <div className="mt-1 text-[12px] text-dim">{session ? `${session.frameCount} frames` : 'starting…'}</div>
-                </Card>
+            <div className="grid gap-3">
+              <div className="relative overflow-hidden rounded-xl border border-line bg-black">
+                <video ref={previewRef} muted playsInline className="aspect-video w-full object-contain" />
+                <div className="absolute left-2 top-2 rounded-md bg-black/65 px-2 py-0.5 text-[13px] font-semibold tabular-nums text-white">{fmt(elapsed)}</div>
+                {paused ? <div className="absolute inset-0 grid place-items-center bg-black/50 text-[14px] font-semibold text-white">Paused</div> : null}
               </div>
-              {session?.video?.label || session?.audio?.label ? (
-                <p className="m-0 text-center text-[12.5px] text-dim">
-                  {[session.video?.label, session.audio?.label].filter(Boolean).join(' · ')}
-                </p>
-              ) : null}
-              {session?.error ? <p className="m-0 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-[12.5px] text-danger">{session.error}</p> : null}
-              {error ? <p className="m-0 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-[12.5px] text-danger">{error}</p> : null}
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12.5px] text-dim">
+                {useMic ? (
+                  <span className="inline-flex items-center gap-2"><Mic className="size-3.5" />
+                    <span className="h-1.5 w-20 overflow-hidden rounded-full bg-line"><span className="block h-full rounded-full bg-accent transition-[width] duration-75" style={{ width: `${Math.round(level * 100)}%` }} /></span>
+                  </span>
+                ) : null}
+                <span>{frames} moment{frames === 1 ? '' : 's'} kept</span>
+                {marks ? <span className="text-violet">{marks} marked</span> : null}
+              </div>
+              {micNote ? <p className="m-0 text-[12px] text-warn">{micNote}</p> : null}
+              {segments.length || interim ? (
+                <div className="max-h-28 overflow-y-auto rounded-lg border border-line bg-sunken px-3 py-2 text-[12.5px] text-dim">
+                  {segments.slice(-6).map((s, i) => <span key={i}>{s.text} </span>)}
+                  {interim ? <span className="text-faint">{interim}</span> : null}
+                </div>
+              ) : useMic && hasSpeech ? <p className="m-0 text-[12px] text-faint">Start talking: the live transcript shows up here.</p> : null}
             </div>
           ) : null}
 
-          {phase === 'processing' ? (
+          {phase === 'uploading' || phase === 'processing' ? (
             <div className="grid gap-2.5">
-              <ol className="grid gap-1.5">
-                {progressSteps.map((s, i) => {
-                  const done = i < progressIndex;
-                  const active = i === progressIndex && !error;
+              <ol className="m-0 grid list-none gap-1.5 p-0">
+                {STAGES.map((s, i) => {
+                  const done = i < stageIdx || status.data?.stage === 'done';
+                  const active = i === stageIdx && !error;
                   return (
                     <li key={s.id} className={cn('flex items-center gap-2.5 rounded-lg border px-3 py-2 text-[13px]', active ? 'border-line-strong bg-panel' : 'border-transparent')}>
-                      {done ? (
-                        <Check className="size-4 text-accent" />
-                      ) : active ? (
-                        <Spinner className="size-4" />
-                      ) : (
-                        <span className={cn('size-4 rounded-full border-2', error ? 'border-danger' : 'border-line')} />
-                      )}
-                      <span className={cn(done ? 'text-fg' : 'text-dim', error && i >= progressIndex && 'text-danger')}>{s.label}</span>
+                      {done ? <Check className="size-4 text-accent" /> : active ? <Spinner className="size-4" /> : <span className={cn('size-4 rounded-full border-2', error && i === stageIdx ? 'border-danger' : 'border-line')} />}
+                      <span className={done ? 'text-fg' : 'text-dim'}>{s.label}</span>
                     </li>
                   );
                 })}
               </ol>
-              <p className="m-0 text-[12.5px] text-dim">This can take a minute, especially the vision analysis step.</p>
               {error ? <p className="m-0 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-[12.5px] text-danger">{error}</p> : null}
             </div>
           ) : null}
 
           {phase === 'review' && result ? (
             <div className="grid gap-3">
-              {result.app ? <p className="m-0 text-[12.5px] text-dim">Captured in <span className="font-medium text-fg">{result.app}</span></p> : null}
               {result.summary ? <p className="m-0 text-[13.5px] text-fg">{result.summary}</p> : null}
+              {warnings.map((w) => <p key={w} className="m-0 flex items-start gap-2 rounded-lg border border-warn/40 bg-warn/10 px-3 py-2 text-[12.5px] text-warn"><AlertTriangle className="mt-0.5 size-3.5 shrink-0" />{w}</p>)}
 
-              {result.kind === 'plan' && (
-                <div className="grid gap-2">
-                  {draftTasks.length ? (
-                    <ol className="grid gap-2">
-                      {draftTasks.map((t, i) => {
-                        const entries = frameEntries(taskFrameNumbers(t));
-                        const editing = editingIndex === i;
-                        const picking = pickerIndex === i;
-                        const page = t.page || result.page;
-                        return (
-                          <li key={t.id ?? i}>
-                            <Card className="p-3">
-                              <div className="flex items-start gap-2">
-                                <span className="mt-0.5 grid size-5 shrink-0 place-items-center rounded-full bg-accent/15 text-[11px] font-semibold text-accent">{i + 1}</span>
-                                <div className="min-w-0 flex-1">
-                                  {editing ? (
-                                    <div className="grid gap-2">
-                                      <Input
-                                        value={t.element ?? ''}
-                                        onChange={(e) => updateTask(i, { ...t, element: e.target.value, title: [page, e.target.value].filter(Boolean).join(' > ') })}
-                                        aria-label="Where on screen"
-                                        placeholder="Where on screen (element)"
-                                      />
-                                      <Textarea
-                                        className="min-h-16 resize-y font-sans text-[13px]"
-                                        value={t.description}
-                                        onChange={(e) => updateTask(i, { ...t, description: e.target.value })}
-                                        aria-label="What needs to change"
-                                        placeholder="What needs to change"
-                                      />
-                                    </div>
-                                  ) : (
-                                    <>
-                                      <div className="flex items-center gap-1 text-[11.5px] text-faint">
-                                        <MapPin className="size-3 shrink-0" />
-                                        <span className="truncate">{page || 'Unknown page'}</span>
-                                      </div>
-                                      <div className="mt-0.5 text-[13.5px] font-medium text-fg">{t.element || t.title || 'Untitled note'}</div>
-                                      {t.description ? <div className="mt-1 text-[12.5px] text-dim">{t.description}</div> : null}
-                                      {t.evidence?.transcript ? <div className="mt-1 text-[12px] italic text-faint">said: "{t.evidence.transcript}"</div> : null}
-                                    </>
-                                  )}
-                                  <EvidenceStrip
-                                    entries={entries}
-                                    frameSrc={frameSrc}
-                                    canAdd={Boolean(frames?.frames?.length)}
-                                    onRemove={(n) => toggleTaskFrame(i, n)}
-                                    onPickerToggle={() => setPickerIndex(picking ? null : i)}
-                                  />
-                                  {picking ? (
-                                    <FramePicker
-                                      frames={frames?.frames ?? []}
-                                      frameSrc={frameSrc}
-                                      selected={taskFrameNumbers(t)}
-                                      onToggle={(n) => toggleTaskFrame(i, n)}
-                                      onClose={() => setPickerIndex(null)}
-                                    />
-                                  ) : null}
-                                </div>
-                                <div className="flex shrink-0 items-center gap-1">
-                                  {editing ? (
-                                    <Button variant="ghost" size="sm" onClick={() => setEditingIndex(null)}>
-                                      <Check className="size-3.5" />Done
-                                    </Button>
-                                  ) : (
-                                    <Button variant="ghost" size="icon-sm" aria-label="Edit note" onClick={() => { setEditingIndex(i); setPickerIndex(null); }}>
-                                      <Pencil className="size-3.5" />
-                                    </Button>
-                                  )}
-                                  <Button variant="ghost" size="icon-sm" aria-label="Discard note" onClick={() => discardTask(i)}>
-                                    <Trash2 className="size-3.5" />
-                                  </Button>
-                                </div>
-                              </div>
-                            </Card>
-                          </li>
-                        );
-                      })}
-                    </ol>
-                  ) : (
-                    <Empty icon={<ListChecks />} title="Nothing pointed out">The recording did not capture any notes. Record again and say what should change.</Empty>
-                  )}
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="m-0 text-[12px] text-faint">Screenshots are context for where this is, not steps to follow.</p>
-                    <Button variant="ghost" size="sm" onClick={addFinding}>
-                      <Plus className="size-3.5" />Add note
-                    </Button>
+              {result.frames.length ? (
+                <div className="grid gap-1.5">
+                  <span className="text-[12px] font-medium text-dim">Key moments ({result.frames.length} of {result.allFrames} kept)</span>
+                  <div className="flex gap-1.5 overflow-x-auto pb-1">
+                    {result.frames.map((f) => (
+                      <a key={f.file} href={frameSrc(f.file)} target="_blank" rel="noreferrer" className="relative shrink-0" title={f.transcript || f.reason}>
+                        <img src={frameSrc(f.file)} alt={`Moment at ${fmt(f.t)}`} loading="lazy" className="h-20 w-auto rounded-md border border-line object-contain" />
+                        <span className="absolute bottom-0.5 left-0.5 rounded bg-black/65 px-1 text-[10.5px] text-white">{fmt(f.t)}{f.reason === 'marked' ? ' · marked' : ''}</span>
+                      </a>
+                    ))}
                   </div>
                 </div>
-              )}
+              ) : null}
 
-              {result.kind === 'automation' && (
-                draftActions.length ? (
-                  <ol className="grid gap-2">
-                    {draftActions.map((a, i) => {
-                      const entries = frameEntries(actionFrameNumbers(a));
-                      const editing = editingIndex === i;
-                      const picking = pickerIndex === i;
-                      return (
-                        <li key={i}>
-                          <Card className="p-3">
-                            <div className="flex items-start gap-2">
-                              <span className="mt-0.5 shrink-0 rounded-md bg-accent/15 px-1.5 py-0.5 font-mono text-[11px] font-semibold uppercase text-accent">{a.action}</span>
-                              <div className="min-w-0 flex-1">
-                                {editing ? (
-                                  <div className="grid gap-2">
-                                    <Textarea
-                                      className="min-h-16 resize-y font-sans text-[13px]"
-                                      value={a.description}
-                                      onChange={(e) => updateAction(i, { ...a, description: e.target.value })}
-                                      aria-label="Action description"
-                                    />
-                                    <Input
-                                      value={a.target ?? ''}
-                                      onChange={(e) => updateAction(i, { ...a, target: e.target.value })}
-                                      aria-label="Action target"
-                                      placeholder="Target element"
-                                    />
-                                  </div>
-                                ) : (
-                                  <>
-                                    <div className="text-[13.5px] font-medium text-fg">{a.description}</div>
-                                    {a.target || a.value != null || a.key != null ? (
-                                      <div className="mt-0.5 text-[12px] text-dim">
-                                        {[a.target ? `target: ${a.target}` : null, a.value != null ? `value: "${a.value}"` : null, a.key != null ? `key: ${a.key}` : null].filter(Boolean).join(' · ')}
-                                      </div>
-                                    ) : null}
-                                  </>
-                                )}
-                                <EvidenceStrip
-                                  entries={entries}
-                                  frameSrc={frameSrc}
-                                  canAdd={Boolean(frames?.frames?.length)}
-                                  onRemove={(n) => toggleActionFrame(i, n)}
-                                  onPickerToggle={() => setPickerIndex(picking ? null : i)}
-                                />
-                                {picking ? (
-                                  <FramePicker
-                                    frames={frames?.frames ?? []}
-                                    frameSrc={frameSrc}
-                                    selected={actionFrameNumbers(a)}
-                                    onToggle={(n) => toggleActionFrame(i, n)}
-                                    onClose={() => setPickerIndex(null)}
-                                  />
-                                ) : null}
-                              </div>
-                              <div className="flex shrink-0 items-center gap-1">
-                                {editing ? (
-                                  <Button variant="ghost" size="sm" onClick={() => setEditingIndex(null)}>
-                                    <Check className="size-3.5" />Done
-                                  </Button>
-                                ) : (
-                                  <Button variant="ghost" size="icon-sm" aria-label="Edit action" onClick={() => { setEditingIndex(i); setPickerIndex(null); }}>
-                                    <Pencil className="size-3.5" />
-                                  </Button>
-                                )}
-                                <Button variant="ghost" size="icon-sm" aria-label="Discard action" onClick={() => discardAction(i)}>
-                                  <Trash2 className="size-3.5" />
-                                </Button>
-                              </div>
-                            </div>
-                          </Card>
-                        </li>
-                      );
-                    })}
-                  </ol>
-                ) : (
-                  <Empty icon={<Workflow />} title="No actions extracted">The recording did not produce any executable steps.</Empty>
-                )
-              )}
-
-              {result.kind === 'automation' && result.warnings.length ? (
-                <div className="grid gap-1.5 rounded-lg border border-warn/40 bg-warn/10 p-3">
-                  <div className="flex items-center gap-2 text-[13px] font-semibold text-warn"><AlertTriangle className="size-4" />Warnings</div>
-                  <ul className="m-0 grid gap-1 pl-0 text-[12.5px] text-warn">
-                    {result.warnings.map((w, i) => <li key={i} className="list-inside list-disc">{w}</li>)}
-                  </ul>
+              {result.transcript.text ? (
+                <div>
+                  <button type="button" className="inline-flex items-center gap-1 text-[12.5px] text-dim hover:text-fg" onClick={() => setShowTranscript((v) => !v)} aria-expanded={showTranscript}>
+                    {showTranscript ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}What you said ({result.transcript.source === 'whisper' ? 'server transcription' : 'live transcript'})
+                  </button>
+                  {showTranscript ? <p className="m-0 mt-1.5 rounded-lg border border-line bg-sunken px-3 py-2 text-[12.5px] text-dim">{result.transcript.text}</p> : null}
                 </div>
               ) : null}
 
-              {result.uncertain?.length ? (
-                <div className="grid gap-1.5 rounded-lg border border-line p-3">
-                  <div className="text-[13px] font-semibold text-fg">Open questions</div>
-                  <ul className="m-0 grid gap-1 pl-0 text-[12.5px] text-dim">
-                    {result.uncertain.map((u, i) => <li key={i} className="list-inside list-disc">{u}</li>)}
-                  </ul>
+              <div className="grid gap-1.5">
+                <label htmlFor="s2p-title" className="text-[12px] font-medium text-dim">Plan title</label>
+                <Input id="s2p-title" value={title} onChange={(e) => setTitle(e.target.value)} />
+              </div>
+              {tasks.length ? <TaskDrafts tasks={tasks} onChange={setTasks} frameSrc={frameSrc} /> : (
+                <div className="grid gap-2 rounded-lg border border-dashed border-line-strong px-3 py-4 text-center text-[13px] text-dim">
+                  No tasks came out of this recording.
+                  <div><Button size="sm" onClick={() => setTasks([{ key: 'n1', title: '', kind: 'change', layer: 'frontend', priority: 'normal', instructions: '', acceptance: [], files: [], dependsOn: [], questions: [] }])}><Plus />Write one</Button></div>
+                </div>
+              )}
+              {result.uncertain.length ? (
+                <div className="grid gap-1 rounded-lg border border-line px-3 py-2">
+                  <span className="text-[12px] font-semibold text-dim">Unclear from the recording</span>
+                  <ul className="m-0 grid gap-0.5 pl-4 text-[12.5px] text-dim">{result.uncertain.map((u) => <li key={u}>{u}</li>)}</ul>
                 </div>
               ) : null}
+              <label className="inline-flex items-center gap-2 text-[12.5px] text-dim"><Switch checked={signoff} onCheckedChange={setSignoff} />Tasks need my sign-off after they pass review</label>
             </div>
           ) : null}
         </DialogBody>
@@ -956,41 +374,28 @@ export function Show2Plan({ onSendPlan, onSaveAutomation }: Show2PlanProps = {})
           {phase === 'setup' ? (
             <>
               <Button variant="ghost" onClick={close}>Cancel</Button>
-              <Button variant="primary" disabled={!canStart || loadingCapabilities} onClick={() => void startRecording()}>
-                {busy ? <Spinner className="size-4" /> : <Play className="size-4" />}Start recording
-              </Button>
+              <Button variant="primary" onClick={() => void start()}><MonitorPlay />Choose screen and start</Button>
             </>
           ) : null}
-
           {phase === 'recording' ? (
             <>
-              <Button variant="ghost" onClick={close}>Cancel</Button>
-              <Button variant="danger" disabled={busy} onClick={() => void stopRecording()}>
-                {busy ? <Spinner className="size-4" /> : <Square className="size-4" />}Stop &amp; process
-              </Button>
+              <Button variant="ghost" onClick={() => { discard(); reset(); }}><X />Discard</Button>
+              <Button onClick={togglePause}>{paused ? <Play /> : <Pause />}{paused ? 'Resume' : 'Pause'}</Button>
+              <Button onClick={() => recRef.current?.mark()} title="Shortcut: M"><Bookmark />Mark moment</Button>
+              <Button variant="primary" onClick={() => void stop()}><Square />Stop and make tasks</Button>
             </>
           ) : null}
-
-          {phase === 'processing' ? (
+          {phase === 'processing' && error ? (
             <>
-              <Button variant="ghost" onClick={backToSetup}><ChevronLeft className="size-4" />Back</Button>
-              {error ? <Button variant="primary" disabled={!sessionId} onClick={() => sessionId && void runProcessing(sessionId, mode)}><RefreshCw className="size-4" />Retry</Button> : null}
+              <Button variant="ghost" onClick={() => { discard(); reset(); }}><Camera />Record again</Button>
+              <Button variant="primary" onClick={() => void retry()}>Try again</Button>
             </>
           ) : null}
-
           {phase === 'review' ? (
             <>
-              <Button variant="ghost" onClick={backToSetup}><Camera className="size-4" />Record again</Button>
-              <Button variant="ghost" onClick={close}>Close</Button>
-              {result?.kind === 'plan' ? (
-                <Button variant="primary" disabled={sending || draftTasks.length === 0} onClick={() => void handleSendPlan()}>
-                  {sending ? <Spinner className="size-4" /> : <Send className="size-4" />}Send to Code
-                </Button>
-              ) : (
-                <Button variant="primary" disabled={sending || draftActions.length === 0} onClick={() => void handleSaveAutomation()}>
-                  {sending ? <Spinner className="size-4" /> : <Save className="size-4" />}Save to Cowork
-                </Button>
-              )}
+              <Button variant="ghost" onClick={() => { discard(); reset(); }}><Camera />Record again</Button>
+              <Button disabled={!tasks.length || creating} onClick={() => void createPlan(false)}><Plus />Create plan</Button>
+              <Button variant="primary" disabled={!tasks.length || creating} onClick={() => void createPlan(true)}>{creating ? <Spinner className="size-4" /> : <Play />}Create and start</Button>
             </>
           ) : null}
         </DialogFooter>

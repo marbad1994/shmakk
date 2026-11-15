@@ -129,6 +129,7 @@ function normalizeFinding(f, i) {
   if (!note && !element && !quote) return null;
   return {
     index: Number.isFinite(Number(f.index)) ? Number(f.index) : i + 1,
+    kind: ['bug', 'change', 'feature', 'chore'].includes(f.kind) ? f.kind : null,
     page: page || null,
     element: element || null,
     note,

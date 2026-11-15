@@ -1,5 +1,9 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Collapsible } from 'radix-ui';
+import { useQuery } from '@tanstack/react-query';
+import { api } from '@/lib/api';
+import type { PlanFull, TaskStatus } from '@/lib/work';
+import { PlanStatusPill, ProgressStrip, StatusPill } from '@/components/work/PlanBoard';
 import {
   Brain, Check, ChevronRight, CircleSlash, Copy, FilePen, FilePlus2, FileText, FolderOpen, FolderPlus, Globe, Info,
   ListChecks, MousePointerClick, Paperclip, Plug, Search, ShieldAlert, ShieldCheck, TerminalSquare, Trash2, TriangleAlert, Users, Volume2, Wand2, X,
@@ -320,6 +324,34 @@ export function PlanCard({ plan }: { plan: PlanItem['plan'] }) {
   );
 }
 
+/** Plan card for review-gated plans: reads the plan live, links to Plans. */
+function LivePlanCard({ planId, fallback }: { planId: string; fallback: PlanItem['plan'] }) {
+  const openPlan = useApp((s) => s.openPlan);
+  const { data } = useQuery({ queryKey: ['plan-full', planId], queryFn: () => api.get<PlanFull>(`/api/plans/${planId}`), retry: false });
+  if (!data) return <PlanCard plan={fallback} />;
+  const counts: Partial<Record<TaskStatus, number>> = {};
+  for (const t of data.tasks) counts[t.status] = (counts[t.status] || 0) + 1;
+  return (
+    <Card>
+      <div className="flex items-center gap-2.5 px-3.5 py-2.5 font-semibold">
+        <ListChecks className="size-4 text-accent" />
+        <span className="min-w-0 flex-1 truncate">{data.title}</span>
+        <PlanStatusPill status={data.status} />
+      </div>
+      <div className="px-3.5"><ProgressStrip counts={counts} total={data.tasks.length} /></div>
+      <ol className="m-0 grid list-none gap-1 p-2.5">
+        {data.tasks.map((t) => (
+          <li key={t.id} className="flex items-center gap-2 rounded-lg px-1 py-1 text-[13px]">
+            <StatusPill status={t.status} />
+            <span className={cn('min-w-0 flex-1 truncate', (t.status === 'done' || t.status === 'skipped') && 'text-dim')}>{t.title}</span>
+          </li>
+        ))}
+      </ol>
+      <div className="border-t border-line px-3 py-2"><Button size="sm" variant="ghost" onClick={() => openPlan(planId)}>Open in Plans</Button></div>
+    </Card>
+  );
+}
+
 function Step({ item }: { item: StepItem }) {
   return (
     <div className="mt-1.5 flex items-center gap-2.5 text-[12.5px] text-dim before:h-px before:flex-1 before:bg-line after:h-px after:flex-1 after:bg-line">
@@ -428,7 +460,7 @@ export const TranscriptItem = memo(function TranscriptItem({ item, onSpeak }: { 
     case 'assistant': return <Assistant item={item} onSpeak={onSpeak} />;
     case 'tool': return <Tool item={item} />;
     case 'ask': return <Ask item={item} />;
-    case 'plan': return <PlanCard plan={item.plan} />;
+    case 'plan': return item.planId ? <LivePlanCard planId={item.planId} fallback={item.plan} /> : <PlanCard plan={item.plan} />;
     case 'step': return <Step item={item} />;
     case 'team': return <Team item={item} />;
     case 'shell': return <Shell item={item} />;

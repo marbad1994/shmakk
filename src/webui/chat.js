@@ -23,7 +23,7 @@ const design = require('./design');
 const { buildContext } = require('./projects');
 const { coworkTools, COWORK_HINT } = require('./automations');
 const { route: routeToSpecialist } = require('../coordinator');
-const { shouldPlan, generatePlan, savePlan } = require('../planner');
+const { shouldPlan, generatePlan } = require('../planner');
 const { clearIndex } = require('../workspace-index');
 const { loadGlossary } = require('../glossary');
 const { isConfigured } = require('../llm');
@@ -31,8 +31,6 @@ const { getEdits, clearEdits } = require('../edit-tracker');
 const { unifiedDiff, newFileDiff } = require('../edit-viewer');
 const { matchSelfCommand, executeSelfCommand } = require('../self-commands');
 const { runTeam, looksMultiDomain } = require('../team');
-const { addPlanTasks, markTaskComplete, markTaskSkipped } = require('../task-file');
-const { captureGitSha, runPostPlanReview } = require('../code-reviewer');
 const { classifyRunCommand } = require('../safety');
 const sessionSearch = require('../session-search');
 const { HELP } = require('../cli');
@@ -412,7 +410,7 @@ class ChatManager {
 
   // mode: 'ask' (default) or 'shell'. A leading "$ " also means shell.
   // unattended: 'auto' | 'ask' | 'full' — set for automation runs (see _confirmTool).
-  async send(convId, rawText, { mode = 'ask', unattended = null, askTimeoutMs = null, attachments = null, hint = null } = {}) {
+  async send(convId, rawText, { mode = 'ask', unattended = null, askTimeoutMs = null, attachments = null, hint = null, direct = false } = {}) {
     const conv = this.get(convId);
     if (!conv) return { ok: false, error: 'conversation not found' };
     if (conv.run) return { ok: false, error: 'a run is already in progress' };
@@ -428,7 +426,7 @@ class ChatManager {
     let finish;
     const done = new Promise((r) => { finish = r; });
     const images = imageAttachments(refs);
-    conv.run = { ctrl, activity: 'starting', unattended, askTimeoutMs, error: null, finish, images, hint, artefactRequested: artefactRequested(text) };
+    conv.run = { ctrl, activity: 'starting', unattended, askTimeoutMs, error: null, finish, images, hint, direct: !!direct, artefactRequested: artefactRequested(text) };
     this.ctx.broadcast({ t: 'run', convId: conv.id, running: true, activity: 'starting' });
 
     this._add(conv, { type: 'user', text, mode, attachments: refs.map((a) => ({ name: a.name || 'file', size: typeof a.size === 'number' ? a.size : 0 })) });
@@ -921,7 +919,9 @@ class ChatManager {
 
     // ── Team mode ──
     // Images are shown to a single agent: a team would each need the payload.
-    if (!settings.review && !cowork && !(conv.run && conv.run.images && conv.run.images.length) && looksMultiDomain(cmd)) {
+    // Plan tasks (direct) go to one agent: they are already decomposed.
+    const direct = !!(conv.run && conv.run.direct);
+    if (!direct && !settings.review && !cowork && !(conv.run && conv.run.images && conv.run.images.length) && looksMultiDomain(cmd)) {
       let teamItem = null;
       let summary = '';
       let handled = false;
@@ -958,79 +958,36 @@ class ChatManager {
     }
 
     // ── Plan-first ──
-    if (!settings.review && shouldPlan(cmd)) {
+    // The plan becomes a review-gated plan (see ./plans.js): tasks are only
+    // done once their diff passes review (and your sign-off, if required).
+    if (!direct && !settings.review && shouldPlan(cmd) && this.ctx.plans) {
       this._activity(conv, 'generating plan');
-      let plan = null;
-      try { plan = await generatePlan(cmd, { signal: ctrl.signal, model: this._modelFor(conv) }); }
+      let draft = null;
+      try { draft = await generatePlan(cmd, { signal: ctrl.signal, model: this._modelFor(conv) }); }
       catch (e) {
         if (isAbortError(e) || ctrl.signal.aborted) throw e;
         this._notice(conv, 'Plan generation failed — running directly.', 'warn');
       }
-      if (plan) {
-        const planItem = this._add(conv, { type: 'plan', plan });
-        const sync = () => { savePlan(roots[0], plan); planItem.plan = plan; this._touch(conv, planItem); };
+      if (draft) {
+        const plan = this.ctx.plans.create({
+          title: draft.title,
+          summary: String(cmd).slice(0, 2000),
+          source: 'chat',
+          convId: conv.id,
+          tasks: draft.tasks.map((t) => ({ title: t.title, instructions: t.description, acceptance: t.acceptance, layer: t.layer, kind: t.kind })),
+        });
+        const planItem = this._add(conv, { type: 'plan', planId: plan.id, plan: { id: plan.id, title: plan.title, status: plan.status, tasks: plan.tasks.map((t) => ({ id: t.id, title: t.title, description: t.instructions, status: t.status })) } });
         const approved = await this._ask(conv, { kind: 'plan', question: 'Approve this plan?', defaultYes: true });
         if (!approved) {
-          plan.status = 'rejected';
-          planItem.plan = plan; this._touch(conv, planItem);
-          this._notice(conv, 'Plan rejected — rephrase your request, or prefix it with ! to run without a plan.', 'warn');
+          planItem.plan.status = 'rejected';
+          this._touch(conv, planItem);
+          this._notice(conv, 'Plan kept as a draft in Plans — edit it there, or rephrase your request (prefix with ! to run without a plan).', 'warn', { action: 'open:plan' });
           return;
         }
-        plan.status = 'executing';
-        sync();
-        const baseSha = captureGitSha(roots[0]);
-        try { addPlanTasks(roots[0], plan); } catch {}
-
-        for (let i = 0; i < plan.tasks.length; i++) {
-          if (ctrl.signal.aborted) break;
-          const task = plan.tasks[i];
-          plan.currentTaskIndex = i;
-          task.status = 'in_progress';
-          sync();
-          this._add(conv, { type: 'step', index: i + 1, total: plan.tasks.length, title: task.title, description: task.description });
-          const taskInput = `[Task ${i + 1} of ${plan.tasks.length}: ${task.title}]\n${task.description}\n\nOverall goal: ${plan.title}\n\nOriginal request: ${cmd}`;
-          try {
-            const updated = await runAgent({ ...agentOpts, input: taskInput, history: conv.history, images: conv.run ? conv.run.images : null });
-            sink.close();
-            conv.history = trimHistory(updated || conv.history);
-            if (ctrl.signal.aborted) { task.status = 'failed'; sync(); throw new Error('stopped'); }
-            task.status = 'completed';
-            task.completedAt = new Date().toISOString();
-            sync();
-            try { markTaskComplete(roots[0], task.title, task.completedAt); } catch {}
-          } catch (e) {
-            task.status = 'failed';
-            sync();
-            if (isAbortError(e) || ctrl.signal.aborted) { plan.status = 'aborted'; sync(); throw e; }
-            this._notice(conv, `Task ${i + 1} failed: ${e.message}`, 'error');
-            const skip = await this._ask(conv, { kind: 'confirm', question: `Skip task ${i + 1} and continue?`, defaultYes: false });
-            if (!skip) {
-              plan.status = 'aborted';
-              sync();
-              this._notice(conv, 'Plan aborted.', 'warn');
-              return;
-            }
-            task.status = 'skipped';
-            sync();
-            try { markTaskSkipped(roots[0], task.title); } catch {}
-          }
-        }
-
-        const completed = plan.tasks.filter((t) => t.status === 'completed').length;
-        const skipped = plan.tasks.filter((t) => t.status === 'skipped').length;
-        plan.status = 'completed';
-        sync();
-        this._notice(conv, `Plan done: ${completed}/${plan.tasks.length} tasks completed${skipped ? `, ${skipped} skipped` : ''}.`, 'ok');
-
-        if (completed > 0 && !ctrl.signal.aborted) {
-          try {
-            this._activity(conv, 'reviewing changes');
-            await runPostPlanReview({ plan, baseSha, agentOpts: { ...agentOpts, onEvent: this._eventSink(conv, { agentLabel: 'reviewer' }) }, write });
-          } catch (e) {
-            if (isAbortError(e) || ctrl.signal.aborted) throw e;
-            this._notice(conv, `Review error: ${e.message}`, 'warn');
-          }
-        }
+        // The runner waits for this run to end, then executes task by task in
+        // this conversation, reviewing each before moving on.
+        await this.ctx.plans.run(plan.id);
+        this._notice(conv, 'Plan approved. Each task is reviewed against its acceptance criteria before it counts as done; reviewed tasks wait for your sign-off in Plans.', 'ok', { action: 'open:plan' });
         return;
       }
     }

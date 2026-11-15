@@ -2658,6 +2658,234 @@ function highlightDiffLines(text) {
   }).join('\n');
 }
 
+// ── preview proxy helpers ───────────────────────────────────────────────────
+{
+  const pv = require('../src/webui/preview');
+
+  test('preview: only http(s) targets are accepted', () => {
+    assert.ok(pv.parseTarget('http://localhost:5173/x'));
+    assert.strictEqual(pv.parseTarget('file:///etc/passwd'), null);
+    assert.strictEqual(pv.parseTarget('javascript:alert(1)'), null);
+    assert.strictEqual(pv.parseTarget('not a url'), null);
+  });
+
+  test('preview: shmakk cookies never reach the previewed app', () => {
+    assert.strictEqual(pv.upstreamCookies('shmakk_token=SECRET; a=1; shmakk_pv=x; b=2'), 'a=1; b=2');
+    assert.strictEqual(pv.upstreamCookies(''), '');
+  });
+
+  test('preview: framing restrictions are removed, the rest of the CSP kept', () => {
+    assert.strictEqual(pv.stripFrameAncestors("default-src 'self'; frame-ancestors 'none'; img-src *"), "default-src 'self'; img-src *");
+  });
+
+  test('preview: upstream cookies cannot overwrite shmakk cookies and lose Domain', () => {
+    assert.strictEqual(pv.rewriteSetCookie('shmakk_token=evil; Path=/', { secure: false }), null);
+    assert.strictEqual(pv.rewriteSetCookie('sid=1; Domain=localhost; Secure; SameSite=None', { secure: false }), 'sid=1; SameSite=Lax');
+    assert.strictEqual(pv.rewriteSetCookie('sid=1; Secure; SameSite=None', { secure: true }), 'sid=1; Secure; SameSite=None');
+  });
+
+  test('preview: absolute redirects to the target stay inside the proxy', () => {
+    const t = new URL('http://localhost:5173/');
+    assert.strictEqual(pv.rewriteLocation('http://localhost:5173/login?next=1', t), '/login?next=1');
+    assert.strictEqual(pv.rewriteLocation('https://accounts.example.com/', t), 'https://accounts.example.com/');
+  });
+
+  test('preview: the inspector loader goes in first', () => {
+    assert.ok(pv.injectLoader('<html><head><title>x</title></head></html>').startsWith('<html><head><script src="/__shmakk/inspector.js"'));
+    assert.ok(pv.injectLoader('<p>bare</p>').startsWith('<script'));
+  });
+
+  test('preview: listening ports parsed from /proc/net/tcp', () => {
+    const tcp = [
+      '  sl  local_address rem_address   st',
+      '   0: 0100007F:1435 00000000:0000 0A',
+      '   1: 00000000:1F90 00000000:0000 0A',
+      '   2: 0A00020F:0016 00000000:0000 0A',
+      '   3: 0100007F:1F91 0100007F:9C40 01',
+    ].join('\n');
+    assert.deepStrictEqual(pv.listeningPorts((f) => (f.endsWith('tcp') ? tcp : '')), [5173, 8080]);
+  });
+
+  test('preview: inspector source is valid JavaScript', () => {
+    const { INSPECTOR_SOURCE } = require('../src/webui/preview-inspector');
+    new Function(INSPECTOR_SOURCE);
+  });
+}
+
+// ── intake: requests → layered tasks ────────────────────────────────────────
+{
+  const intake = require('../src/services/intake');
+  const os = require('os');
+  const path = require('path');
+
+  test('intake: layer heuristics', () => {
+    assert.strictEqual(intake.guessLayer('add a column for last login and a migration', true), 'database');
+    assert.strictEqual(intake.guessLayer('the API returns a 500 when saving', true), 'backend');
+    assert.strictEqual(intake.guessLayer('make this button bigger', false), 'frontend');
+    assert.strictEqual(intake.guessLayer('hmm', true), 'frontend');
+    assert.strictEqual(intake.guessLayer('hmm', false), 'unknown');
+    assert.strictEqual(intake.guessKind('clicking save throws an error'), 'bug');
+    assert.strictEqual(intake.guessKind('add a dark mode toggle'), 'feature');
+  });
+
+  test('intake: model output is validated, invented files dropped, deps ordered', () => {
+    const tasks = intake.normalizeTasks({ tasks: [
+      { key: 'ui', title: 'Show date', layer: 'frontend', instructions: 'render', dependsOn: ['api', 'ghost', 'ui'], files: ['src/a.tsx', { path: 'made/up.ts' }] },
+      { key: 'api', title: 'Expose field', layer: 'backend', instructions: 'add field', dependsOn: ['db'] },
+      { key: 'db', title: 'Add column', layer: 'database', instructions: 'migration' },
+      { title: '', instructions: '' },
+    ] }, { knownFiles: (p) => p === 'src/a.tsx' });
+    assert.deepStrictEqual(tasks.map((t) => t.key), ['db', 'api', 'ui']);
+    assert.deepStrictEqual(tasks[2].dependsOn, ['api']);
+    assert.deepStrictEqual(tasks[2].files.map((f) => f.path), ['src/a.tsx']);
+  });
+
+  test('intake: fallback makes one grounded task per request', () => {
+    const reqs = [intake.normalizeRequest({ text: 'The API returns a 500 here', where: { selector: '#save' } }, 0)];
+    const t = intake.fallbackTasks(reqs, [{ source: { file: 'src/Save.tsx' }, hits: [{ file: 'src/api.js', term: 'save' }] }]);
+    assert.strictEqual(t.length, 1);
+    assert.strictEqual(t[0].layer, 'backend');
+    assert.deepStrictEqual(t[0].files.map((f) => f.path), ['src/Save.tsx', 'src/api.js']);
+    assert.ok(t[0].instructions.includes('#save'));
+  });
+
+  test('intake: dev-server paths resolve to workspace files', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'intake-'));
+    fs.mkdirSync(path.join(root, 'web', 'src'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'web', 'src', 'App.tsx'), 'x');
+    assert.strictEqual(intake.resolveSourceFile(root, 'http://localhost:5173/src/App.tsx?t=123'), 'web/src/App.tsx');
+    assert.strictEqual(intake.resolveSourceFile(root, path.join(root, 'web/src/App.tsx')), 'web/src/App.tsx');
+    assert.strictEqual(intake.resolveSourceFile(root, '/src/Nope.tsx'), null);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  test('intake: translate without a provider falls back instead of failing', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'intake-'));
+    const out = await intake.translate({ root, requests: [{ text: 'make the header sticky' }], client: null });
+    assert.ok(out.tasks.length >= 1);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  test('intake: translate uses the model answer when it parses', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'intake-'));
+    const client = { model: 'm', client: { chat: { completions: { create: async () => ({ choices: [{ message: { content: '```json\n{"summary":"s","tasks":[{"key":"t1","title":"Do it","layer":"backend","instructions":"x","acceptance":["y"]}]}\n```' } }] }) } } } };
+    const out = await intake.translate({ root, requests: [{ id: 'r1', text: 'thing' }], client });
+    assert.strictEqual(out.via, 'model');
+    assert.strictEqual(out.tasks[0].layer, 'backend');
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+}
+
+// ── plans: the review gate ──────────────────────────────────────────────────
+{
+  const P = require('../src/webui/plans');
+  const task = (over = {}) => ({ ...P.makeTask({ title: 'T', acceptance: ['a'] }, 0), ...over });
+
+  test('plans: a pass with an unmet criterion is overridden to fail', () => {
+    const v = P.normalizeVerdict({ verdict: 'pass', criteria: [{ text: 'a', met: false }], issues: [] });
+    assert.strictEqual(v.verdict, 'fail');
+    assert.ok(v.overridden);
+    assert.strictEqual(P.normalizeVerdict({ verdict: 'pass', criteria: [{ text: 'a', met: true }], issues: [{ severity: 'major', detail: 'x' }] }).verdict, 'fail');
+    assert.strictEqual(P.normalizeVerdict({ verdict: 'pass', criteria: [{ text: 'a', met: true }], issues: [{ severity: 'minor', detail: 'nit' }] }).verdict, 'pass');
+  });
+
+  test('plans: passing review needs sign-off before done', () => {
+    const t = task({ roundAttempts: 1 });
+    P.applyVerdict(t, { verdict: 'pass' }, { requireSignoff: true });
+    assert.strictEqual(t.status, 'awaiting_approval');
+    const u = task({ roundAttempts: 1 });
+    P.applyVerdict(u, { verdict: 'pass' }, { requireSignoff: false });
+    assert.strictEqual(u.status, 'done');
+  });
+
+  test('plans: failed reviews go to rework, then block', () => {
+    const t = task({ roundAttempts: 1 });
+    P.applyVerdict(t, { verdict: 'fail' });
+    assert.strictEqual(t.status, 'rework');
+    t.roundAttempts = P.MAX_ATTEMPTS;
+    P.applyVerdict(t, { verdict: 'fail' });
+    assert.strictEqual(t.status, 'blocked');
+  });
+
+  test('plans: dependencies wait for review, not for sign-off', () => {
+    const a = task({ id: 'ta1' });
+    const b = task({ id: 'tb1', dependsOn: ['ta1'] });
+    const plan = { started: true, tasks: [a, b] };
+    assert.strictEqual(P.nextRunnable(plan), a);
+    a.status = 'running';
+    assert.strictEqual(P.nextRunnable(plan), null);
+    a.status = 'blocked';
+    assert.strictEqual(P.nextRunnable(plan), null);
+    assert.strictEqual(P.derivePlanStatus(plan), 'needs_attention');
+    a.status = 'awaiting_approval';
+    assert.strictEqual(P.nextRunnable(plan), b);
+    assert.strictEqual(P.derivePlanStatus({ ...plan, paused: true }), 'paused');
+    b.status = 'awaiting_approval';
+    assert.strictEqual(P.derivePlanStatus(plan), 'awaiting_review');
+    a.status = 'done'; b.status = 'done';
+    assert.strictEqual(P.derivePlanStatus(plan), 'done');
+    assert.strictEqual(P.derivePlanStatus({ started: false, tasks: [a] }), 'draft');
+  });
+
+  test('plans: TASKS.md only shows done after approval', () => {
+    const block = P.renderTaskBlock([{ title: 'P', tasks: [task({ title: 'A', layer: 'frontend', status: 'awaiting_approval' }), task({ title: 'B', layer: 'backend', status: 'done' })] }]);
+    assert.ok(block.includes('- [ ] A (frontend) _awaiting your sign-off_'));
+    assert.ok(block.includes('- [x] B (backend)'));
+  });
+
+  test('plans: the task diff counts uncommitted work and leaves the index alone', () => {
+    const os = require('os');
+    const path = require('path');
+    const { execSync } = require('child_process');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plan-'));
+    try { execSync('git init -q && git config user.email a@b && git config user.name t && echo a > a.txt && git add . && git commit -qm i', { cwd: root, stdio: 'ignore' }); } catch { return; }
+    fs.writeFileSync(path.join(root, 'pre.txt'), 'dirty before the task');
+    const before = P.snapshotTree(root);
+    fs.writeFileSync(path.join(root, 'a.txt'), 'b\n');
+    fs.mkdirSync(path.join(root, '.shmakk'));
+    fs.writeFileSync(path.join(root, '.shmakk', 'state.json'), '{}');
+    const d = P.diffTrees(root, before, P.snapshotTree(root));
+    assert.deepStrictEqual(d.files.map((f) => f.path), ['a.txt']);
+    assert.strictEqual(execSync('git diff --cached --name-only', { cwd: root }).toString().trim(), '');
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  test('plans: the agent prompt carries criteria and requested changes', () => {
+    const t = task({ feedback: [{ by: 'you', text: 'use the brand colour' }] });
+    const plan = { title: 'P', tasks: [t] };
+    const p = P.taskPrompt(plan, t);
+    assert.ok(p.includes('Acceptance criteria'));
+    assert.ok(p.includes('use the brand colour'));
+  });
+}
+
+// ── show & tell: frame choice and transcripts ───────────────────────────────
+{
+  const s2p = require('../src/services/show2plan');
+
+  test('show2plan: marks always kept, picks spaced, budget respected', () => {
+    const c = [{ file: 'a', t: 0.3 }, { file: 'b', t: 0.5 }, { file: 'c', t: 2.5, score: 0.5 }, { file: 'd', t: 3.1, mark: true }, { file: 'e', t: 6 }, { file: 'f', t: 9, score: 0.9 }];
+    const picked = s2p.pickFrames(c, [{ start: 5.5, end: 6.5, text: 'click this' }], { durationSec: 10, budget: 4 });
+    assert.ok(picked.some((x) => x.file === 'd' && x.reason === 'marked'));
+    assert.ok(picked.length <= 4);
+    assert.ok(!(picked.some((x) => x.file === 'a') && picked.some((x) => x.file === 'b')));
+    assert.deepStrictEqual(picked.map((x) => x.t), [...picked.map((x) => x.t)].sort((x, y) => x - y));
+  });
+
+  test('show2plan: whisper silence hallucinations lose to the live transcript', () => {
+    const live = { text: 'this button is far too small please make it bigger', segments: [{ start: 1, end: 3, text: 'this button is far too small please make it bigger' }] };
+    assert.strictEqual(s2p.chooseTranscript({ text: 'Thank you.', segments: [{ start: 0, end: 5, text: 'Thank you.' }] }, live).transcript, live);
+    const good = { text: 'the save button is too small, make it bigger and bold', segments: [{ start: 0, end: 3, text: 'the save button is too small, make it bigger and bold' }] };
+    assert.strictEqual(s2p.chooseTranscript(good, live).transcript.text, good.text);
+  });
+
+  test('show2plan: narration without vision still yields requests', () => {
+    const reqs = s2p.requestsFromTranscript({ segments: [{ start: 1, end: 3, text: 'the save button is too small' }, { start: 9, end: 11, text: 'and the API fails when I submit' }] }, [{ file: 'f1', t: 2 }, { file: 'f2', t: 10 }], '');
+    assert.strictEqual(reqs.length, 2);
+    assert.deepStrictEqual(reqs[0].frames, ['f1']);
+  });
+}
+
 (async () => {
   let pass = 0, fail = 0;
   for (const { name, fn } of tests) {

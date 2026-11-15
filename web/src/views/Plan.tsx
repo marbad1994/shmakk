@@ -1,42 +1,53 @@
+import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ListChecks } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
-import type { Plan, Status } from '@/lib/types';
+import type { Status } from '@/lib/types';
 import { relTime } from '@/lib/utils';
 import { useApp } from '@/store/app';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Empty } from '@/components/ui/misc';
-import { PlanCard } from '@/components/chat/Items';
+import { PlanDetail, PlanList, usePlans } from '@/components/work/PlanBoard';
 import { Loading, Page, Row, Rows, Section } from './Page';
 
+/**
+ * Plans: every task is executed by the agent, reviewed against its acceptance
+ * criteria, and only then (with your sign-off, by default) counted as done.
+ */
 export function PlanView() {
   const qc = useQueryClient();
-  const setDraft = useApp((s) => s.setDraft);
-  const { data, isLoading } = useQuery({ queryKey: ['plan'], queryFn: () => api.get<{ plan: Plan | null; journal: Status['journal'] }>('/api/plan'), refetchInterval: 4000 });
-  const clear = useMutation({
-    mutationFn: (what: 'plan' | 'journal') => api.del(`/api/${what}`),
-    onSuccess: () => { toast.success('Cleared'); void qc.invalidateQueries({ queryKey: ['plan'] }); },
+  const focus = useApp((s) => s.focusPlanId);
+  const openPlan = useApp((s) => s.openPlan);
+  const { data, isLoading } = usePlans();
+  const plans = data?.plans ?? [];
+  const selected = focus && plans.some((p) => p.id === focus) ? focus : plans[0]?.id ?? null;
+  useEffect(() => { if (!focus && plans[0]) openPlan(plans[0].id); }, [focus, plans, openPlan]);
+
+  const journal = useQuery({ queryKey: ['journal'], queryFn: () => api.get<{ journal: Status['journal'] }>('/api/plan') });
+  const clearJournal = useMutation({
+    mutationFn: () => api.del('/api/journal'),
+    onSuccess: () => { toast.success('Cleared'); void qc.invalidateQueries({ queryKey: ['journal'] }); },
   });
 
   return (
-    <Page lead="Large requests are broken into a plan you approve before anything runs. Interrupted tasks keep a journal so the next request can pick up where the last one stopped.">
-      <Section title="Active plan" aside={data?.plan ? <Button variant="ghost" size="sm" onClick={() => clear.mutate('plan')}>Clear plan</Button> : null}>
-        {isLoading ? <Loading /> : data?.plan ? <PlanCard plan={data.plan} /> : (
-          <Empty icon={<ListChecks />} title="No active plan">
-            Describe a big piece of work — or start any message with <kbd>+</kbd> to force plan-first execution.
-            <div className="mt-3"><Button size="sm" onClick={() => setDraft('+')}>Plan something</Button></div>
-          </Empty>
-        )}
-      </Section>
+    <Page lead="Each task runs, gets its diff reviewed against its acceptance criteria, and is only done once it passes and you sign off. Failed reviews go back to the agent with the reviewer's notes.">
+      <div className="grid items-start gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
+        <Section title="Plans" className="lg:sticky lg:top-0">
+          {isLoading ? <Loading /> : <PlanList plans={plans} selected={selected} onSelect={(id) => openPlan(id)} />}
+        </Section>
+        <Section title="Plan">
+          {selected ? <PlanDetail key={selected} planId={selected} onDeleted={() => openPlan(null)} /> : (
+            <Empty title="Nothing selected">Plans you create show up on the left.</Empty>
+          )}
+        </Section>
+      </div>
 
-      <Section title="Resume journal" aside={data?.journal ? <Button variant="ghost" size="sm" onClick={() => clear.mutate('journal')}>Clear journal</Button> : null}>
-        {data?.journal ? (
+      <Section title="Resume journal" aside={journal.data?.journal ? <Button variant="ghost" size="sm" onClick={() => clearJournal.mutate()}>Clear journal</Button> : null}>
+        {journal.data?.journal ? (
           <Rows>
-            <Row title="Status" sub={`Updated ${relTime(data.journal.updatedAt)} · profile ${data.journal.profile}`}><Badge tone={data.journal.status === 'running' ? 'info' : 'warn'}>{data.journal.status}</Badge></Row>
-            <Row title="Request" sub={<span className="font-mono text-[12.5px]">{data.journal.input || '—'}</span>} />
-            <Row title={`Touched files · ${data.journal.touchedFiles.length}`} sub={<span className="font-mono text-[12.5px] break-all">{data.journal.touchedFiles.slice(-30).join('  ') || 'none'}</span>} />
+            <Row title="Status" sub={`Updated ${relTime(journal.data.journal.updatedAt)} · profile ${journal.data.journal.profile}`}><span className="text-[12px] text-dim">{journal.data.journal.status}</span></Row>
+            <Row title="Request" sub={journal.data.journal.input || '—'} />
+            <Row title={`Touched files · ${journal.data.journal.touchedFiles.length}`} sub={<span className="break-all text-[12.5px]">{journal.data.journal.touchedFiles.slice(-30).join('  ') || 'none'}</span>} />
           </Rows>
         ) : <Empty title="Nothing to resume">The journal is written while a task runs and cleared when it finishes cleanly.</Empty>}
       </Section>
