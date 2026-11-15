@@ -50,7 +50,18 @@ Claude Desktop, choose "Always allow" per tool.
 
 ## Wayland (KDE Plasma)
 
+Screenshots use one persistent ScreenCast-portal PipeWire stream (same approach
+and same `screencast.restore` token file as `src/services/portal-capture.py`),
+so a screenshot is a memory copy rather than a `spectacle` launch. The first run
+shows KDE's one-time share dialog; approving it once covers shmakk capture too.
+If the portal path is unavailable it falls back to spectacle automatically
+(`DESKTOP_MCP_CAPTURE=auto|portal|spectacle`, `desktop_doctor` shows why).
+
+The portal path needs system Python bindings, so create the venv with
+`python -m venv --system-site-packages .venv`.
+
 ```
+sudo pacman -S python-dbus python-gobject gst-python gst-plugin-pipewire
 sudo pacman -S ydotool spectacle wl-clipboard libkscreen
 sudo usermod -aG input $USER      # then log out and back in
 systemctl --user enable --now ydotool

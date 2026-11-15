@@ -179,6 +179,9 @@ class WaylandBackend(Backend):
             if os.path.exists(cand):
                 os.environ["YDOTOOL_SOCKET"] = cand
         self._size: tuple[int, int] | None = None
+        self._portal = None
+        self._portal_error: str | None = None
+        self._capture_mode = os.environ.get("DESKTOP_MCP_CAPTURE", "auto").lower()  # auto|portal|spectacle
 
     # -- helpers
     @staticmethod
@@ -244,7 +247,32 @@ class WaylandBackend(Backend):
     def position(self):
         return None
 
+    def _portal_frame(self):
+        """Fast path: newest frame from the persistent PipeWire stream."""
+        from .portal import PortalGrabber, PortalUnavailable
+
+        try:
+            if self._portal is None:
+                g = PortalGrabber()
+                g.start()
+                self._portal = g
+            return self._portal.frame().convert("RGB")
+        except PortalUnavailable as e:
+            self._portal = None
+            self._portal_error = str(e)
+            sys.stderr.write(f"[desktop-mcp] portal capture unavailable: {e}\n")
+            return None
+
     def screenshot(self):
+        if self._capture_mode != "spectacle" and not (self._portal_error and self._capture_mode == "auto"):
+            img = self._portal_frame()
+            if img is not None:
+                return img
+            if self._capture_mode == "portal":
+                raise BackendError(f"portal capture failed: {self._portal_error}")
+        return self._spectacle()
+
+    def _spectacle(self):
         with tempfile.TemporaryDirectory() as d:
             out = os.path.join(d, "shot.png")
             # -b background, -n no notification, -f fullscreen, -o output file
@@ -325,6 +353,13 @@ class WaylandBackend(Backend):
             "ydotool_socket": os.environ.get("YDOTOOL_SOCKET") or (os.path.join(rt, ".ydotool_socket") if rt else None),
             "ydotool_socket_exists": os.path.exists(os.environ.get("YDOTOOL_SOCKET") or os.path.join(rt, ".ydotool_socket")),
             "uinput_writable": os.access("/dev/uinput", os.W_OK),
+            "capture": {
+                "mode": self._capture_mode,
+                "portal_running": bool(self._portal and self._portal.running),
+                "portal_error": self._portal_error,
+                "portal_native_size": list(self._portal.size) if self._portal and self._portal.size else None,
+                "restore_token_file": __import__("desktop_mcp.portal", fromlist=["token_path"]).token_path(),
+            },
             "logical_screen_size": None,  # filled by server
         }
 
