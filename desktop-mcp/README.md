@@ -14,6 +14,7 @@ uses ydotool + spectacle. The backend is picked automatically.
 | desktop_scroll | Vertical or horizontal wheel |
 | desktop_type_text | Type text (Unicode via clipboard paste) |
 | desktop_key_press / hotkey / key_hold | Keys and combos |
+| desktop_do | Run many actions in ONE call, then screenshot (fast path) |
 | desktop_wait | Pause for UI to settle |
 | desktop_doctor | Report missing tools, sockets, permissions |
 
@@ -32,6 +33,20 @@ Client config (Claude Desktop / Claude Code):
 ```
 {"mcpServers": {"desktop": {"command": "/abs/path/.venv/bin/desktop-mcp"}}}
 ```
+
+## Speed and coordinates
+
+All tools share one view space: the screen scaled to at most
+DESKTOP_MCP_VIEW_WIDTH (default 1280) wide. A full screenshot is exactly that
+size, so image pixels are the click coordinates. Screenshots are JPEG. Action
+tools take `screenshot=true` to return the result, and `desktop_do` batches many
+steps into one call. Use a screenshot region (optionally with zoom) for small checks.
+
+## Skipping approval prompts
+
+Approval is a client setting. In Claude Code, allow the server in settings:
+`{"permissions": {"allow": ["mcp__desktop"]}}` (use your server name). In
+Claude Desktop, choose "Always allow" per tool.
 
 ## Wayland (KDE Plasma)
 
