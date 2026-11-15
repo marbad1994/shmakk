@@ -2508,7 +2508,7 @@ test('webui server: project, design and automation routes; artifact and webhook 
 // ── show-and-tell: vision analysis + plan/automation generation ────────────
 {
   const { parseAnalysis, buildAnalysisText, transcriptBlock, frameLabels } = require('../src/services/vision');
-  const { normalizeAction, toPlan, toAutomation, toPlaywrightScript, generate } = require('../src/services/showtell');
+  const { normalizeAction, cleanNarration, toPlan, toAutomation, toPlaywrightScript, generate } = require('../src/services/showtell');
 
   const sample = () => ({
     summary: 'Admin settings need a clearer save button',
@@ -2583,6 +2583,15 @@ test('webui server: project, design and automation routes; artifact and webhook 
     assert.strictEqual(normalizeAction('goto'), 'navigate');
     assert.strictEqual(normalizeAction('swipe'), 'scroll');
     assert.strictEqual(normalizeAction('bogus'), 'other');
+  });
+
+  test('showtell: cleanNarration strips third-person narration prefixes', () => {
+    assert.strictEqual(cleanNarration('The user opens the settings page and says the Save button is too small'), 'The settings page and says the Save button is too small');
+    assert.strictEqual(cleanNarration('the user says the Save button is too small'), 'The Save button is too small');
+    assert.strictEqual(cleanNarration('The user needs to save the movement'), 'Save the movement');
+    assert.strictEqual(cleanNarration('the user wants the font to be bigger'), 'The font to be bigger');
+    assert.strictEqual(cleanNarration('The Save button is too small'), 'The Save button is too small');
+    assert.strictEqual(cleanNarration(''), '');
   });
 
   test('showtell: toPlan lists findings with their page and element, not action steps', () => {

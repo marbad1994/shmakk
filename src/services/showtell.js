@@ -61,6 +61,22 @@ function normalizeAction(action) {
 
 // ── analysis normalisation ──────────────────────────────────────────────────
 
+// Vision models sometimes narrate in the third person ("The user opens the
+// settings", "the user says the button is too small") even when asked for
+// direct statements. Strip that framing so summaries and notes read as the
+// point itself, not commentary about whoever recorded it.
+const NARRATION_RE = /^(?:the|this)\s+user(?:'s)?\s+(?:opens|open|says|said|shows|showed|clicks|clicked|navigates|navigated|goes|went|types|typed|presses|pressed|selects|selected|scrolls|scrolled|hovers|hovered|drags|dragged|waits|waited|is|was|has|had|points|pointed|wants|wanted|needs|needed|asks|asked|mentions|mentioned|notes|noted)\s+(?:to\s+|that\s+)?/i;
+
+function cleanNarration(text) {
+  let s = String(text || '').trim();
+  const m = NARRATION_RE.exec(s);
+  if (m) {
+    s = s.slice(m[0].length);
+    if (s) s = s.charAt(0).toUpperCase() + s.slice(1);
+  }
+  return s.trim();
+}
+
 function normalizeStep(s, i) {
   if (!s || typeof s !== 'object') return null;
   const action = normalizeAction(s.action);
@@ -90,14 +106,14 @@ function normalizeAnalysis(analysis) {
     ? a.findings
     : Array.isArray(a.observations) ? a.observations : [];
   return {
-    summary: String(a.summary || '').trim(),
-    goal: String(a.goal || a.title || '').trim(),
+    summary: cleanNarration(String(a.summary || '').trim()),
+    goal: cleanNarration(String(a.goal || a.title || '').trim()),
     app: a.app ? String(a.app).trim() : null,
     page: a.page ? String(a.page).trim() : null,
     findings: rawFindings.map((f, i) => normalizeFinding(f, i)).filter(Boolean),
     steps: steps.map((s, i) => normalizeStep(s, i)).filter(Boolean),
-    uncertain: Array.isArray(a.uncertain) ? a.uncertain.map((x) => String(x)) : [],
-    notes: Array.isArray(a.notes) ? a.notes.map((x) => String(x)) : [],
+    uncertain: Array.isArray(a.uncertain) ? a.uncertain.map((x) => cleanNarration(x)) : [],
+    notes: Array.isArray(a.notes) ? a.notes.map((x) => cleanNarration(x)) : [],
   };
 }
 
@@ -107,7 +123,7 @@ function normalizeFinding(f, i) {
   if (!f || typeof f !== 'object') return null;
   const page = String(f.page || '').trim();
   const element = String(f.element || f.target || f.label || '').trim();
-  const note = String(f.note || f.detail || f.description || '').trim();
+  const note = cleanNarration(String(f.note || f.detail || f.description || '').trim());
   const quote = f.quote != null ? String(f.quote).trim() : null;
   // Drop a finding only when it says nothing at all.
   if (!note && !element && !quote) return null;
@@ -321,6 +337,7 @@ module.exports = {
   ACTION_MAP,
   normalizeAction,
   normalizeStep,
+  cleanNarration,
   normalizeAnalysis,
   toPlan,
   toAutomation,
