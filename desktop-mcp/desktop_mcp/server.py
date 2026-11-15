@@ -1,36 +1,32 @@
 """Desktop control MCP server: mouse, keyboard, scroll, screenshots.
 
-Cross-platform via pyautogui (Windows, macOS, X11 Linux). Runs over stdio.
+Cross-platform. Windows/macOS/X11 use pyautogui; Wayland (KDE Plasma) uses
+ydotool + spectacle. Runs over stdio.
 
 Environment:
-  DESKTOP_MCP_FAILSAFE=0   disable the move-mouse-to-corner abort (default on)
-  DESKTOP_MCP_PAUSE=0.05   seconds to pause after each pyautogui call
-  DESKTOP_MCP_READONLY=1   only expose screen_info / screenshot / wait
+  DESKTOP_MCP_BACKEND=auto|pyautogui|wayland   (default auto)
+  DESKTOP_MCP_FAILSAFE=0   disable corner-abort (pyautogui backend only)
+  DESKTOP_MCP_PAUSE=0.05   pause after each pyautogui call
+  DESKTOP_MCP_READONLY=1   only expose info / screenshot / wait / doctor
+  DESKTOP_MCP_SCREEN_SIZE=WxH   override logical screen size (Wayland)
+  YDOTOOL_SOCKET=path      ydotoold socket (Wayland), auto-detected if unset
 """
 
 from __future__ import annotations
 
-import contextlib
 import io
 import os
-import sys
 import time
 from typing import Literal
 
-# pyautogui imports `mouseinfo`, which on Linux calls sys.exit() when tkinter
-# is missing (killing the server at import) and prints to stdout (corrupting
-# the stdio JSON-RPC stream). We never use MouseInfo, so stub it out, and send
-# any other import-time chatter to stderr.
-sys.modules.setdefault("mouseinfo", type(sys)("mouseinfo"))
-with contextlib.redirect_stdout(sys.stderr):
-    import pyautogui
 from mcp.server.fastmcp import FastMCP, Image
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
-pyautogui.FAILSAFE = os.environ.get("DESKTOP_MCP_FAILSAFE", "1") != "0"
-pyautogui.PAUSE = float(os.environ.get("DESKTOP_MCP_PAUSE", "0.05"))
+from .backend import make_backend
+
 READONLY = os.environ.get("DESKTOP_MCP_READONLY", "0") == "1"
+B = make_backend()
 
 mcp = FastMCP("desktop_mcp")
 
@@ -48,31 +44,48 @@ def action(fn):
 
 
 def _check_point(x: int, y: int) -> None:
-    w, h = pyautogui.size()
+    w, h = B.size()
     if not (0 <= x < w and 0 <= y < h):
-        raise ValueError(
-            f"Point ({x}, {y}) is outside the screen ({w}x{h}). "
-            "Call desktop_screen_info for bounds."
-        )
+        raise ValueError(f"Point ({x}, {y}) is outside the screen ({w}x{h}). Call desktop_screen_info for bounds.")
+
+
+def _pair(x, y) -> None:
+    if (x is None) != (y is None):
+        raise ValueError("Provide both x and y, or neither.")
+    if x is not None:
+        _check_point(x, y)
 
 
 def _pos() -> str:
-    p = pyautogui.position()
-    return f"cursor at ({p.x}, {p.y})"
+    p = B.position()
+    return f"cursor at ({p[0]}, {p[1]})" if p else "cursor position unavailable on this backend"
 
 
 # ---------------------------------------------------------------- read-only
 
 @mcp.tool(annotations=_READ)
 def desktop_screen_info() -> dict:
-    """Return screen size in logical pixels and current cursor position.
+    """Return screen size in logical pixels, current cursor position (null on
+    Wayland, which does not expose it) and which backend is in use.
 
     All coordinates used by other desktop_* tools are in this space, with
     (0, 0) at the top-left.
     """
-    w, h = pyautogui.size()
-    p = pyautogui.position()
-    return {"width": w, "height": h, "cursor": {"x": p.x, "y": p.y}}
+    w, h = B.size()
+    p = B.position()
+    return {"width": w, "height": h, "cursor": {"x": p[0], "y": p[1]} if p else None, "backend": B.name}
+
+
+@mcp.tool(annotations=_READ)
+def desktop_doctor() -> dict:
+    """Diagnose the backend: which required tools, sockets and permissions are
+    present. Call this first if input or screenshots fail."""
+    d = B.doctor()
+    try:
+        d["logical_screen_size"] = list(B.size())
+    except Exception as e:  # noqa: BLE001
+        d["logical_screen_size_error"] = str(e)
+    return d
 
 
 @mcp.tool(annotations=_READ)
@@ -88,10 +101,8 @@ def desktop_screenshot(
     Image pixels map 1:1 to screen coordinates when scale=1 and no crop. With
     a crop, add (x, y) to image coordinates; with scale<1, divide by scale.
     """
-    from PIL import ImageGrab
-
-    sw, sh = pyautogui.size()
-    img = ImageGrab.grab()  # full screen; no external tools needed
+    sw, sh = B.size()
+    img = B.screenshot()
     # HiDPI: captured pixels may exceed logical size; normalise to logical.
     if img.size != (sw, sh):
         img = img.resize((sw, sh))
@@ -121,11 +132,11 @@ def desktop_wait(seconds: float = Field(1.0, ge=0, le=30, description="Seconds t
 def desktop_mouse_move(
     x: int = Field(description="Target X in screen pixels"),
     y: int = Field(description="Target Y in screen pixels"),
-    duration: float = Field(0.2, ge=0, le=5, description="Seconds to glide; 0 = instant"),
+    duration: float = Field(0.2, ge=0, le=5, description="Seconds to glide; 0 = instant (ignored on Wayland)"),
 ) -> str:
     """Move the mouse cursor to absolute coordinates."""
     _check_point(x, y)
-    pyautogui.moveTo(x, y, duration=duration)
+    B.move(x, y, duration)
     return _pos()
 
 
@@ -137,11 +148,8 @@ def desktop_mouse_click(
     clicks: int = Field(1, ge=1, le=3, description="1 = click, 2 = double-click, 3 = triple-click"),
 ) -> str:
     """Click a mouse button, optionally after moving to (x, y)."""
-    if (x is None) != (y is None):
-        raise ValueError("Provide both x and y, or neither.")
-    if x is not None:
-        _check_point(x, y)
-    pyautogui.click(x=x, y=y, button=button, clicks=clicks, interval=0.1)
+    _pair(x, y)
+    B.click(x, y, button, clicks)
     return f"{button} click x{clicks}; {_pos()}"
 
 
@@ -154,8 +162,7 @@ def desktop_mouse_drag(
     """Press at (from_x, from_y), drag to (to_x, to_y), release."""
     _check_point(from_x, from_y)
     _check_point(to_x, to_y)
-    pyautogui.moveTo(from_x, from_y)
-    pyautogui.dragTo(to_x, to_y, duration=duration, button=button)
+    B.drag(from_x, from_y, to_x, to_y, button, duration)
     return _pos()
 
 
@@ -165,7 +172,7 @@ def desktop_mouse_button(
     button: Button = "left",
 ) -> str:
     """Hold or release a mouse button at the current cursor (for custom drags)."""
-    (pyautogui.mouseDown if state == "down" else pyautogui.mouseUp)(button=button)
+    B.button(state, button)
     return f"{button} {state}; {_pos()}"
 
 
@@ -177,12 +184,10 @@ def desktop_scroll(
     y: int | None = None,
 ) -> str:
     """Scroll the mouse wheel."""
-    if (x is None) != (y is None):
-        raise ValueError("Provide both x and y, or neither.")
+    _pair(x, y)
     if x is not None:
-        _check_point(x, y)
-        pyautogui.moveTo(x, y)
-    (pyautogui.hscroll if horizontal else pyautogui.scroll)(amount)
+        B.move(x, y, 0)
+    B.scroll(amount, horizontal)
     return f"scrolled {amount} {'horizontal' if horizontal else 'vertical'}; {_pos()}"
 
 
@@ -195,37 +200,27 @@ def desktop_type_text(
 ) -> str:
     """Type text. ASCII is typed key by key; text with other characters is
     pasted through the clipboard (clipboard contents are overwritten)."""
-    if text.isascii():
-        pyautogui.write(text, interval=interval)
-        return f"typed {len(text)} chars"
-    import pyperclip
-
-    pyperclip.copy(text)
-    pyautogui.hotkey("command" if _is_mac() else "ctrl", "v")
-    return f"pasted {len(text)} chars via clipboard"
+    return B.type_text(text, interval)
 
 
 @action
 def desktop_key_press(
-    key: str = Field(description="Key name, e.g. enter, tab, esc, backspace, delete, up, down, left, right, home, end, pageup, pagedown, space, f1..f24"),
+    key: str = Field(description="Key name, e.g. enter, tab, esc, backspace, delete, up, down, left, right, home, end, pageup, pagedown, space, f1..f12"),
     presses: int = Field(1, ge=1, le=100),
 ) -> str:
     """Press and release a single key one or more times."""
-    _check_key(key)
-    pyautogui.press(key, presses=presses, interval=0.03)
+    B.press(key, presses)
     return f"pressed {key} x{presses}"
 
 
 @action
 def desktop_hotkey(
-    keys: list[str] = Field(description='Keys held together in order, e.g. ["ctrl","c"], ["command","space"], ["alt","f4"]'),
+    keys: list[str] = Field(description='Keys held together in order, e.g. ["ctrl","c"], ["super","space"], ["alt","f4"]'),
 ) -> str:
     """Press a key combination (modifiers first, then the final key)."""
     if not keys:
         raise ValueError("keys must not be empty")
-    for k in keys:
-        _check_key(k)
-    pyautogui.hotkey(*keys)
+    B.hotkey(keys)
     return "pressed " + "+".join(keys)
 
 
@@ -235,24 +230,8 @@ def desktop_key_hold(
     state: Literal["down", "up"],
 ) -> str:
     """Hold or release a key (always release what you hold)."""
-    _check_key(key)
-    (pyautogui.keyDown if state == "down" else pyautogui.keyUp)(key)
+    B.key_hold(key, state)
     return f"{key} {state}"
-
-
-# ------------------------------------------------------------------ helpers
-
-def _is_mac() -> bool:
-    return sys.platform == "darwin"
-
-
-def _check_key(key: str) -> None:
-    if key not in pyautogui.KEYBOARD_KEYS:
-        raise ValueError(
-            f"Unknown key '{key}'. Valid names include: enter, tab, esc, space, backspace, "
-            "delete, up/down/left/right, home, end, pageup, pagedown, shift, ctrl, alt, "
-            "command/win, f1-f24, and single characters."
-        )
 
 
 def main() -> None:
