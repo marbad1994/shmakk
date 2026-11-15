@@ -24,3 +24,6 @@ tmp/
 --help
 conftest.c
 create-ml-country-mapping-arch.conf
+
+# desktop-mcp
+desktop-mcp/*.egg-info/
