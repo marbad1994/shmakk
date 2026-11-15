@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { AlertTriangle, Bookmark, Camera, Check, ChevronDown, ChevronRight, Mic, MicOff, MonitorPlay, Pause, Play, Plus, Square, X } from 'lucide-react';
+import { AlertTriangle, Bookmark, Camera, Check, ChevronDown, ChevronRight, ListChecks, Mic, MicOff, MonitorPlay, Pause, Play, Plus, Save, Square, Trash2, Workflow, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { useApp } from '@/store/app';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Spinner } from '@/components/ui/misc';
+import { Segmented, Spinner } from '@/components/ui/misc';
 import { Switch } from '@/components/ui/switch';
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { TaskDrafts } from '@/components/work/TaskDrafts';
@@ -15,8 +15,14 @@ import { ScreenRecorder, speechRecognitionAvailable, toWav16k, type LiveSegment 
 import type { PlanFull, ProposedTask } from '@/lib/work';
 
 type Phase = 'setup' | 'recording' | 'uploading' | 'processing' | 'review';
+type Deliverable = 'tasks' | 'automation';
+
+interface AutomationAction { action: string; description: string; target?: string; value?: string | null; key?: string | null }
+interface AutomationResult { summary: string; goal: string; actions: AutomationAction[]; warnings: string[] }
 
 interface S2PResult {
+  mode: Deliverable;
+  automation?: AutomationResult;
   title: string;
   summary: string;
   app: string | null;
@@ -37,8 +43,21 @@ const STAGES: { id: string; label: string }[] = [
   { id: 'planning', label: 'Turning it into tasks for this codebase' },
 ];
 
+/** The prompt a Cowork automation step runs, from one recorded action. */
+function stepPrompt(a: AutomationAction): string {
+  const on = a.target ? ` on "${a.target}"` : '';
+  switch (a.action) {
+    case 'click': return `Click ${a.target || a.description}`;
+    case 'type': return `Type "${a.value ?? ''}"${on}`;
+    case 'press': return `Press ${a.key || 'Enter'}${on}`;
+    case 'select': return `Select "${a.value ?? ''}"${on}`;
+    case 'navigate': return `Open ${a.value || a.target || 'the page'}`;
+    case 'wait': case 'waitSelector': return `Wait for ${a.target || 'the element'}`;
+    default: return a.description || a.action;
+  }
+}
+
 const fmt = (sec: number) => { const s = Math.max(0, Math.floor(sec)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
-const field = 'w-full rounded-[10px] border border-line-strong bg-sunken px-3 py-2 font-sans text-[13px] leading-relaxed text-fg outline-none placeholder:text-faint focus:border-accent/45 focus:ring-[3px] focus:ring-accent/15';
 
 /**
  * Show & tell: record the screen and talk through bugs, changes or tasks.
@@ -54,7 +73,8 @@ export function Show2Plan() {
   const voiceLanguage = useApp((s) => s.settings.voiceLanguage);
 
   const [phase, setPhase] = useState<Phase>('setup');
-  const [note, setNote] = useState('');
+  const [deliverable, setDeliverable] = useState<Deliverable>('tasks');
+  const [actions, setActions] = useState<AutomationAction[]>([]);
   const [useMic, setUseMic] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -92,7 +112,7 @@ export function Show2Plan() {
     setLevel(0); setSegments([]); setInterim(''); setMicNote(null); setTasks([]); setTitle(''); setShowTranscript(false);
   }, []);
 
-  useEffect(() => { if (open) { reset(); setNote(''); } }, [open, reset]);
+  useEffect(() => { if (open) { reset(); setActions([]); } }, [open, reset]);
 
   const discard = useCallback(() => {
     const id = sessionId;
@@ -124,6 +144,7 @@ export function Show2Plan() {
     if (!d || phase !== 'processing') return;
     if (d.stage === 'done' && d.result) {
       setTasks(d.result.tasks);
+      setActions(d.result.automation?.actions ?? []);
       setTitle(d.result.title);
       setPhase('review');
     } else if (d.stage === 'error') {
@@ -175,7 +196,7 @@ export function Show2Plan() {
         }
       }
       await api.post(`/api/show2plan/${sessionId}/process`, {
-        instructions: note,
+        mode: deliverable,
         durationSec: r.durationSec,
         liveTranscript: { segments: r.segments },
       });
@@ -190,7 +211,7 @@ export function Show2Plan() {
     if (!sessionId) return;
     setError(null);
     try {
-      await api.post(`/api/show2plan/${sessionId}/process`, { instructions: note, liveTranscript: { segments } });
+      await api.post(`/api/show2plan/${sessionId}/process`, { mode: deliverable, liveTranscript: { segments } });
       void status.refetch();
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   };
@@ -233,6 +254,29 @@ export function Show2Plan() {
     }
   };
 
+  const saveAutomation = async () => {
+    const r = status.data?.result;
+    if (!r) return;
+    setCreating(true);
+    try {
+      await api.post('/api/automations', {
+        name: title || r.title || 'Recorded automation',
+        description: r.summary || '',
+        steps: actions.map((a) => ({ title: a.description || a.target || a.action, prompt: stepPrompt(a) })),
+        approval: 'ask', projectId: null, workspace: null, trigger: { type: 'manual' },
+      });
+      discard();
+      setOpen(false);
+      useApp.getState().setMode('cowork');
+      useApp.getState().setView('automations');
+      toast.success('Automation saved to Cowork');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCreating(false);
+    }
+  };
+
   const frameSrc = (file: string) => `/api/show2plan/${sessionId}/frames/${file}`;
   const result = status.data?.result ?? null;
   const warnings = status.data?.warnings ?? [];
@@ -244,7 +288,9 @@ export function Show2Plan() {
     recording: { title: 'Recording', desc: 'Point at things and say what is wrong or what should change. Press Mark when the screen shows exactly what you mean.' },
     uploading: { title: 'Finishing up', desc: 'Sending the recording to shmakk.' },
     processing: { title: 'Making tasks', desc: 'This usually takes under a minute.' },
-    review: { title: 'Review the tasks', desc: 'Edit anything that is off. Each task is reviewed against its acceptance criteria before it counts as done.' },
+    review: status.data?.result?.mode === 'automation'
+      ? { title: 'Review the automation', desc: 'The steps you did and said, in order. Edit or remove any, then save it to Cowork.' }
+      : { title: 'Review the tasks', desc: 'Edit anything that is off. Each task is reviewed against its acceptance criteria before it counts as done.' },
   };
 
   return (
@@ -258,15 +304,22 @@ export function Show2Plan() {
         <DialogBody>
           {phase === 'setup' ? (
             <div className="grid gap-3.5">
-              <ol className="m-0 grid gap-1.5 pl-5 text-[13px] text-dim">
+              {deliverable === 'tasks' ? <ol className="m-0 grid gap-1.5 pl-5 text-[13px] text-dim">
                 <li>Choose the screen, window or tab that shows the problem.</li>
                 <li>Talk while you click around: "this button is too small", "this should show the date", "saving here throws an error".</li>
                 <li>Stop. You get tasks with instructions and acceptance criteria to check before they go to Plans.</li>
-              </ol>
-              <div className="grid gap-1.5">
-                <label htmlFor="s2p-note" className="text-[12.5px] font-medium text-dim">Anything to say up front? <span className="text-faint">(optional)</span></label>
-                <textarea id="s2p-note" className={cn(field, 'min-h-16 resize-y')} value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Checkout flow on mobile, the bugs we saw in yesterday's demo" />
-              </div>
+              </ol> : null}
+              <Segmented<Deliverable>
+                label="Deliverable"
+                value={deliverable}
+                onChange={setDeliverable}
+                fullWidth
+                options={[
+                  { value: 'tasks', label: <span className="inline-flex items-center gap-1.5"><ListChecks className="size-3.5" />Tasks</span> },
+                  { value: 'automation', label: <span className="inline-flex items-center gap-1.5"><Workflow className="size-3.5" />Automation</span> },
+                ]}
+              />
+              {deliverable === 'automation' ? <p className="m-0 text-[12.5px] text-dim">Do the steps while you say them ("click Export, choose CSV, save"). They become a Cowork automation you can rerun. Needs a vision-capable model.</p> : null}
               <label className="inline-flex items-center gap-2 text-[13px] text-dim">
                 <Switch checked={useMic} onCheckedChange={setUseMic} />
                 {useMic ? <Mic className="size-4" /> : <MicOff className="size-4" />}
@@ -343,7 +396,7 @@ export function Show2Plan() {
               {result.transcript.text ? (
                 <div>
                   <button type="button" className="inline-flex items-center gap-1 text-[12.5px] text-dim hover:text-fg" onClick={() => setShowTranscript((v) => !v)} aria-expanded={showTranscript}>
-                    {showTranscript ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}What you said ({result.transcript.source === 'whisper' ? 'server transcription' : 'live transcript'})
+                    {showTranscript ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}What you said ({result.transcript.source === 'browser' ? 'live transcript' : 'server transcription'})
                   </button>
                   {showTranscript ? <p className="m-0 mt-1.5 rounded-lg border border-line bg-sunken px-3 py-2 text-[12.5px] text-dim">{result.transcript.text}</p> : null}
                 </div>
@@ -353,7 +406,25 @@ export function Show2Plan() {
                 <label htmlFor="s2p-title" className="text-[12px] font-medium text-dim">Plan title</label>
                 <Input id="s2p-title" value={title} onChange={(e) => setTitle(e.target.value)} />
               </div>
-              {tasks.length ? <TaskDrafts tasks={tasks} onChange={setTasks} frameSrc={frameSrc} /> : (
+              {result.mode === 'automation' ? (
+                <div className="grid gap-2">
+                  {(result.automation?.warnings ?? []).map((w) => <p key={w} className="m-0 rounded-lg border border-warn/40 bg-warn/10 px-3 py-2 text-[12.5px] text-warn">{w}</p>)}
+                  {actions.length ? (
+                    <ol className="m-0 grid list-none gap-1.5 p-0">
+                      {actions.map((a, i) => (
+                        <li key={i} className="flex items-start gap-2 rounded-xl border border-line bg-raised px-3 py-2">
+                          <span className="mt-1.5 shrink-0 rounded-md bg-accent/15 px-1.5 text-[11px] font-semibold uppercase text-accent">{a.action}</span>
+                          <div className="grid min-w-0 flex-1 gap-1">
+                            <Input value={a.description} onChange={(e) => setActions(actions.map((x, j) => (j === i ? { ...x, description: e.target.value } : x)))} aria-label={`Step ${i + 1}`} className="h-8 text-[13px]" />
+                            {a.target || a.value ? <span className="text-[12px] text-faint">{[a.target && `on ${a.target}`, a.value && `value "${a.value}"`].filter(Boolean).join(' · ')}</span> : null}
+                          </div>
+                          <Button variant="ghost" size="icon-sm" aria-label="Remove step" onClick={() => setActions(actions.filter((_, j) => j !== i))}><Trash2 /></Button>
+                        </li>
+                      ))}
+                    </ol>
+                  ) : <p className="m-0 text-[13px] text-dim">No steps were recognised. Record again and say each action as you do it.</p>}
+                </div>
+              ) : tasks.length ? <TaskDrafts tasks={tasks} onChange={setTasks} frameSrc={frameSrc} /> : (
                 <div className="grid gap-2 rounded-lg border border-dashed border-line-strong px-3 py-4 text-center text-[13px] text-dim">
                   No tasks came out of this recording.
                   <div><Button size="sm" onClick={() => setTasks([{ key: 'n1', title: '', kind: 'change', layer: 'frontend', priority: 'normal', instructions: '', acceptance: [], files: [], dependsOn: [], questions: [] }])}><Plus />Write one</Button></div>
@@ -365,7 +436,7 @@ export function Show2Plan() {
                   <ul className="m-0 grid gap-0.5 pl-4 text-[12.5px] text-dim">{result.uncertain.map((u) => <li key={u}>{u}</li>)}</ul>
                 </div>
               ) : null}
-              <label className="inline-flex items-center gap-2 text-[12.5px] text-dim"><Switch checked={signoff} onCheckedChange={setSignoff} />Tasks need my sign-off after they pass review</label>
+              {result.mode !== 'automation' ? <label className="inline-flex items-center gap-2 text-[12.5px] text-dim"><Switch checked={signoff} onCheckedChange={setSignoff} />Tasks need my sign-off after they pass review</label> : null}
             </div>
           ) : null}
         </DialogBody>
@@ -394,8 +465,14 @@ export function Show2Plan() {
           {phase === 'review' ? (
             <>
               <Button variant="ghost" onClick={() => { discard(); reset(); }}><Camera />Record again</Button>
-              <Button disabled={!tasks.length || creating} onClick={() => void createPlan(false)}><Plus />Create plan</Button>
-              <Button variant="primary" disabled={!tasks.length || creating} onClick={() => void createPlan(true)}>{creating ? <Spinner className="size-4" /> : <Play />}Create and start</Button>
+              {result?.mode === 'automation' ? (
+                <Button variant="primary" disabled={!actions.length || creating} onClick={() => void saveAutomation()}>{creating ? <Spinner className="size-4" /> : <Save />}Save to Cowork</Button>
+              ) : (
+                <>
+                  <Button disabled={!tasks.length || creating} onClick={() => void createPlan(false)}><Plus />Create plan</Button>
+                  <Button variant="primary" disabled={!tasks.length || creating} onClick={() => void createPlan(true)}>{creating ? <Spinner className="size-4" /> : <Play />}Create and start</Button>
+                </>
+              )}
             </>
           ) : null}
         </DialogFooter>

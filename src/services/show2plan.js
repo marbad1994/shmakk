@@ -216,13 +216,15 @@ function createShow2PlanManager({ getWorkspace, broadcast = () => {}, getModel =
   async function transcribe(s, opts) {
     const wav = path.join(dirOf(s.id), 'audio.wav');
     const live = coerceLiveTranscript(opts.liveTranscript, opts.durationSec);
+    // Server transcription: DeepSeek's hosted ASR when configured, else local Whisper.
     let canStt = false;
     try { require.resolve('@huggingface/transformers'); canStt = true; } catch {}
+    try { if (!canStt && require('./stt')._deepseekAsrConfig()) canStt = true; } catch {}
     if (s.hasAudio && canStt) {
       try {
         const { transcribeTimestamped } = require('./stt');
         const r = await transcribeTimestamped(wav, { language: opts.language });
-        const pick = chooseTranscript({ ...r, source: 'whisper' }, live);
+        const pick = chooseTranscript({ ...r, source: r.engine === 'deepseek-asr' ? 'deepseek' : 'whisper' }, live);
         if (pick.dropped && pick.transcript === live && live.text) s.warnings.push('Server transcription heard little or no speech, so the live browser transcript was used.');
         if (pick.transcript && pick.transcript.text) return pick.transcript;
       } catch (e) {
@@ -251,6 +253,7 @@ function createShow2PlanManager({ getWorkspace, broadcast = () => {}, getModel =
     const frameObjs = selected.map((f, i) => ({ index: i, file: f.file, path: path.join(dirOf(s.id), 'frames', f.file), t: f.t, reason: f.reason, transcript: (segmentAt(f.t) || {}).text || null }));
 
     let analysis = null;
+    let rawAnalysis = null;
     let findings = [];
     stage('analyzing');
     const vision = require('./vision');
@@ -258,6 +261,7 @@ function createShow2PlanManager({ getWorkspace, broadcast = () => {}, getModel =
       try {
         const a = await vision.analyzeRecording({ frames: frameObjs, transcript, instructions, signal: s.ctrl.signal });
         const { normalizeAnalysis } = require('./showtell');
+        rawAnalysis = a.analysis;
         analysis = normalizeAnalysis(a.analysis);
         findings = analysis.findings;
       } catch (e) {
@@ -266,6 +270,30 @@ function createShow2PlanManager({ getWorkspace, broadcast = () => {}, getModel =
       }
     } else if (frameObjs.length) {
       s.warnings.push('No vision-capable model is configured, so screenshots were not analysed. Tasks are built from the narration; the screenshots stay attached as context.');
+    }
+
+    // Automation: the narration is a sequence of steps to replay, not changes
+    // to the code. That needs the vision model to see what was acted on.
+    if (opts.mode === 'automation') {
+      if (!rawAnalysis) throw new Error('An automation needs a vision-capable model to see what you clicked. Configure one (a visionSupport endpoint, or a model marked vision:true), or record Tasks instead.');
+      const { toAutomation } = require('./showtell');
+      const automation = toAutomation(rawAnalysis);
+      s.result = {
+        mode: 'automation',
+        title: analysis.goal || analysis.summary || 'Recorded automation',
+        summary: analysis.summary || '',
+        app: analysis.app,
+        transcript: { text: transcript.text, segments: transcript.segments, source: transcript.source },
+        frames: frameObjs.map((f) => ({ file: f.file, t: f.t, reason: f.reason, transcript: f.transcript })),
+        allFrames: s.frames.length,
+        tasks: [],
+        automation,
+        via: 'model',
+        uncertain: analysis.uncertain || [],
+      };
+      fs.writeFileSync(path.join(dirOf(s.id), 'result.json'), JSON.stringify(s.result, null, 2));
+      stage('done');
+      return;
     }
 
     const frameFiles = frameObjs.map((f) => f.file);
@@ -301,6 +329,7 @@ function createShow2PlanManager({ getWorkspace, broadcast = () => {}, getModel =
     });
 
     s.result = {
+      mode: 'tasks',
       title: (analysis && (analysis.goal || analysis.summary)) || out.summary || (tasks[0] && tasks[0].title) || 'Show & tell',
       summary: (analysis && analysis.summary) || out.summary || '',
       app: analysis && analysis.app,

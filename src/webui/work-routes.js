@@ -45,7 +45,7 @@ function registerWorkRoutes(add, app, { HttpError, ws }) {
   add('POST', '/api/show2plan/:id/frame', wrap(({ params, raw, query }) => s2p().addFrame(params.id, raw, { t: query.t, mark: query.mark === '1', score: query.score, type: query.type })));
   add('POST', '/api/show2plan/:id/audio', wrap(({ params, raw }) => s2p().setAudio(params.id, raw)));
   add('POST', '/api/show2plan/:id/process', wrap(({ params, body }) => s2p().process(params.id, {
-    instructions: body.instructions, liveTranscript: body.liveTranscript, durationSec: body.durationSec,
+    instructions: body.instructions, liveTranscript: body.liveTranscript, durationSec: body.durationSec, mode: body.mode === 'automation' ? 'automation' : 'tasks',
     language: body.language || app.settings.voiceLanguage || undefined, budget: body.budget,
   })));
   add('GET', '/api/show2plan/:id/frames/:file', wrap(({ params }) => {
