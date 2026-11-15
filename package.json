@@ -1,7 +1,7 @@
 {
   "name": "shmakk",
   "version": "1.3.0",
-  "description": "AI-supervised terminal wrapper \u2014 command correction, tool-driven tasks, safety controls \u2014 with a web and desktop interface",
+  "description": "AI-supervised terminal wrapper — command correction, tool-driven tasks, safety controls — with a web and desktop interface",
   "license": "MIT",
   "keywords": [
     "terminal",
@@ -69,7 +69,7 @@
     "ws": "^8.23.0"
   },
   "optionalDependencies": {
-    "@huggingface/transformers": "^4.2.0",
+    "@huggingface/transformers": "^4.3.2",
     "better-sqlite3": "^11.0.0",
     "kokoro-js": "^1.2.1"
   },

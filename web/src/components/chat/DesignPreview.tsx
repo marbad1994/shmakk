@@ -31,7 +31,6 @@ const clampZoom = (z: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.roun
 
 // Previewed file, shown in the toolbar without its extension.
 const fileLabel = (p: string) => (p.split('/').pop() || p).replace(/\.(html?|svg)$/i, '');
-const fileDir = (p: string) => p.split('/').slice(0, -1).join('/');
 
 /**
  * The vault is browsed by title, so a saved screen is named after what it is
@@ -205,11 +204,8 @@ export function DesignPreview({ convId, running }: { convId: string | null; runn
           <DropdownMenuLabel>{pages.length > 1 ? `${pages.length} files` : 'File'}</DropdownMenuLabel>
           <DropdownMenuRadioGroup value={current ?? ''} onValueChange={setFile}>
             {pages.map((p) => (
-              <DropdownMenuRadioItem key={p} value={p}>
-                <span className="grid min-w-0">
-                  <span className="truncate font-mono text-[13px]">{fileLabel(p)}</span>
-                  <span className="truncate font-mono text-[11px] text-faint">{fileDir(p) || '.'}</span>
-                </span>
+              <DropdownMenuRadioItem key={p} value={p} className="font-mono text-[13px]">
+                <span className="truncate">{fileLabel(p)}</span>
               </DropdownMenuRadioItem>
             ))}
           </DropdownMenuRadioGroup>

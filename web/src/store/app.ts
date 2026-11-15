@@ -93,6 +93,7 @@ interface AppState {
   settingsOpen: boolean;
   folderPickerOpen: boolean;
   keyboardOpen: boolean;
+  show2planOpen: boolean;
   draft: { text: string; mode: 'ask' | 'shell'; nonce: number } | null;
 
   init(): Promise<void>;
@@ -124,6 +125,7 @@ interface AppState {
   setPalette(open: boolean): void;
   setFolderPicker(open: boolean): void;
   setKeyboard(open: boolean): void;
+  setShow2plan(open: boolean): void;
   startSession(opts: { repo: string; branch?: string; newBranch?: string; prompt?: string }): Promise<void>;
 }
 
@@ -242,6 +244,7 @@ export const useApp = create<AppState>((set, get) => {
     loading: false,
     sidebarOpen: window.innerWidth >= 1024 && localStorage.getItem('shmakk.sidebar') !== '0',
     keyboardOpen: false,
+    show2planOpen: false,
     dockOpen: false,
     rightOpen: draftRight.open,
     rightPane: draftRight.pane,
@@ -455,6 +458,7 @@ export const useApp = create<AppState>((set, get) => {
     setPalette(open) { set({ paletteOpen: open }); },
     setFolderPicker(open) { set({ folderPickerOpen: open }); },
     setKeyboard(open) { set({ keyboardOpen: open }); },
+    setShow2plan(open) { set({ show2planOpen: open }); },
 
     // Clone a GitHub repository on the server and open a conversation on it.
     async startSession(opts) {

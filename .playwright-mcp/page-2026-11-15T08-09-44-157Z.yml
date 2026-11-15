@@ -1,0 +1,461 @@
+- generic [ref=f4e2]:
+  - generic [ref=f4e3]:
+    - link "Skip to message box" [ref=f4e4] [cursor=pointer]:
+      - /url: "#composer-input"
+    - complementary "Navigation" [ref=f4e6]:
+      - generic [ref=f4e7]:
+        - button "shmakk, new chat" [ref=f4e8] [cursor=pointer]:
+          - generic [aria-hidden] [ref=f4e9]: ❯
+          - text: shmakk
+        - button "Hide sidebar" [ref=f4e11] [cursor=pointer]
+      - tablist "Mode" [ref=f4e12]:
+        - tab "Chat" [ref=f4e13] [cursor=pointer]
+        - tab "Code" [ref=f4e16] [cursor=pointer]
+        - tab "Design" [selected] [ref=f4e21] [cursor=pointer]
+        - tab "Cowork" [ref=f4e28] [cursor=pointer]
+      - button "New design" [ref=f4e34] [cursor=pointer]
+      - generic [ref=f4e37]:
+        - generic [ref=f4e38]:
+          - generic [ref=f4e39]: Projects
+          - button "New project" [ref=f4e40] [cursor=pointer]
+        - button "ShmakkGui" [ref=f4e42] [cursor=pointer]
+        - list "Design conversations" [ref=f4e47]:
+          - generic [ref=f4e48]:
+            - generic [ref=f4e49]: Today
+            - listitem [ref=f4e50]:
+              - button "Landing page redesign" [ref=f4e51] [cursor=pointer]
+              - button "Options for Landing page redesign" [ref=f4e53] [cursor=pointer]
+            - listitem [ref=f4e58]:
+              - button "Design a landing page for a saas AI mareting platf…" [ref=f4e59] [cursor=pointer]
+              - button "Options for Design a landing page for a saas AI mareting platf…" [ref=f4e61] [cursor=pointer]
+            - listitem [ref=f4e66]:
+              - button "Design a three-screen mobile onboarding for a habi…" [ref=f4e67] [cursor=pointer]
+              - button "Options for Design a three-screen mobile onboarding for a habi…" [ref=f4e69] [cursor=pointer]
+            - listitem [ref=f4e74]:
+              - button "Design an analytics dashboard for a small online s…" [ref=f4e75] [cursor=pointer]
+              - button "Options for Design an analytics dashboard for a small online s…" [ref=f4e77] [cursor=pointer]
+      - generic [ref=f4e83]:
+        - button "Account menu, marcusb" [ref=f4e84] [cursor=pointer]:
+          - generic [aria-hidden] [ref=f4e85]: m
+          - generic [ref=f4e86]:
+            - generic [ref=f4e87]: marcusb
+            - generic [ref=f4e88]: shmakk
+        - button "Settings" [ref=f4e90] [cursor=pointer]
+    - generic [ref=f4e94]:
+      - banner [ref=f4e95]:
+        - button "Show sidebar" [ref=f4e212] [cursor=pointer]
+        - heading [level=1] [ref=f4e96]:
+          - generic "Design mode" [ref=f4e97]
+          - text: Landing page redesign
+        - generic "Design preview controls" [ref=f4e104]:
+          - generic [ref=f4e105]:
+            - button "Choose file to preview" [ref=f4e106] [cursor=pointer]:
+              - generic [ref=f4e107]: index
+              - generic [ref=f4e108]: "4"
+            - radiogroup "Preview size" [ref=f4e109]:
+              - radio "desktop" [checked] [ref=f4e110] [cursor=pointer]
+              - radio "tablet" [ref=f4e113] [cursor=pointer]
+              - radio "phone" [ref=f4e116] [cursor=pointer]
+            - group "Zoom" [ref=f4e119]:
+              - button "Zoom out" [ref=f4e120] [cursor=pointer]
+              - button "Reset zoom to 100%" [ref=f4e122] [cursor=pointer]: 100%
+              - button "Zoom in" [ref=f4e123] [cursor=pointer]
+            - button "v1" [ref=f4e125] [cursor=pointer]
+            - button "Edit on canvas" [ref=f4e126] [cursor=pointer]
+            - button "Toggle code" [ref=f4e127] [cursor=pointer]
+            - button "Save as artefact" [ref=f4e128] [cursor=pointer]
+            - button "Open in a new tab" [ref=f4e129] [cursor=pointer]
+      - generic [ref=f4e130]:
+        - main [ref=f4e131]:
+          - generic [ref=f4e132]:
+            - generic [ref=f4e133]:
+              - generic [ref=f4e135]:
+                - heading "What should we design?" [level=2] [ref=f4e143]
+                - paragraph [ref=f4e144]: Describe a screen or a flow. shmakk builds it as real, clickable HTML next to the chat and keeps every version.
+                - generic [ref=f4e145]:
+                  - 'button "landing page Design a landing page for a coffee subscription: warm, editorial, one clear call to action" [ref=f4e146] [cursor=pointer]':
+                    - generic [ref=f4e147]: landing page
+                    - generic [ref=f4e148]: "Design a landing page for a coffee subscription: warm, editorial, one clear call to action"
+                  - 'button "dashboard Design an analytics dashboard for a small online shop: revenue, orders, top products" [ref=f4e149] [cursor=pointer]':
+                    - generic [ref=f4e150]: dashboard
+                    - generic [ref=f4e151]: "Design an analytics dashboard for a small online shop: revenue, orders, top products"
+                  - button "mobile flow Design a three-screen mobile onboarding for a habit tracker" [ref=f4e152] [cursor=pointer]:
+                    - generic [ref=f4e153]: mobile flow
+                    - generic [ref=f4e154]: Design a three-screen mobile onboarding for a habit tracker
+                  - button "options Give me three different directions for a pricing page, as separate files" [ref=f4e155] [cursor=pointer]:
+                    - generic [ref=f4e156]: options
+                    - generic [ref=f4e157]: Give me three different directions for a pricing page, as separate files
+                - button "Show different examples" [ref=f4e158] [cursor=pointer]: Show me something else
+              - generic [ref=f4e162]:
+                - generic [ref=f4e163]:
+                  - generic [aria-hidden] [ref=f4e164]: ❯
+                  - textbox "Message shmakk" [ref=f4e165]:
+                    - /placeholder: Describe what to design
+                - generic [ref=f4e166]:
+                  - button "deepseek-v4-flash" [ref=f4e168] [cursor=pointer]
+                  - button "Attach files" [ref=f4e174] [cursor=pointer]
+                  - button "Read replies aloud" [ref=f4e175] [cursor=pointer]
+                  - button "Voice input" [ref=f4e176] [cursor=pointer]
+                  - button "Send" [disabled] [ref=f4e177]
+            - iframe [ref=f4e184]
+        - complementary "Inspector" [ref=f4e213]:
+          - generic [ref=f4e185]:
+            - generic [ref=f4e186]: Browser
+            - button "Close inspector" [ref=f4e190] [cursor=pointer]
+          - generic [ref=f4e215]:
+            - generic [ref=f4e191]:
+              - generic [ref=f4e216]:
+                - textbox "Preview URL" [ref=f4e192]:
+                  - /placeholder: http://localhost:5173
+                  - text: http://localhost:5173
+                - button "Open address" [ref=f4e193] [cursor=pointer]
+              - button "Reload preview" [ref=f4e194] [cursor=pointer]
+              - button "Open in a new tab" [ref=f4e195] [cursor=pointer]
+            - generic [ref=f4e196]:
+              - generic [ref=f4e217]:
+                - button ":5173" [ref=f4e197] [cursor=pointer]
+                - button ":3000" [ref=f4e198] [cursor=pointer]
+                - button ":8080" [ref=f4e199] [cursor=pointer]
+              - radiogroup "Preview size" [ref=f4e200]:
+                - radio "desktop" [checked] [ref=f4e201] [cursor=pointer]
+                - radio "tablet" [ref=f4e204] [cursor=pointer]
+                - radio "phone" [ref=f4e207] [cursor=pointer]
+            - iframe [ref=f4e220]:
+              - generic [ref=f5e2]:
+                - generic [ref=f5e3]:
+                  - link "Skip to message box" [ref=f5e4] [cursor=pointer]:
+                    - /url: "#composer-input"
+                  - complementary "Navigation" [ref=f5e6]:
+                    - button "shmakk, new chat" [ref=f5e8] [cursor=pointer]:
+                      - generic [aria-hidden] [ref=f5e9]: ❯
+                      - text: shmakk
+                    - tablist "Mode" [ref=f5e11]:
+                      - tab "Chat" [ref=f5e12] [cursor=pointer]
+                      - tab "Code" [selected] [ref=f5e15] [cursor=pointer]
+                      - tab "Design" [ref=f5e20] [cursor=pointer]
+                      - tab "Cowork" [ref=f5e27] [cursor=pointer]
+                    - button "New session" [ref=f5e33] [cursor=pointer]
+                    - generic [ref=f5e36]:
+                      - generic [ref=f5e37]:
+                        - generic [ref=f5e38]: Projects
+                        - button "New project" [ref=f5e39] [cursor=pointer]
+                      - button "ShmakkGui" [ref=f5e41] [cursor=pointer]
+                      - list "Code conversations" [ref=f5e46]:
+                        - generic [ref=f5e47]:
+                          - generic [ref=f5e48]: Today
+                          - listitem [ref=f5e49]:
+                            - 'button "bugs: code in design should be highlighted, there… In project ShmakkGui" [ref=f5e50] [cursor=pointer]':
+                              - generic [ref=f5e51]: "bugs: code in design should be highlighted, there…"
+                              - generic "In project ShmakkGui" [ref=f5e52]
+                            - 'button "Options for bugs: code in design should be highlighted, there…" [ref=f5e53] [cursor=pointer]'
+                          - listitem [ref=f5e58]:
+                            - button "in the drop down menu in the left bottom corner wi… In project ShmakkGui" [ref=f5e59] [cursor=pointer]:
+                              - generic [ref=f5e60]: in the drop down menu in the left bottom corner wi…
+                              - generic "In project ShmakkGui" [ref=f5e61]
+                            - button "Options for in the drop down menu in the left bottom corner wi…" [ref=f5e62] [cursor=pointer]
+                          - listitem [ref=f5e67]:
+                            - button "we need to improve design mode. 1. the code in the… In project ShmakkGui" [ref=f5e68] [cursor=pointer]:
+                              - generic [ref=f5e69]: we need to improve design mode. 1. the code in the…
+                              - generic "In project ShmakkGui" [ref=f5e70]
+                            - button "Options for we need to improve design mode. 1. the code in the…" [ref=f5e71] [cursor=pointer]
+                          - listitem [ref=f5e76]:
+                            - button "Lets create a file vault with artefacts. the page…" [ref=f5e77] [cursor=pointer]
+                            - button "Options for Lets create a file vault with artefacts. the page…" [ref=f5e79] [cursor=pointer]
+                          - listitem [ref=f5e84]:
+                            - button "you can see the bottom bar there. all of that is r…" [ref=f5e85] [cursor=pointer]
+                            - button "Options for you can see the bottom bar there. all of that is r…" [ref=f5e87] [cursor=pointer]
+                          - listitem [ref=f5e92]:
+                            - button "this should be removed from all modes, the can be…" [ref=f5e93] [cursor=pointer]
+                            - button "Options for this should be removed from all modes, the can be…" [ref=f5e95] [cursor=pointer]
+                          - listitem [ref=f5e100]:
+                            - button "📎 notes-e2e.txt" [ref=f5e101] [cursor=pointer]
+                            - button "Options for 📎 notes-e2e.txt" [ref=f5e103] [cursor=pointer]
+                          - listitem [ref=f5e108]:
+                            - button "📎 notes-e2e.txt" [ref=f5e109] [cursor=pointer]
+                            - button "Options for 📎 notes-e2e.txt" [ref=f5e111] [cursor=pointer]
+                          - listitem [ref=f5e116]:
+                            - button "REmove the profile and review and yes files from t…" [ref=f5e117] [cursor=pointer]
+                            - button "Options for REmove the profile and review and yes files from t…" [ref=f5e119] [cursor=pointer]
+                        - generic [ref=f5e124]:
+                          - generic [ref=f5e125]: Yesterday
+                          - listitem [ref=f5e126]:
+                            - button "This is..." [ref=f5e127] [cursor=pointer]
+                            - button "Options for This is..." [ref=f5e129] [cursor=pointer]
+                          - listitem [ref=f5e134]:
+                            - button "The web app has \"new chat\" but it doesnt actually…" [ref=f5e135] [cursor=pointer]
+                            - button "Options for The web app has \"new chat\" but it doesnt actually…" [ref=f5e137] [cursor=pointer]
+                          - listitem [ref=f5e142]:
+                            - button "Whats the weather in new york right now?" [ref=f5e143] [cursor=pointer]
+                            - button "Options for Whats the weather in new york right now?" [ref=f5e145] [cursor=pointer]
+                          - listitem [ref=f5e150]:
+                            - button "touch pwned" [ref=f5e151] [cursor=pointer]
+                            - button "Options for touch pwned" [ref=f5e153] [cursor=pointer]
+                          - listitem [ref=f5e158]:
+                            - button "GitHub session on marbad1994/SocialPostAPI marbad1994/SocialPostAPI · shmakk/test" [ref=f5e159] [cursor=pointer]:
+                              - img "GitHub session on marbad1994/SocialPostAPI" [ref=f5e160]
+                              - generic [ref=f5e164]: marbad1994/SocialPostAPI · shmakk/test
+                            - button "Options for marbad1994/SocialPostAPI · shmakk/test" [ref=f5e165] [cursor=pointer]
+                          - listitem [ref=f5e170]:
+                            - button "git status" [ref=f5e171] [cursor=pointer]
+                            - button "Options for git status" [ref=f5e173] [cursor=pointer]
+                    - generic [ref=f5e179]:
+                      - button "Account menu, marcusb" [ref=f5e180] [cursor=pointer]:
+                        - generic [aria-hidden] [ref=f5e181]: m
+                        - generic [ref=f5e182]:
+                          - generic [ref=f5e183]: marcusb
+                          - generic [ref=f5e184]: shmakk
+                      - button "Settings" [ref=f5e186] [cursor=pointer]
+                  - generic [ref=f5e190]:
+                    - banner [ref=f5e191]:
+                      - button "Open menu" [ref=f5e192] [cursor=pointer]
+                      - heading [level=1] [ref=f5e193]:
+                        - generic "Code mode" [ref=f5e194]
+                        - text: New session
+                      - button "New session" [ref=f5e199] [cursor=pointer]
+                      - group "Inspector panels" [ref=f5e200]:
+                        - button "Browser" [ref=f5e201] [cursor=pointer]
+                        - button "Changes" [ref=f5e202] [cursor=pointer]
+                        - button "Plan" [ref=f5e203] [cursor=pointer]
+                    - generic [ref=f5e204]:
+                      - main [ref=f5e205]:
+                        - generic [ref=f5e206]:
+                          - generic [ref=f5e208]:
+                            - heading "What are we building in shmakk?" [level=2] [ref=f5e214]
+                            - paragraph [ref=f5e215]: Ask for a change, run a command, or hand over a whole task. shmakk reads, edits and runs inside your workspace, and asks before anything risky.
+                            - button [ref=f5e216] [cursor=pointer]:
+                              - generic [ref=f5e221]:
+                                - strong [ref=f5e222]: Start from a GitHub repository
+                                - text: Clone a repo here and work on it in its own session, then push and open a PR when you’re done.
+                            - generic [ref=f5e225]:
+                              - 'button "understand Give me a tour of this codebase: entry points, structure, and how to run it" [ref=f5e226] [cursor=pointer]':
+                                - generic [ref=f5e227]: understand
+                                - generic [ref=f5e228]: "Give me a tour of this codebase: entry points, structure, and how to run it"
+                              - button "fix Run the tests and fix whatever is failing" [ref=f5e229] [cursor=pointer]:
+                                - generic [ref=f5e230]: fix
+                                - generic [ref=f5e231]: Run the tests and fix whatever is failing
+                              - button "shell $ git status" [ref=f5e232] [cursor=pointer]:
+                                - generic [ref=f5e233]: shell
+                                - generic [ref=f5e234]: $ git status
+                              - button "review Review my uncommitted changes for bugs and risky edits" [ref=f5e235] [cursor=pointer]:
+                                - generic [ref=f5e236]: review
+                                - generic [ref=f5e237]: Review my uncommitted changes for bugs and risky edits
+                            - button "Show different examples" [ref=f5e238] [cursor=pointer]: Show me something else
+                          - generic [ref=f5e242]:
+                            - generic [ref=f5e243]:
+                              - generic [aria-hidden] [ref=f5e244]: ❯
+                              - textbox "Message shmakk" [ref=f5e245]:
+                                - /placeholder: Ask shmakk anything — / for commands
+                            - generic [ref=f5e246]:
+                              - generic [ref=f5e247]:
+                                - radiogroup "Input mode" [ref=f5e248]:
+                                  - radio "ask" [checked] [ref=f5e249] [cursor=pointer]
+                                  - radio "shell" [ref=f5e250] [cursor=pointer]
+                                - button "deepseek-v4-flash" [ref=f5e251] [cursor=pointer]
+                              - button "Attach files" [ref=f5e257] [cursor=pointer]
+                              - button "Read replies aloud" [ref=f5e258] [cursor=pointer]
+                              - button "Voice input" [ref=f5e259] [cursor=pointer]
+                              - button "Send" [disabled] [ref=f5e260]
+                      - complementary "Inspector" [ref=f5e263]:
+                        - generic [ref=f5e264]:
+                          - generic [ref=f5e265]: Browser
+                          - button "Close inspector" [ref=f5e269] [cursor=pointer]
+                        - generic [ref=f5e271]:
+                          - generic [ref=f5e272]:
+                            - generic [ref=f5e273]:
+                              - textbox "Preview URL" [ref=f5e274]:
+                                - /placeholder: http://localhost:5173
+                                - text: http://localhost:5173
+                              - button "Open address" [ref=f5e275] [cursor=pointer]
+                            - button "Reload preview" [ref=f5e276] [cursor=pointer]
+                            - button "Open in a new tab" [ref=f5e277] [cursor=pointer]
+                          - generic [ref=f5e278]:
+                            - generic [ref=f5e279]:
+                              - button ":5173" [ref=f5e280] [cursor=pointer]
+                              - button ":3000" [ref=f5e281] [cursor=pointer]
+                              - button ":8080" [ref=f5e282] [cursor=pointer]
+                            - radiogroup "Preview size" [ref=f5e283]:
+                              - radio "desktop" [checked] [ref=f5e284] [cursor=pointer]
+                              - radio "tablet" [ref=f5e287] [cursor=pointer]
+                              - radio "phone" [ref=f5e290] [cursor=pointer]
+                          - iframe [ref=f5e295]:
+                            - generic [ref=f6e2]:
+                              - generic [ref=f6e3]:
+                                - link "Skip to message box" [ref=f6e4] [cursor=pointer]:
+                                  - /url: "#composer-input"
+                                - complementary "Navigation" [ref=f6e6]:
+                                  - button "shmakk, new chat" [ref=f6e8] [cursor=pointer]:
+                                    - generic [aria-hidden] [ref=f6e9]: ❯
+                                    - text: shmakk
+                                  - tablist "Mode" [ref=f6e11]:
+                                    - tab "Chat" [ref=f6e12] [cursor=pointer]
+                                    - tab "Code" [selected] [ref=f6e15] [cursor=pointer]
+                                    - tab "Design" [ref=f6e20] [cursor=pointer]
+                                    - tab "Cowork" [ref=f6e27] [cursor=pointer]
+                                  - button "New session" [ref=f6e33] [cursor=pointer]
+                                  - generic [ref=f6e36]:
+                                    - generic [ref=f6e37]:
+                                      - generic [ref=f6e38]: Projects
+                                      - button "New project" [ref=f6e39] [cursor=pointer]
+                                    - button "ShmakkGui" [ref=f6e41] [cursor=pointer]
+                                    - list "Code conversations" [ref=f6e46]:
+                                      - generic [ref=f6e47]:
+                                        - generic [ref=f6e48]: Today
+                                        - listitem [ref=f6e49]:
+                                          - 'button "bugs: code in design should be highlighted, there… In project ShmakkGui" [ref=f6e50] [cursor=pointer]':
+                                            - generic [ref=f6e51]: "bugs: code in design should be highlighted, there…"
+                                            - generic "In project ShmakkGui" [ref=f6e52]
+                                          - 'button "Options for bugs: code in design should be highlighted, there…" [ref=f6e53] [cursor=pointer]'
+                                        - listitem [ref=f6e58]:
+                                          - button "in the drop down menu in the left bottom corner wi… In project ShmakkGui" [ref=f6e59] [cursor=pointer]:
+                                            - generic [ref=f6e60]: in the drop down menu in the left bottom corner wi…
+                                            - generic "In project ShmakkGui" [ref=f6e61]
+                                          - button "Options for in the drop down menu in the left bottom corner wi…" [ref=f6e62] [cursor=pointer]
+                                        - listitem [ref=f6e67]:
+                                          - button "we need to improve design mode. 1. the code in the… In project ShmakkGui" [ref=f6e68] [cursor=pointer]:
+                                            - generic [ref=f6e69]: we need to improve design mode. 1. the code in the…
+                                            - generic "In project ShmakkGui" [ref=f6e70]
+                                          - button "Options for we need to improve design mode. 1. the code in the…" [ref=f6e71] [cursor=pointer]
+                                        - listitem [ref=f6e76]:
+                                          - button "Lets create a file vault with artefacts. the page…" [ref=f6e77] [cursor=pointer]
+                                          - button "Options for Lets create a file vault with artefacts. the page…" [ref=f6e79] [cursor=pointer]
+                                        - listitem [ref=f6e84]:
+                                          - button "you can see the bottom bar there. all of that is r…" [ref=f6e85] [cursor=pointer]
+                                          - button "Options for you can see the bottom bar there. all of that is r…" [ref=f6e87] [cursor=pointer]
+                                        - listitem [ref=f6e92]:
+                                          - button "this should be removed from all modes, the can be…" [ref=f6e93] [cursor=pointer]
+                                          - button "Options for this should be removed from all modes, the can be…" [ref=f6e95] [cursor=pointer]
+                                        - listitem [ref=f6e100]:
+                                          - button "📎 notes-e2e.txt" [ref=f6e101] [cursor=pointer]
+                                          - button "Options for 📎 notes-e2e.txt" [ref=f6e103] [cursor=pointer]
+                                        - listitem [ref=f6e108]:
+                                          - button "📎 notes-e2e.txt" [ref=f6e109] [cursor=pointer]
+                                          - button "Options for 📎 notes-e2e.txt" [ref=f6e111] [cursor=pointer]
+                                        - listitem [ref=f6e116]:
+                                          - button "REmove the profile and review and yes files from t…" [ref=f6e117] [cursor=pointer]
+                                          - button "Options for REmove the profile and review and yes files from t…" [ref=f6e119] [cursor=pointer]
+                                      - generic [ref=f6e124]:
+                                        - generic [ref=f6e125]: Yesterday
+                                        - listitem [ref=f6e126]:
+                                          - button "This is..." [ref=f6e127] [cursor=pointer]
+                                          - button "Options for This is..." [ref=f6e129] [cursor=pointer]
+                                        - listitem [ref=f6e134]:
+                                          - button "The web app has \"new chat\" but it doesnt actually…" [ref=f6e135] [cursor=pointer]
+                                          - button "Options for The web app has \"new chat\" but it doesnt actually…" [ref=f6e137] [cursor=pointer]
+                                        - listitem [ref=f6e142]:
+                                          - button "Whats the weather in new york right now?" [ref=f6e143] [cursor=pointer]
+                                          - button "Options for Whats the weather in new york right now?" [ref=f6e145] [cursor=pointer]
+                                        - listitem [ref=f6e150]:
+                                          - button "touch pwned" [ref=f6e151] [cursor=pointer]
+                                          - button "Options for touch pwned" [ref=f6e153] [cursor=pointer]
+                                        - listitem [ref=f6e158]:
+                                          - button "GitHub session on marbad1994/SocialPostAPI marbad1994/SocialPostAPI · shmakk/test" [ref=f6e159] [cursor=pointer]:
+                                            - img "GitHub session on marbad1994/SocialPostAPI" [ref=f6e160]
+                                            - generic [ref=f6e164]: marbad1994/SocialPostAPI · shmakk/test
+                                          - button "Options for marbad1994/SocialPostAPI · shmakk/test" [ref=f6e165] [cursor=pointer]
+                                        - listitem [ref=f6e170]:
+                                          - button "git status" [ref=f6e171] [cursor=pointer]
+                                          - button "Options for git status" [ref=f6e173] [cursor=pointer]
+                                  - generic [ref=f6e179]:
+                                    - button "Account menu, marcusb" [ref=f6e180] [cursor=pointer]:
+                                      - generic [aria-hidden] [ref=f6e181]: m
+                                      - generic [ref=f6e182]:
+                                        - generic [ref=f6e183]: marcusb
+                                        - generic [ref=f6e184]: shmakk
+                                    - button "Settings" [ref=f6e186] [cursor=pointer]
+                                - generic [ref=f6e190]:
+                                  - banner [ref=f6e191]:
+                                    - button "Open menu" [ref=f6e192] [cursor=pointer]
+                                    - heading [level=1] [ref=f6e193]:
+                                      - generic "Code mode" [ref=f6e194]
+                                      - text: New session
+                                    - button "New session" [ref=f6e199] [cursor=pointer]
+                                    - group "Inspector panels" [ref=f6e200]:
+                                      - button "Browser" [ref=f6e201] [cursor=pointer]
+                                      - button "Changes" [ref=f6e202] [cursor=pointer]
+                                      - button "Plan" [ref=f6e203] [cursor=pointer]
+                                  - generic [ref=f6e204]:
+                                    - main [ref=f6e205]:
+                                      - generic [ref=f6e206]:
+                                        - generic [ref=f6e208]:
+                                          - heading "What are we building in shmakk?" [level=2] [ref=f6e214]
+                                          - paragraph [ref=f6e215]: Ask for a change, run a command, or hand over a whole task. shmakk reads, edits and runs inside your workspace, and asks before anything risky.
+                                          - button [ref=f6e216] [cursor=pointer]:
+                                            - generic [ref=f6e221]:
+                                              - strong [ref=f6e222]: Start from a GitHub repository
+                                              - text: Clone a repo here and work on it in its own session, then push and open a PR when you’re done.
+                                          - generic [ref=f6e225]:
+                                            - 'button "understand Give me a tour of this codebase: entry points, structure, and how to run it" [ref=f6e226] [cursor=pointer]':
+                                              - generic [ref=f6e227]: understand
+                                              - generic [ref=f6e228]: "Give me a tour of this codebase: entry points, structure, and how to run it"
+                                            - button "fix Run the tests and fix whatever is failing" [ref=f6e229] [cursor=pointer]:
+                                              - generic [ref=f6e230]: fix
+                                              - generic [ref=f6e231]: Run the tests and fix whatever is failing
+                                            - button "shell $ git status" [ref=f6e232] [cursor=pointer]:
+                                              - generic [ref=f6e233]: shell
+                                              - generic [ref=f6e234]: $ git status
+                                            - button "review Review my uncommitted changes for bugs and risky edits" [ref=f6e235] [cursor=pointer]:
+                                              - generic [ref=f6e236]: review
+                                              - generic [ref=f6e237]: Review my uncommitted changes for bugs and risky edits
+                                          - button "Show different examples" [ref=f6e238] [cursor=pointer]: Show me something else
+                                        - generic [ref=f6e242]:
+                                          - generic [ref=f6e243]:
+                                            - generic [aria-hidden] [ref=f6e244]: ❯
+                                            - textbox "Message shmakk" [ref=f6e245]:
+                                              - /placeholder: Ask shmakk anything — / for commands
+                                          - generic [ref=f6e246]:
+                                            - generic [ref=f6e247]:
+                                              - radiogroup "Input mode" [ref=f6e248]:
+                                                - radio "ask" [checked] [ref=f6e249] [cursor=pointer]
+                                                - radio "shell" [ref=f6e250] [cursor=pointer]
+                                              - button "deepseek-v4-flash" [ref=f6e251] [cursor=pointer]
+                                            - button "Attach files" [ref=f6e257] [cursor=pointer]
+                                            - button "Read replies aloud" [ref=f6e258] [cursor=pointer]
+                                            - button "Voice input" [ref=f6e259] [cursor=pointer]
+                                            - button "Send" [disabled] [ref=f6e260]
+                                    - complementary "Inspector" [ref=f6e263]:
+                                      - generic [ref=f6e264]:
+                                        - generic [ref=f6e265]: Browser
+                                        - button "Close inspector" [ref=f6e269] [cursor=pointer]
+                                      - generic [ref=f6e271]:
+                                        - generic [ref=f6e272]:
+                                          - generic [ref=f6e273]:
+                                            - textbox "Preview URL" [ref=f6e274]:
+                                              - /placeholder: http://localhost:5173
+                                              - text: http://localhost:5173
+                                            - button "Open address" [ref=f6e275] [cursor=pointer]
+                                          - button "Reload preview" [ref=f6e276] [cursor=pointer]
+                                          - button "Open in a new tab" [ref=f6e277] [cursor=pointer]
+                                        - generic [ref=f6e278]:
+                                          - generic [ref=f6e279]:
+                                            - button ":5173" [ref=f6e280] [cursor=pointer]
+                                            - button ":3000" [ref=f6e281] [cursor=pointer]
+                                            - button ":8080" [ref=f6e282] [cursor=pointer]
+                                          - radiogroup "Preview size" [ref=f6e283]:
+                                            - radio "desktop" [checked] [ref=f6e284] [cursor=pointer]
+                                            - radio "tablet" [ref=f6e287] [cursor=pointer]
+                                            - radio "phone" [ref=f6e290] [cursor=pointer]
+                                        - iframe [ref=f6e295]
+                                        - generic [ref=f6e296]:
+                                          - generic [ref=f6e297]: Chromium — the agent can drive this page with its browser tools.
+                                          - button "Ask the agent to inspect this page" [ref=f6e298] [cursor=pointer]
+                                  - navigation "Primary" [ref=f6e299]:
+                                    - button "Code" [ref=f6e300] [cursor=pointer]
+                                    - button "Skills" [ref=f6e307] [cursor=pointer]
+                                    - button "Changes" [ref=f6e313] [cursor=pointer]
+                                    - button "Terminal" [ref=f6e318] [cursor=pointer]
+                                    - button "More" [ref=f6e324] [cursor=pointer]
+                              - region "Notifications alt+T"
+                          - generic [ref=f5e296]:
+                            - generic [ref=f5e297]: Chromium — the agent can drive this page with its browser tools.
+                            - button "Ask the agent to inspect this page" [ref=f5e298] [cursor=pointer]
+                    - navigation "Primary" [ref=f5e299]:
+                      - button "Code" [ref=f5e300] [cursor=pointer]
+                      - button "Skills" [ref=f5e307] [cursor=pointer]
+                      - button "Changes" [ref=f5e313] [cursor=pointer]
+                      - button "Terminal" [ref=f5e318] [cursor=pointer]
+                      - button "More" [ref=f5e324] [cursor=pointer]
+                - region "Notifications alt+T"
+            - generic [ref=f4e210]:
+              - generic [ref=f4e221]: Chromium — the agent can drive this page with its browser tools.
+              - button "Ask the agent to inspect this page" [ref=f4e211] [cursor=pointer]
+  - region "Notifications alt+T"

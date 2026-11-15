@@ -2232,6 +2232,411 @@ test('webui server: project, design and automation routes; artifact and webhook 
   } finally { await h.close(); }
 }));
 
+// ── capture (screen + audio) ───────────────────────────────────────────────
+{
+  const { parseInfoLine, buildFfmpegArgs, detect, detectVideo, parseVideoOverride, createSession, extractAudioTrack, probeMedia } = require('../src/services/capture');
+  const { MonotonicClock } = require('../src/services/clock');
+  const { execFile } = require('child_process');
+  const path = require('path');
+
+  test('capture: parseInfoLine parses a showinfo video frame', () => {
+    const line = "[Parsed_showinfo_0 @ 0x7f] n:  42 pts: 2800133 pts_time:2.800133 duration: 66667 fmt:bgr0 s:640x360";
+    const r = parseInfoLine(line);
+    assert.strictEqual(r.kind, 'video');
+    assert.strictEqual(r.n, 42);
+    assert.strictEqual(r.pts, 2800133);
+    assert.strictEqual(r.ptsTime, 2.800133);
+    assert.strictEqual(r.samples, null);
+  });
+
+  test('capture: parseInfoLine parses an ashowinfo audio block', () => {
+    const line = "[Parsed_ashowinfo_0 @ 0x7f] n:  10 pts: 10240 pts_time:0.213333 fmt:s16 r:16000 nb_samples:1024";
+    const r = parseInfoLine(line);
+    assert.strictEqual(r.kind, 'audio');
+    assert.strictEqual(r.n, 10);
+    assert.strictEqual(r.ptsTime, 0.213333);
+    assert.strictEqual(r.samples, 1024);
+  });
+
+  test('capture: parseInfoLine ignores unrelated ffmpeg lines', () => {
+    assert.strictEqual(parseInfoLine('Input #0, x11grab, from :0.0'), null);
+    assert.strictEqual(parseInfoLine(''), null);
+  });
+
+  test('capture: buildFfmpegArgs emits x11grab + pulse muxed matroska', () => {
+    const args = buildFfmpegArgs({
+      video: { backend: 'x11grab', display: ':0.0' },
+      audio: { backend: 'pulse', device: 'default' },
+      outputPath: '/tmp/x.mkv',
+      fps: 15,
+    });
+    assert.ok(args.includes('x11grab'));
+    assert.ok(args.includes('pulse'));
+    assert.ok(args.includes('showinfo'));
+    assert.ok(args.includes('ashowinfo'));
+    assert.ok(args.includes('matroska'));
+    assert.strictEqual(args[args.length - 1], '/tmp/x.mkv');
+    // map both streams
+    assert.ok(args.indexOf('-map') !== -1);
+  });
+
+  test('capture: parseVideoOverride splits backend and device', () => {
+    assert.strictEqual(parseVideoOverride(''), null);
+    assert.strictEqual(parseVideoOverride('  '), null);
+    assert.deepStrictEqual(parseVideoOverride('kmsgrab'), { backend: 'kmsgrab', device: '', raw: 'kmsgrab' });
+    assert.deepStrictEqual(parseVideoOverride('kmsgrab:/dev/dri/card1'), { backend: 'kmsgrab', device: '/dev/dri/card1', raw: 'kmsgrab:/dev/dri/card1' });
+  });
+
+  test('capture: buildFfmpegArgs emits kmsgrab for Wayland native capture', () => {
+    const args = buildFfmpegArgs({
+      video: { backend: 'kmsgrab', device: '/dev/dri/card0' },
+      audio: { backend: 'pulse', device: 'default' },
+      outputPath: '/tmp/x.mkv',
+      fps: 15,
+    });
+    assert.ok(args.includes('kmsgrab'));
+    const i = args.indexOf('kmsgrab');
+    assert.strictEqual(args[i - 1], '-f');
+    assert.strictEqual(args[args.indexOf('-i') + 1], '/dev/dri/card0');
+  });
+
+  test('capture: detectVideo honours SHMAKK_CAPTURE_VIDEO=kmsgrab and rejects unknown backends', () => {
+    if (process.platform !== 'linux') return;
+    const prev = process.env.SHMAKK_CAPTURE_VIDEO;
+    try {
+      process.env.SHMAKK_CAPTURE_VIDEO = 'kmsgrab';
+      const v = detectVideo();
+      assert.strictEqual(v.backend, 'kmsgrab');
+
+      process.env.SHMAKK_CAPTURE_VIDEO = 'nonsense';
+      const bad = detectVideo();
+      assert.strictEqual(bad.invalid, true);
+      assert.match(bad.note, /Unsupported SHMAKK_CAPTURE_VIDEO/);
+    } finally {
+      if (prev === undefined) delete process.env.SHMAKK_CAPTURE_VIDEO;
+      else process.env.SHMAKK_CAPTURE_VIDEO = prev;
+    }
+  });
+
+  test('capture: monotonic clock is jump-free and non-negative', () => {
+    const c = new MonotonicClock();
+    const a = c.elapsedNs();
+    const b = c.elapsedNs();
+    assert.ok(a >= 0n);
+    assert.ok(b >= a);
+    assert.strictEqual(c.mediaToMonoNs(0), c.originNs);
+    const s = c.sample();
+    assert.ok(typeof s.tNs === 'string');
+    assert.ok(s.tSec >= 0);
+    assert.ok(typeof s.iso === 'string');
+  });
+
+  test('capture: detect returns a stable shape', () => {
+    const d = detect();
+    assert.strictEqual(typeof d.available, 'boolean');
+    assert.ok(Array.isArray(d.reasons));
+    assert.strictEqual(typeof d.ffmpeg, d.ffmpeg ? 'string' : 'object');
+  });
+
+  test('capture: extractAudioTrack produces a mono 16kHz WAV', async () => {
+    const os = require('os');
+    const fs = require('fs');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shmakk-capture-'));
+    const src = path.join(dir, 'src.wav');
+    const mono = path.join(dir, 'mono.wav');
+    // Generate a short stereo 44.1k tone.
+    await new Promise((res, rej) => {
+      execFile('ffmpeg', ['-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=0.6', '-ar', '44100', '-ac', '2', src], (e) => e ? rej(e) : res());
+    });
+    await extractAudioTrack(src, mono);
+    const info = await probeMedia(mono);
+    const a = info.streams.find(s => s.codec_type === 'audio');
+    assert.ok(a, 'audio stream present');
+    assert.strictEqual(a.sample_rate, '16000');
+    assert.strictEqual(a.channels, 1);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+}
+
+// ── stt: timestamped transcript normalisation ──────────────────────────────
+{
+  const { _normaliseChunks } = require('../src/services/stt');
+
+  test('stt: _normaliseChunks maps chunks to monotonic segments', () => {
+    const segments = _normaliseChunks({
+      text: 'one two three',
+      chunks: [
+        { text: ' one ', timestamp: [0.0, 0.5] },
+        { text: 'two', timestamp: [0.4, 1.2] }, // overlaps -> clamped to previous end
+        { text: 'three', timestamp: [1.5, 2.0] },
+        { text: '   ', timestamp: [2.0, 2.1] }, // empty -> dropped
+      ],
+    }, 3.0);
+    assert.strictEqual(segments.length, 3);
+    assert.deepStrictEqual(segments.map(s => s.text), ['one', 'two', 'three']);
+    assert.deepStrictEqual(segments[0], { start: 0, end: 0.5, text: 'one' });
+    assert.ok(segments[1].start === 0.5 && segments[1].end === 1.2);
+    assert.ok(segments[2].start === 1.5 && segments[2].end === 2.0);
+    // monotonic + within duration
+    for (let i = 1; i < segments.length; i++) assert.ok(segments[i].start >= segments[i - 1].end);
+    for (const s of segments) assert.ok(s.end <= 3.0 && s.start >= 0);
+  });
+
+  test('stt: _normaliseChunks falls back to a single full-length segment', () => {
+    const segments = _normaliseChunks({ text: 'hello world', chunks: null }, 2.5);
+    assert.deepStrictEqual(segments, [{ start: 0, end: 2.5, text: 'hello world' }]);
+    assert.deepStrictEqual(_normaliseChunks({ text: '' }, 1.0), []);
+  });
+}
+
+// ── frames: key-frame extraction for show-and-tell ─────────────────────────
+{
+  const path = require('path');
+  const {
+    CUES, detectCue, coerceSegments, selectTimestamps, buildExtractArgs,
+    extractKeyFrames, probeDuration,
+  } = require('../src/services/frames');
+
+  test('frames: detectCue finds the strongest pointing/action cue', () => {
+    const cue = detectCue('so you click this button right here');
+    assert.ok(cue);
+    assert.strictEqual(cue.label, 'action');
+    assert.strictEqual(cue.weight, 3);
+    assert.strictEqual(detectCue('watch the screen carefully').label, 'attention');
+    assert.strictEqual(detectCue('the weather is nice today'), null);
+  });
+
+  test('frames: coerceSegments normalises raw and timestamped chunks', () => {
+    const out = coerceSegments([
+      { text: 'raw one', timestamp: [1.0, 2.0] },
+      { text: '  padded  ', start: 2.5, end: 3.5 },
+      { text: '', timestamp: [4, 5] }, // empty -> dropped
+      null,
+      { text: 'reversed', start: 6.0, end: 5.0 },
+    ]);
+    assert.strictEqual(out.length, 3);
+    assert.deepStrictEqual(out[0], { start: 1, end: 2, text: 'raw one' });
+    assert.deepStrictEqual(out[1], { start: 2.5, end: 3.5, text: 'padded' });
+    assert.deepStrictEqual(out[2], { start: 5, end: 6, text: 'reversed' });
+  });
+
+  test('frames: selectTimestamps emits cue, boundary, and midpoint candidates', () => {
+    const segs = [
+      { start: 0, end: 2, text: 'first open the browser' },
+      { start: 2, end: 3.2, text: 'then click this button' },
+    ];
+    const ts = selectTimestamps(segs, { durationSec: 4, budget: 20, minGapSec: 0 });
+    const reasons = ts.map((s) => s.reason);
+    assert.ok(reasons.includes('segment-start'));
+    assert.ok(reasons.includes('segment-end'));
+    assert.ok(reasons.includes('cue'));
+    // cue timestamps sit inside their segment
+    const cue = ts.find((s) => s.reason === 'cue' && s.segmentIndex === 1);
+    assert.ok(cue.t >= 2 && cue.t <= 3.2);
+    assert.strictEqual(cue.cue, 'action');
+  });
+
+  test('frames: selectTimestamps dedupes within the gap and caps to budget', () => {
+    const segs = [
+      { start: 0.0, end: 0.4, text: 'click here' },
+      { start: 0.3, end: 0.7, text: 'click here again' },
+      { start: 1.0, end: 1.2, text: 'then type the name' },
+    ];
+    const ts = selectTimestamps(segs, { durationSec: 2, budget: 3, minGapSec: 0.5 });
+    assert.ok(ts.length <= 3);
+    for (let i = 1; i < ts.length; i++) assert.ok(ts[i].t - ts[i - 1].t >= 0.5);
+    // ordered by time, clamped to the recording
+    for (const s of ts) assert.ok(s.t >= 0 && s.t <= 2);
+  });
+
+  test('frames: selectTimestamps falls back to interval sampling without speech', () => {
+    const ts = selectTimestamps([], { durationSec: 10, budget: 4, fallbackIntervalSec: 3 });
+    assert.ok(ts.length > 0 && ts.length <= 4);
+    for (const s of ts) assert.strictEqual(s.reason, 'interval');
+    assert.deepStrictEqual(selectTimestamps([], { durationSec: 0 }), []);
+  });
+
+  test('frames: buildExtractArgs does fast then accurate seek and respects maxWidth', () => {
+    const args = buildExtractArgs('/tmp/in.mkv', '/tmp/out.png', 3.5, { maxWidth: 1280 });
+    assert.strictEqual(args[args.length - 1], '/tmp/out.png');
+    const ss = args.findIndex((a) => a === '-ss');
+    assert.strictEqual(args[ss + 1], '1.5'); // 3.5 - 2.0 fast seek
+    assert.ok(args.includes('-frames:v'));
+    const vf = args[args.indexOf('-vf') + 1];
+    assert.ok(vf.includes('1280'));
+  });
+
+  test('frames: extractKeyFrames extracts valid PNGs at cue moments', async () => {
+    const execFile = require('child_process').execFile;
+    const os = require('os');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shmakk-frames-'));
+    const media = path.join(dir, 'test.mkv');
+    const outDir = path.join(dir, 'frames');
+    // 6s synthetic screen + no audio (video only is fine for extraction).
+    await new Promise((res, rej) => {
+      execFile('ffmpeg', ['-y', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=10:duration=6', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', media], (e) => e ? rej(e) : res());
+    });
+    const duration = await probeDuration(media);
+    assert.ok(duration >= 5.5, `expected ~6s duration, got ${duration}`);
+
+    const result = await extractKeyFrames({
+      mediaPath: media,
+      outputDir: outDir,
+      durationSec: duration,
+      fps: 10,
+      maxWidth: 320,
+      budget: 6,
+      minGapSec: 0.4,
+      segments: [
+        { start: 0.2, end: 1.2, text: 'open the menu' },
+        { start: 1.2, end: 2.4, text: 'then click this button' },
+        { start: 2.4, end: 4.0, text: 'type the name and press enter' },
+      ],
+    });
+
+    assert.ok(result.extracted >= 1, `expected at least one frame, got ${result.extracted}`);
+    assert.strictEqual(result.frames.length, result.extracted);
+    for (const f of result.frames) {
+      assert.ok(fs.existsSync(f.path), `${f.path} should exist`);
+      assert.ok(fs.statSync(f.path).size > 300, `${f.path} should be non-blank`);
+      assert.ok(typeof f.transcript === 'string' && f.transcript.length > 0);
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+}
+
+// ── show-and-tell: vision analysis + plan/automation generation ────────────
+{
+  const { parseAnalysis, buildAnalysisText, transcriptBlock, frameLabels } = require('../src/services/vision');
+  const { normalizeAction, toPlan, toAutomation, toPlaywrightScript, generate } = require('../src/services/showtell');
+
+  const sample = () => ({
+    summary: 'Admin settings need a clearer save button',
+    goal: 'Improve the admin settings screen',
+    app: 'Settings',
+    page: 'Settings > Account',
+    findings: [
+      {
+        index: 1,
+        page: 'Settings > Account',
+        element: 'the Save button in the top-right toolbar',
+        note: 'the Save button is too small and needs a bigger font',
+        quote: 'this button is too small',
+        frames: [1],
+        confidence: 0.9,
+      },
+      {
+        index: 2,
+        page: 'Settings > Account',
+        element: 'the Password field',
+        note: 'the password field should show a strength hint',
+        frames: [2, 3],
+      },
+    ],
+    steps: [
+      { index: 1, action: 'click', target: 'the Settings gear icon', detail: 'top-left toolbar', frames: [1], confidence: 0.9 },
+      { index: 2, action: 'type', target: 'the Password field', value: 'hunter2', frames: [2, 3] },
+      { index: 3, action: 'click', target: 'the Save button', frames: [4] },
+      { index: 4, action: 'other', detail: 'close the confirmation dialog' },
+    ],
+    uncertain: ['password field may be autofilled'],
+    notes: ['used mouse wheel once'],
+  });
+
+  test('vision: parseAnalysis handles a fenced JSON object', () => {
+    const out = parseAnalysis('```json\n' + JSON.stringify(sample()) + '\n```');
+    assert.strictEqual(out.goal, 'Improve the admin settings screen');
+    assert.strictEqual(out.steps.length, 4);
+    assert.strictEqual(out.findings.length, 2);
+  });
+
+  test('vision: parseAnalysis strips surrounding prose', () => {
+    const out = parseAnalysis('Sure! Here you go:\n' + JSON.stringify(sample()) + '\nHope that helps.');
+    assert.strictEqual(out.app, 'Settings');
+  });
+
+  test('vision: parseAnalysis accepts a bare array as steps', () => {
+    const out = parseAnalysis('[{"action":"click","target":"Save"}]');
+    assert.ok(Array.isArray(out.steps));
+    assert.strictEqual(out.steps[0].target, 'Save');
+  });
+
+  test('vision: parseAnalysis returns null on garbage', () => {
+    assert.strictEqual(parseAnalysis('no json here'), null);
+    assert.strictEqual(parseAnalysis(''), null);
+  });
+
+  test('vision: transcript and frame labels embed timestamps', () => {
+    const tb = transcriptBlock({ text: 'hello', segments: [{ start: 1.25, text: 'click here' }] });
+    assert.ok(tb.includes('hello'));
+    assert.ok(tb.includes('[1.25s] click here'));
+    const fl = frameLabels([{ t: 3.5, transcript: 'then type' }]);
+    assert.ok(fl.includes('Frame 1 @ 3.50s: "then type"'));
+    const text = buildAnalysisText({ text: 'x', segments: [] }, [{ t: 0 }]);
+    assert.ok(text.includes('TRANSCRIPT') && text.includes('FRAMES'));
+  });
+
+  test('showtell: normalizeAction maps synonyms to canonical actions', () => {
+    assert.strictEqual(normalizeAction('click'), 'click');
+    assert.strictEqual(normalizeAction('tap'), 'click');
+    assert.strictEqual(normalizeAction('write'), 'type');
+    assert.strictEqual(normalizeAction('goto'), 'navigate');
+    assert.strictEqual(normalizeAction('swipe'), 'scroll');
+    assert.strictEqual(normalizeAction('bogus'), 'other');
+  });
+
+  test('showtell: toPlan lists findings with their page and element, not action steps', () => {
+    const plan = toPlan(sample());
+    assert.strictEqual(plan.kind, 'plan');
+    assert.strictEqual(plan.title, 'Admin settings need a clearer save button');
+    assert.strictEqual(plan.page, 'Settings > Account');
+    assert.strictEqual(plan.tasks.length, 2);
+    assert.strictEqual(plan.tasks[0].title, 'Settings > Account > the Save button in the top-right toolbar');
+    assert.ok(plan.tasks[0].description.includes('too small'));
+    assert.strictEqual(plan.tasks[0].action, undefined);
+    assert.deepStrictEqual(plan.tasks[0].evidence.frames, [1]);
+    assert.strictEqual(plan.tasks[0].evidence.transcript, 'this button is too small');
+    assert.strictEqual(plan.tasks[1].description, 'the password field should show a strength hint');
+    assert.deepStrictEqual(plan.uncertain, ['password field may be autofilled']);
+  });
+
+  test('showtell: toPlan falls back to findings derived from steps when none are returned', () => {
+    const plan = toPlan({ summary: 'Legacy recording', steps: [{ action: 'click', target: 'Save', detail: 'click Save' }] });
+    assert.strictEqual(plan.tasks.length, 1);
+    assert.strictEqual(plan.tasks[0].description, 'click Save');
+    assert.strictEqual(plan.tasks[0].element, 'Save');
+  });
+
+  test('showtell: toAutomation drops unrecognised actions into warnings', () => {
+    const auto = toAutomation(sample());
+    assert.strictEqual(auto.kind, 'automation');
+    assert.strictEqual(auto.actions.length, 3); // the "other" step is excluded
+    assert.strictEqual(auto.warnings.length, 1);
+    assert.ok(auto.warnings[0].includes('unrecognised'));
+    assert.strictEqual(auto.actions[1].action, 'type');
+    assert.strictEqual(auto.actions[1].value, 'hunter2');
+    assert.ok(auto.script.includes('chromium.launch'));
+  });
+
+  test('showtell: generate dispatches to plan by default and automation on demand', () => {
+    assert.strictEqual(generate(sample()).kind, 'plan');
+    assert.strictEqual(generate(sample(), { mode: 'automation' }).kind, 'automation');
+  });
+
+  test('showtell: toPlaywrightScript resolves navigation URLs and quotes safely', () => {
+    const script = toPlaywrightScript({
+      app: 'https://example.com/admin',
+      actions: [
+        { action: 'click', target: "the Save button", description: 'persist' },
+        { action: 'type', target: 'Name', value: "O'Reilly" },
+      ],
+    });
+    assert.ok(script.includes("page.goto('https://example.com/admin')"));
+    assert.ok(script.includes('SELECTOR_1'));
+    assert.ok(script.includes("O'Reilly") === false || script.includes("O\\'Reilly"));
+  });
+}
+
 function highlightDiffLines(text) {
   return text.split('\n').map(line => {
     if (/^\+/.test(line)) return `${c.green}${line}${c.reset}`;

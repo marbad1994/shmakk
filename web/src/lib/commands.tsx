@@ -5,7 +5,7 @@
 import type { ReactNode } from 'react';
 import {
   Activity, BookOpen, Code2, GitBranch, MessageCircle, Palette, Workflow, Brain, Bug, CircleHelp, Cpu, Eraser, FileDiff, FolderOpen, Gauge, History, ListChecks,
-  MessageSquarePlus, Mic, Moon, PanelRight, Globe, Plug, Power, ScrollText, Search, Settings, ShieldCheck, Sparkles, SquareTerminal,
+  MessageSquarePlus, Mic, MonitorPlay, Moon, PanelRight, Globe, Plug, Power, ScrollText, Search, Settings, ShieldCheck, Sparkles, SquareTerminal,
   TerminalSquare, Users, Wand2, Zap,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -43,6 +43,7 @@ export const COMMANDS: Command[] = [
   { id: 'plan-force', slash: 'plan-first', title: 'Plan first, then execute', hint: 'Generate a step-by-step plan for approval (+ prefix)', group: 'Chat', icon: <ListChecks />, arg: 'task', argRequired: true, run: (a) => app().send(`+${a}`, 'ask') },
   { id: 'recall', slash: 'recall', title: 'Recall from past sessions', hint: 'Full-text search across every session', group: 'Chat', icon: <History />, arg: 'query', argRequired: true, run: (a) => say(`recall ${a}`) },
   { id: 'help', slash: 'help', title: 'Help', hint: 'Show the full CLI reference', group: 'Chat', icon: <CircleHelp />, run: () => say('help') },
+  { id: 'show2plan', slash: 'show2plan', title: 'Show & tell → notes', hint: 'Show a screen and say what needs changing, then keep a reference or build an automation', group: 'Chat', icon: <MonitorPlay />, run: () => app().setShow2plan(true) },
 
   { id: 'clone', slash: 'clone', title: 'Start a GitHub session', hint: 'Clone owner/repo on the server and open a session on it', group: 'Chat', icon: <GitBranch />, arg: 'owner/repo [branch]', argRequired: true, run: (a) => { const [repo, branch] = a.split(/\s+/); const id = toast.loading(`Cloning ${repo}…`); return app().startSession({ repo, branch }).then(() => { toast.success(`Session ready on ${repo}`, { id }); }).catch((e: Error) => { toast.error(e.message, { id }); }); } },
 
@@ -93,13 +94,13 @@ export const COMMANDS: Command[] = [
   // ── Maintenance ──
   { id: 'stats', slash: 'stats', title: 'Session stats', hint: 'Journal, audit and skill status (--stats)', group: 'Maintenance', icon: <Activity />, run: () => say('stats') },
   { id: 'status', slash: 'status', title: 'Status', hint: 'Is shmakk running? (--status)', group: 'Maintenance', icon: <Activity />, run: () => say('status') },
-  { id: 'glossary', slash: 'glossary', title: 'Update command glossary', hint: 'Scan PATH for better corrections (--update-command-glossary)', group: 'Maintenance', icon: <Wand2 />, run: () => guard(async () => { const id = toast.loading('Scanning PATH…'); try { const r = await api.post<{ status: { commands?: number } }>('/api/glossary/update'); toast.success(`Glossary updated — ${r.status.commands ?? 0} commands`, { id }); await app().refreshStatus(); } catch (e) { toast.error((e as Error).message, { id }); } }) },
+  { id: 'glossary', slash: 'glossary', title: 'Update command glossary', hint: 'Scan PATH for better corrections (--update-command-glossary)', group: 'Maintenance', icon: <Wand2 />, run: () => guard(async () => { const id = toast.loading('Scanning PATH…'); try { const r = await api.post<{ status: { commands?: number } }>('/api/glossary/update'); toast.success(`Glossary updated: ${r.status.commands ?? 0} commands`, { id }); await app().refreshStatus(); } catch (e) { toast.error((e as Error).message, { id }); } }) },
   { id: 'history', slash: 'build-history', title: 'Build history frequency map', hint: 'Learn from your shell history (--build-history)', group: 'Maintenance', icon: <History />, run: () => guard(async () => { const r = await api.post<{ unique: number; total: number }>('/api/history/build'); toast.success(`${r.unique} unique commands from ${r.total} uses`); }) },
 
   // ── App ──
   { id: 'workspace', slash: 'workspace', title: 'Switch workspace', hint: 'Change the folder shmakk works in (--workspace)', group: 'App', icon: <FolderOpen />, arg: 'path (optional)', run: (a) => (a ? guard(() => app().setWorkspace(a)) : chooseWorkspace()) },
   { id: 'theme', slash: 'theme', title: 'Toggle light / dark theme', hint: 'Switch appearance', group: 'App', icon: <Moon />, run: () => { const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; localStorage.setItem('shmakk.theme', next); document.documentElement.dataset.theme = next; window.dispatchEvent(new Event('shmakk:theme')); } },
-  { id: 'exit', slash: 'exit', title: 'Quit shmakk', hint: 'Stop the server and close (--exit)', group: 'App', icon: <Power />, run: () => { if (confirm('Quit shmakk? Running tasks will be stopped.')) void api.post('/api/shutdown').then(() => { document.title = 'shmakk — stopped'; toast('shmakk has stopped. You can close this window.'); }); } },
+  { id: 'exit', slash: 'exit', title: 'Quit shmakk', hint: 'Stop the server and close (--exit)', group: 'App', icon: <Power />, run: () => { if (confirm('Quit shmakk? Running tasks will be stopped.')) void api.post('/api/shutdown').then(() => { document.title = 'shmakk: stopped'; toast('shmakk has stopped. You can close this window.'); }); } },
 ];
 
 export function matchSlash(input: string): { query: string; arg: string } | null {

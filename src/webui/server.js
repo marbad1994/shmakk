@@ -216,6 +216,9 @@ async function startWebServer(opts = {}) {
 
   app.automations = createAutomations({ chat: app.chat, projects: app.projects, broadcast, getWorkspace: () => workspace });
 
+  const { createCaptureManager } = require('../services/capture');
+  app.capture = createCaptureManager({ getWorkspace: () => workspace, broadcast });
+
   app.restartMcp = async () => {
     try { await app.mcp.shutdown(); } catch {}
     app.mcp = createMCPManager();
@@ -518,6 +521,7 @@ async function startWebServer(opts = {}) {
     closed = true;
     clearInterval(heartbeat);
     app.automations.stop();
+    try { app.capture.shutdown(); } catch {}
     try { app.chat.shutdown(); } catch {}
     terminals.closeAll();
     for (const ws of clients) { try { ws.close(1001); } catch {} }

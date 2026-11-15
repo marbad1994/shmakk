@@ -29,6 +29,7 @@ const design = require('./design');
 const { AutomationError } = require('./automations');
 const store = require('./store');
 const artefacts = require('./artefacts');
+const capture = require('../services/capture');
 
 class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -159,6 +160,7 @@ function createApi(app) {
       tts: canResolve('kokoro-js'),
       browser: canResolve('playwright'),
       desktop: !!process.versions.electron,
+      capture: capture.isAvailable(),
     };
   }
 
@@ -741,6 +743,83 @@ function createApi(app) {
     try { fs.rmSync(audioPath, { force: true }); } catch {}
     return { __binary: data, contentType: 'audio/wav' };
   });
+
+  // ── capture: screen + audio show-and-tell recorder ────────────────────
+
+  add('GET', '/api/capture', () => ({
+    capabilities: capture.detect(),
+    sessions: app.capture.list(),
+  }));
+
+  add('POST', '/api/capture', async ({ body }) => {
+    const d = capture.detect();
+    if (!d.available) throw new HttpError(501, d.reasons.join('; ') || 'capture is not available on this machine');
+    const meta = await app.capture.start({
+      fps: body.fps,
+      width: body.width,
+      height: body.height,
+      traceAudio: body.traceAudio,
+      outputDir: body.outputDir,
+    });
+    return meta;
+  });
+
+  add('GET', '/api/capture/:id', ({ params }) => {
+    const m = app.capture.get(params.id);
+    if (!m) throw new HttpError(404, 'capture session not found');
+    return m;
+  });
+
+  // Return the persisted frames summary (`<id>.frames.json`) written by
+  // src/services/frames.js. The `frames` field is an ordered array; the 1-based
+  // evidence frame numbers produced downstream are positions into this array,
+  // so the review UI can map "frame N" to frames[N-1].file (frame_000.png).
+  add('GET', '/api/capture/:id/frames', ({ params }) => {
+    const m = app.capture.get(params.id);
+    if (!m) throw new HttpError(404, 'capture session not found');
+    const file = path.resolve(m.paths.frames);
+    let stat;
+    try { stat = fs.statSync(file); } catch { throw new HttpError(404, 'frames not found'); }
+    if (!stat.isFile()) throw new HttpError(404, 'frames not found');
+    let summary;
+    try { summary = JSON.parse(fs.readFileSync(file, 'utf8')); }
+    catch { throw new HttpError(500, 'frames summary is malformed'); }
+    return summary;
+  });
+
+  // Serve an extracted frame PNG/JPG. Frames live on disk under the session's
+  // framesDir and are not exposed any other way, so the browser needs a route.
+  add('GET', '/api/capture/:id/frames/:file', ({ params }) => {
+    const m = app.capture.get(params.id);
+    if (!m) throw new HttpError(404, 'capture session not found');
+    const name = path.basename(params.file);
+    // `:file` is a single path segment, but decoding can still smuggle in a
+    // slash (`%2F`), so insist the decoded name round-trips and matches the
+    // exact frame naming scheme (frame_000.png) before touching the disk.
+    if (name !== params.file || !/^frame_\d{3}\.(png|jpg)$/.test(name)) {
+      throw new HttpError(400, 'invalid frame name');
+    }
+    const dir = path.resolve(m.paths.framesDir);
+    const file = path.resolve(dir, name);
+    if (!file.startsWith(dir + path.sep)) throw new HttpError(400, 'invalid frame name');
+    if (!fs.existsSync(file) || !fs.statSync(file).isFile()) throw new HttpError(404, 'frame not found');
+    return {
+      __binary: fs.readFileSync(file),
+      contentType: name.endsWith('.jpg') ? 'image/jpeg' : 'image/png',
+    };
+  });
+
+  add('POST', '/api/capture/:id/pause', async ({ params }) => app.capture.pause(params.id));
+  add('POST', '/api/capture/:id/resume', async ({ params }) => app.capture.resume(params.id));
+  add('POST', '/api/capture/:id/stop', async ({ params }) => app.capture.stop(params.id));
+  add('POST', '/api/capture/:id/transcribe', async ({ params, body }) => {
+    if (!features().stt) throw new HttpError(501, 'server speech-to-text not installed (npm run setup:voice)');
+    return app.capture.transcribe(params.id, { language: body && body.language });
+  });
+  add('POST', '/api/capture/:id/analyze', async ({ params, body }) => app.capture.analyze(params.id, body || {}));
+  add('POST', '/api/capture/:id/plan', async ({ params, body }) => app.capture.plan(params.id, body || {}));
+  add('POST', '/api/capture/:id/automation', async ({ params, body }) => app.capture.automation(params.id, body || {}));
+  add('DELETE', '/api/capture/:id', async ({ params }) => ({ ok: await app.capture.remove(params.id) }));
 
   // ── projects ──────────────────────────────────────────────────────────
 

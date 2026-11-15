@@ -106,6 +106,93 @@ async function transcribe(audioPath, opts = {}) {
 }
 
 /**
+ * Normalise the raw `chunks` returned by transformers.js when
+ * `return_timestamps` is enabled into clean, monotonic segments.
+ *
+ * transformers.js returns:
+ *   { text, chunks: [ { text, timestamp: [start, end] } ] }
+ * where `timestamp` is in seconds. We tolerate several shapes and clamp to a
+ * sane, non-overlapping timeline so downstream frame selection stays stable.
+ */
+function _normaliseChunks(result, durationSec) {
+  const chunks = result && result.chunks;
+  const segments = [];
+  if (Array.isArray(chunks) && chunks.length) {
+    let prevEnd = 0;
+    for (const c of chunks) {
+      const text = String((c && c.text) || '').trim();
+      if (!text) continue;
+      let start = null;
+      let end = null;
+      const ts = c && c.timestamp;
+      if (Array.isArray(ts)) {
+        start = Number(ts[0]);
+        end = Number(ts[1] != null ? ts[1] : ts[0]);
+      } else if (ts && typeof ts === 'object') {
+        start = Number(ts.start);
+        end = Number(ts.end != null ? ts.end : ts.start);
+      } else if (typeof ts === 'number') {
+        start = ts;
+        end = ts;
+      }
+      if (!Number.isFinite(start) || !Number.isFinite(end)) {
+        start = prevEnd;
+        end = prevEnd;
+      }
+      if (start < 0) start = 0;
+      if (end < start) [start, end] = [end, start];
+      if (start < prevEnd) start = prevEnd;
+      if (end > durationSec) end = durationSec;
+      if (start > durationSec) start = durationSec;
+      if (end <= start) end = Math.min(durationSec, start + 0.01);
+      segments.push({ start, end, text });
+      prevEnd = end;
+    }
+  }
+
+  if (!segments.length) {
+    const text = String((result && result.text) || '').trim();
+    if (text) segments.push({ start: 0, end: durationSec, text });
+  }
+
+  return segments;
+}
+
+/**
+ * Transcribe a WAV file into a timestamped transcript.
+ * @param {string} audioPath - path to WAV audio file
+ * @param {object} [opts]
+ * @param {string} [opts.language] - ISO language code hint (e.g. "en")
+ * @returns {Promise<{text:string, segments:Array<{start:number,end:number,text:string}>, durationSec:number, language:string}>}
+ */
+async function transcribeTimestamped(audioPath, opts = {}) {
+  if (!fs.existsSync(audioPath)) {
+    throw new Error(`Audio file not found: ${audioPath}`);
+  }
+
+  const transcriber = await _ensureModel();
+  const audioData = _wavToFloat32(audioPath);
+  const durationSec = audioData.length / 16000;
+
+  const kwargs = {
+    language: opts.language || 'english',
+    // `true` -> sentence/segment-level chunks; `'word'` -> word-level chunks.
+    return_timestamps: opts.wordLevel ? 'word' : true,
+  };
+
+  const result = await transcriber(audioData, kwargs);
+  const text = String((result && result.text) || '').trim();
+  const segments = _normaliseChunks(result, durationSec);
+
+  return {
+    text,
+    segments,
+    durationSec,
+    language: (result && result.language) || kwargs.language || 'english',
+  };
+}
+
+/**
  * Check if the STT model files are already cached locally.
  * Used for pre-flight warnings.
  */
@@ -128,4 +215,4 @@ function isCached() {
   }
 }
 
-module.exports = { transcribe, isCached, _ensureModel };
+module.exports = { transcribe, transcribeTimestamped, isCached, _normaliseChunks, _ensureModel };
