@@ -213,7 +213,17 @@ function createApi(app) {
 
   // ── bootstrap / status ────────────────────────────────────────────────
 
-  add('GET', '/api/bootstrap', () => ({
+  // Chats filed under a project are shown in the project view, not in the
+  // sidebar history, so `?project=none` returns only the ones with no project.
+  // Clients that send no filter keep getting every chat; `?project=<id>`
+  // narrows the list to a single project.
+  const historyList = (query) => {
+    const p = query && query.project;
+    if (typeof p !== 'string' || !p || p === 'all') return app.chat.list();
+    return app.chat.list({ project: p });
+  };
+
+  add('GET', '/api/bootstrap', ({ query }) => ({
     version: app.version,
     workspace: ws(),
     home: os.homedir(),
@@ -224,7 +234,7 @@ function createApi(app) {
     features: features(),
     hosted: !!app.hosted,
     projects: app.projects.list(),
-    conversations: app.chat.list(),
+    conversations: historyList(query),
     status: statusInfo(),
   }));
 
@@ -346,7 +356,8 @@ function createApi(app) {
 
   // ── conversations ─────────────────────────────────────────────────────
 
-  add('GET', '/api/conversations', () => ({ conversations: app.chat.list() }));
+  // History list; `?project=none` skips chats that belong to a project.
+  add('GET', '/api/conversations', ({ query }) => ({ conversations: historyList(query) }));
   add('POST', '/api/conversations', ({ body }) => {
     const project = body.projectId ? app.projects.get(body.projectId) : null;
     if (body.projectId && !project) throw new HttpError(404, 'project not found');

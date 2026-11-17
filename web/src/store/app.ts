@@ -333,6 +333,9 @@ export const useApp = create<AppState>((set, get) => {
 
     async moveConv(id, projectId) {
       await api.patch(`/api/conversations/${id}`, { projectId });
+      // The sidebar history hides project chats, so reflect the move at once
+      // instead of waiting for the server's broadcast.
+      set((s) => ({ convs: s.convs.map((c) => (c.id === id ? { ...c, projectId } : c)) }));
       void get().refreshProjects();
       void queryClient.invalidateQueries({ queryKey: ['project'] });
     },

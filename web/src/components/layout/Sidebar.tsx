@@ -1,12 +1,14 @@
 import { useMemo, useState } from 'react';
 import {
-  Activity, Boxes, Brain, Folder, FolderKanban, FolderMinus, GitBranch, History, ListChecks, MoreHorizontal,
+  Activity, Boxes, Brain, ChevronRight, Folder, FolderKanban, FolderMinus, GitBranch, History, ListChecks, MoreHorizontal,
   PanelLeftClose, Pencil, Pin, PinOff, Plug, Plus, Settings, Sparkles, Trash2, Users, Zap,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { historyGroups } from '@/lib/history';
 import { MODES, PROJECT_COLORS, modeInfo } from '@/lib/modes';
+import { loadOpenProjects, saveOpenProjects, sessionsByProject, toggleOpenProject } from '@/lib/projectFold';
 import type { ConvMeta, Project } from '@/lib/types';
-import { basename, cn, dayBucket, modKey } from '@/lib/utils';
+import { basename, cn, modKey } from '@/lib/utils';
 import { haptic } from '@/hooks/useMobile';
 import { chooseWorkspace, useApp } from '@/store/app';
 import { Button } from '@/components/ui/button';
@@ -16,7 +18,7 @@ import { Switch } from '@/components/ui/switch';
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 
-function ConvRow({ conv, active, running, projects, onRename }: { conv: ConvMeta; active: boolean; running: boolean; projects: Project[]; onRename(c: ConvMeta): void }) {
+function ConvRow({ conv, active, running, projects, onRename, showProject = true }: { conv: ConvMeta; active: boolean; running: boolean; projects: Project[]; onRename(c: ConvMeta): void; showProject?: boolean }) {
   const openConv = useApp((s) => s.openConv);
   const pinConv = useApp((s) => s.pinConv);
   const deleteConv = useApp((s) => s.deleteConv);
@@ -29,7 +31,7 @@ function ConvRow({ conv, active, running, projects, onRename }: { conv: ConvMeta
         {conv.repo ? <GitBranch className="size-3.5 shrink-0 text-violet" aria-label={`GitHub session on ${conv.repo.fullName}`} /> : null}
         {conv.automationId ? <Zap className="size-3.5 shrink-0 text-warn" aria-label="Automation run" /> : null}
         <span className="truncate">{conv.title}</span>
-        {project ? <span className={cn('ml-auto size-2 shrink-0 rounded-full', PROJECT_COLORS[project.color] || 'bg-accent')} title={`In project ${project.name}`} /> : null}
+        {showProject && project ? <span className={cn('ml-auto size-2 shrink-0 rounded-full', PROJECT_COLORS[project.color] || 'bg-accent')} title={`In project ${project.name}`} /> : null}
       </button>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
@@ -77,20 +79,20 @@ export function Sidebar() {
   // The Linux account name, shown in the bottom-left account menu.
   const user = basename(home) || 'you';
 
-  const groups = useMemo(() => {
-    const mine = convs.filter((c) => c.mode === mode);
-    const out: { label: string; list: ConvMeta[] }[] = [];
-    const pinned = mine.filter((c) => c.pinned);
-    if (pinned.length) out.push({ label: 'Pinned', list: pinned });
-    const autoRuns = mine.filter((c) => !c.pinned && c.automationId);
-    for (const c of mine.filter((x) => !x.pinned && !x.automationId)) {
-      const label = dayBucket(c.updatedAt);
-      const g = out.find((x) => x.label === label);
-      if (g) g.list.push(c); else out.push({ label, list: [c] });
-    }
-    if (autoRuns.length) out.push({ label: 'Automation runs', list: autoRuns.slice(0, 15) });
-    return out;
-  }, [convs, mode]);
+  // Chats assigned to a project are reachable through PROJECTS, not here.
+  const groups = useMemo(() => historyGroups(convs, mode), [convs, mode]);
+  // Which project folders are unfolded, remembered across reloads.
+  const [openProjects, setOpenProjects] = useState<string[]>(loadOpenProjects);
+  const byProject = useMemo(() => sessionsByProject(convs), [convs]);
+
+  const toggleProject = (id: string) => {
+    haptic();
+    setOpenProjects((prev) => {
+      const next = toggleOpenProject(prev, id);
+      saveOpenProjects(next);
+      return next;
+    });
+  };
 
   const createProject = async () => {
     if (!draft.name.trim()) return;
@@ -141,13 +143,35 @@ export function Sidebar() {
           <span className="font-mono text-[10.5px] font-semibold uppercase tracking-wider text-faint">Projects</span>
           <Tip label="New project"><button type="button" aria-label="New project" onClick={() => setCreating(true)} className="grid size-5 place-items-center rounded text-faint hover:bg-hover hover:text-fg touch:size-8"><Plus className="size-3.5" /></button></Tip>
         </div>
-        {projects.map((p) => (
-          <button key={p.id} type="button" aria-current={view === 'project' && projectId === p.id ? 'page' : undefined} onClick={() => openProject(p.id)}
-            className={cn('flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-dim hover:bg-hover hover:text-fg touch:py-2.5 touch:text-[15px]', view === 'project' && projectId === p.id && 'bg-raised text-fg')}>
-            <FolderKanban className="size-4 shrink-0" /><span className="min-w-0 flex-1 truncate">{p.name}</span>
-            <span className={cn('size-2 shrink-0 rounded-full', PROJECT_COLORS[p.color] || 'bg-accent')} />
-          </button>
-        ))}
+        {projects.map((p) => {
+          const open = openProjects.includes(p.id);
+          const list = byProject.get(p.id) ?? [];
+          const here = view === 'project' && projectId === p.id;
+          return (
+            <div key={p.id}>
+              <div className={cn('group flex items-center rounded-lg text-dim hover:bg-hover hover:text-fg', here && 'bg-raised text-fg')}>
+                <button type="button" aria-current={here ? 'page' : undefined} onClick={() => openProject(p.id)}
+                  className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg py-1.5 pl-2.5 pr-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 touch:py-2.5 touch:text-[15px]">
+                  <FolderKanban className="size-4 shrink-0" /><span className="min-w-0 flex-1 truncate">{p.name}</span>
+                </button>
+                <Tip label={<>{open ? 'Hide' : 'Show'} sessions in {p.name}</>}>
+                  <button type="button" onClick={() => toggleProject(p.id)} aria-expanded={open} aria-controls={`project-sessions-${p.id}`}
+                    aria-label={`${open ? 'Hide' : 'Show'} sessions in ${p.name}`}
+                    className="mr-1 grid size-6 shrink-0 place-items-center rounded-md text-faint hover:bg-line hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 touch:size-9">
+                    <ChevronRight className={cn('size-3.5 transition-transform duration-150', open && 'rotate-90')} />
+                  </button>
+                </Tip>
+              </div>
+              {open ? (
+                <div id={`project-sessions-${p.id}`} role="list" aria-label={`${p.name} sessions`} className="mb-1 ml-3.5 border-l border-line pl-1.5">
+                  {list.length ? list.map((c) => (
+                    <ConvRow key={c.id} conv={c} projects={projects} showProject={false} active={view === 'chat' && c.id === activeId} running={c.id in runs} onRename={(x) => { setRenaming(x); setTitle(x.title); }} />
+                  )) : <p className="px-2 py-1.5 text-[12px] text-faint">No sessions yet</p>}
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
 
         <div role="list" aria-label={`${info.label} conversations`}>
           {groups.map((g) => (

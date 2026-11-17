@@ -2168,6 +2168,36 @@ test('webui server: project, design and automation routes; artifact and webhook 
   } finally { await h.close(); }
 }));
 
+test('webui server: history can hide project chats while the project still lists them', () => withTempHome(async (dir) => {
+  const { startWebServer } = require('../src/webui/server');
+  const h = await startWebServer({ port: 0, workspace: dir, quiet: true, token: 'tok' });
+  const call = async (m, p, b) => { const r = await fetch(h.baseUrl + p, { method: m, headers: { authorization: 'Bearer tok', 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined }); return { s: r.status, j: await r.json() }; };
+  const ids = (r) => r.j.conversations.map((c) => c.id).sort();
+  try {
+    const p = (await call('POST', '/api/projects', { name: 'Gui' })).j;
+    const filed = (await call('POST', '/api/conversations', { title: 'filed', projectId: p.id })).j;
+    const loose = (await call('POST', '/api/conversations', { title: 'loose' })).j;
+    const both = [filed.id, loose.id].sort();
+
+    // No filter, as before: both show up.
+    assert.deepStrictEqual(ids(await call('GET', '/api/conversations')), both);
+    assert.strictEqual((await call('GET', '/api/conversations?project=all')).j.conversations.length, 2);
+
+    // History only: the project chat is gone, the unassigned one stays.
+    assert.deepStrictEqual(ids(await call('GET', '/api/conversations?project=none')), [loose.id]);
+    assert.deepStrictEqual(ids(await call('GET', '/api/bootstrap?project=none')), [loose.id]);
+
+    // The project's own listing is untouched.
+    const projConvs = (await call('GET', `/api/projects/${p.id}`)).j.conversations;
+    assert.deepStrictEqual(projConvs.map((c) => c.id), [filed.id]);
+    assert.deepStrictEqual(ids(await call('GET', `/api/conversations?project=${p.id}`)), [filed.id]);
+
+    // Moving it out of the project puts it back in the history.
+    assert.strictEqual((await call('PATCH', `/api/conversations/${filed.id}`, { projectId: null })).j.projectId, null);
+    assert.deepStrictEqual(ids(await call('GET', '/api/conversations?project=none')), both);
+  } finally { await h.close(); }
+}));
+
 // ── capture (screen + audio) ───────────────────────────────────────────────
 {
   const { parseInfoLine, buildFfmpegArgs, detect, detectVideo, parseVideoOverride, createSession, extractAudioTrack, probeMedia } = require('../src/services/capture');

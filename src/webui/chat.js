@@ -173,12 +173,17 @@ class ChatManager {
 
   // ── conversation lifecycle ──────────────────────────────────────────────
 
-  list() {
+  // `project` narrows the list: 'none' (or null) keeps only chats that belong to
+  // no project, a project id keeps that project's chats, undefined keeps all.
+  list({ project } = {}) {
     const metas = store.listConversations();
     // live conversations may be newer than what's on disk
     const byId = new Map(metas.map((m) => [m.id, m]));
     for (const c of this.convs.values()) byId.set(c.id, { ...store.metaOf(c), running: !!c.run });
-    return Array.from(byId.values()).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    let out = Array.from(byId.values()).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    if (project === 'none' || project === null) out = out.filter((c) => !c.projectId);
+    else if (project !== undefined) out = out.filter((c) => c.projectId === project);
+    return out;
   }
 
   // workspace/repo are set for GitHub cloud sessions; plain chats use the
