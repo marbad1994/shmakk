@@ -94,10 +94,14 @@ class NodeHub {
     const url = new URL(pathname, `${target.url}/`);
     for (const [k, v] of Object.entries(query)) url.searchParams.set(k, String(v));
     const headers = { authorization: `Bearer ${target.token}` };
+    // undici refuses GET/HEAD requests that carry a body, so only attach one
+    // for methods that permit it (the server passes `body: {}` unconditionally).
+    const noBody = method === 'GET' || method === 'HEAD';
+    const reqBody = noBody ? undefined : (raw ? raw : body !== undefined ? JSON.stringify(body) : undefined);
     const res = await fetch(url, {
       method,
       headers: raw ? headers : { ...headers, 'content-type': 'application/json' },
-      body: raw ? raw : body !== undefined ? JSON.stringify(body) : undefined,
+      body: reqBody,
       redirect: 'manual',
     });
     const buf = Buffer.from(await res.arrayBuffer());
