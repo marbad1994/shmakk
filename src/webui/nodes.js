@@ -133,6 +133,16 @@ class NodeHub {
     this._connectCloud(cfg);
   }
 
+  // Re-connect after the cloud configuration changed (saved/disabled/changed).
+  reconnectCloud() {
+    const old = this.cloudWs;
+    this.cloudWs = null; // detach first so the old socket's close handler bails
+    if (old) { try { old.close(); } catch {} }
+    this.cloudRetry = 0;
+    const cfg = this.cloudConfig();
+    if (cfg) this._connectCloud(cfg);
+  }
+
   _connectCloud(cfg) {
     const proto = new URL(cfg.url).protocol === 'https:' ? 'wss' : 'ws';
     const wsUrl = `${proto}://${new URL(cfg.url).host}/ws`;

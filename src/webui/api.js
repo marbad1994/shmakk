@@ -306,6 +306,10 @@ function createApi(app) {
           remoteBind: c.remoteBind != null ? String(c.remoteBind).slice(0, 40) : prev.remoteBind,
         };
       }
+      // (Re)connect the cloud WebSocket relay now that the config changed and
+      // tell the frontend to refresh its node switcher.
+      if (app.nodes) app.nodes.reconnectCloud();
+      app.broadcast({ t: 'nodes.changed' });
     }
     if (body.modelByMode && typeof body.modelByMode === 'object') {
       const cur = app.settings.modelByMode || {};
