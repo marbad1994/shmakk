@@ -109,7 +109,7 @@ function createApi(app) {
       .filter((n, i, arr) => n && all[n] && arr.indexOf(n) === i);
     return names.map((name) => {
       const cfg = all[name];
-      return {
+      const entry = {
         name,
         model: cfg.model || name,
         provider: cfg.provider || null,
@@ -122,7 +122,19 @@ function createApi(app) {
         default: name === (registry.main || null),
         fast: name === (registry.fast || null),
       };
+      if ('effort' in cfg) entry.effort = cfg.effort;
+      return entry;
     });
+  }
+
+  function effortOptsFor(modelId, registry, active) {
+    const id = String(modelId || '').trim();
+    const entry = registry.find((r) => r.model === id || r.name === id) || null;
+    return {
+      baseUrl: (entry && entry.baseUrl) || active?.base_url || process.env.SHMAKK_BASE_URL || '',
+      provider: (entry && entry.provider) || active?.provider || '',
+      effort: entry && 'effort' in entry ? entry.effort : (active && 'effort' in active ? active.effort : undefined),
+    };
   }
 
   function providerInfo() {
@@ -142,6 +154,20 @@ function createApi(app) {
     endpointList.forEach(push);
     if (!registry.length && !endpointList.length) envModelList().forEach(push);
     if (!models.length) push(process.env.SHMAKK_MODEL);
+
+    // Per-model reasoning_effort ladder. Empty list => hide the composer control.
+    const effortByModel = {};
+    for (const mid of models) {
+      effortByModel[mid] = llm.effortLevelsForModel(mid, effortOptsFor(mid, registry, active));
+    }
+    // Also key registry preset names so a picker showing the preset still resolves.
+    for (const entry of registry) {
+      if (entry.name && !(entry.name in effortByModel)) {
+        effortByModel[entry.name] = llm.effortLevelsForModel(entry.model || entry.name, effortOptsFor(entry.model || entry.name, registry, active));
+      }
+    }
+    const effortLevels = effortByModel[model] || llm.effortLevelsForModel(model, effortOptsFor(model, registry, active));
+
     return {
       configured: llm.isConfigured(),
       endpoint: endpoints.getCurrentEndpointName(),
@@ -165,9 +191,23 @@ function createApi(app) {
       modelsSource: registry.length ? 'registry' : endpointList.length ? 'endpoint' : 'env',
       vision: llm.supportsVision(),
       visionFromEndpoint: !!endpoints.getCurrentEndpoint(),
+      effortLevels,
+      effortByModel,
     };
   }
   app.providerInfo = providerInfo;
+
+  // Pull provider /models capabilities (xAI advertises reasoning_effort there)
+  // and push a fresh provider snapshot to open sockets when anything changed.
+  app.refreshProviderCapabilities = async () => {
+    if (!llm.isConfigured()) return;
+    try {
+      const client = llm.makeClient();
+      const base = endpoints.getCurrentEndpoint()?.base_url || process.env.SHMAKK_BASE_URL || '';
+      const n = await llm.refreshEffortCatalog(client, base);
+      if (n > 0 && typeof app.broadcastProvider === 'function') app.broadcastProvider();
+    } catch { /* heuristics remain */ }
+  };
 
   function features() {
     return {
@@ -367,8 +407,14 @@ function createApi(app) {
       const timer = setTimeout(() => ctrl.abort(), 8000);
       const page = await client.models.list({ signal: ctrl.signal });
       clearTimeout(timer);
-      const ids = (page.data || []).map((m) => m.id).filter(Boolean).sort();
-      return { models: ids };
+      const rows = page.data || [];
+      const base = endpoints.getCurrentEndpoint()?.base_url || process.env.SHMAKK_BASE_URL || '';
+      llm.ingestEffortCatalog(rows, base);
+      const ids = rows.map((m) => m.id).filter(Boolean).sort();
+      const effortByModel = {};
+      for (const id of ids) effortByModel[id] = llm.effortLevelsForModel(id, { baseUrl: base });
+      if (typeof app.broadcastProvider === 'function') app.broadcastProvider();
+      return { models: ids, effortByModel };
     } catch (e) {
       return { models: [], error: String(e.message || e) };
     }

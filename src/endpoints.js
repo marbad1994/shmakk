@@ -77,7 +77,7 @@ function normalizeModelConfig(name, cfg) {
   if (!cfg || typeof cfg !== 'object') return null;
 
   const provider = String(cfg.provider || cfg.type || 'openai-compatible').toLowerCase();
-  return {
+  const out = {
     name,
     provider,
     base_url: cfg.base_url || cfg.baseUrl || cfg.host || cfg.url || null,
@@ -89,6 +89,10 @@ function normalizeModelConfig(name, cfg) {
     fast: !!cfg.fast,
     vision: _supportsVisionForConfig(cfg),
   };
+  // Optional reasoning_effort override: false/[] hide the control, true = all
+  // known levels, or an explicit list like ["low","high"].
+  if ('effort' in cfg) out.effort = cfg.effort;
+  return out;
 }
 
 function normalizeRegistry(raw) {

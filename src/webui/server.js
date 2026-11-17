@@ -615,6 +615,11 @@ async function startWebServer(opts = {}) {
   const mcpCount = app.mcp.loadConfig(workspace);
   if (mcpCount > 0) app.mcp.startAll(() => {}).then(() => broadcast({ t: 'status.changed' })).catch(() => {});
   setImmediate(() => { try { sessionSearch.indexAuditLog(); } catch {} });
+  // Discover per-model reasoning_effort options from the provider /models list
+  // (xAI advertises them; others fall back to name heuristics).
+  if (typeof app.refreshProviderCapabilities === 'function') {
+    setImmediate(() => { app.refreshProviderCapabilities().catch(() => {}); });
+  }
   app.automations.start();
 
   let closed = false;

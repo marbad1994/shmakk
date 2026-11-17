@@ -176,6 +176,23 @@ export function Composer({ mode: space, running, activity, mic, speaking, onMic,
   const clearDraft = useApp((s) => s.clearDraft);
   const activeId = useApp((s) => s.activeId);
 
+  // Active model + the reasoning_effort levels it actually accepts. Resolved
+  // early so submit can clamp a stale settings value before the menus render.
+  const DEFAULT_MODEL = '__default';
+  const modelByMode = settings.modelByMode || ({} as Record<Mode, string | null>);
+  const currentModel = modelByMode[space] || provider.model || 'default';
+  const effortLevels: EffortLevel[] = useMemo(() => {
+    const by = provider.effortByModel || {};
+    if (currentModel && by[currentModel]) return by[currentModel];
+    if (provider.model && by[provider.model]) return by[provider.model];
+    return provider.effortLevels || [];
+  }, [provider.effortByModel, provider.effortLevels, provider.model, currentModel]);
+  const effortSupported = effortLevels.length > 0;
+  const activeEffort: EffortLevel | null =
+    settings.reasoningEffort && effortLevels.includes(settings.reasoningEffort)
+      ? settings.reasoningEffort
+      : null;
+
   const [text, setText] = useState('');
   const [files, setFiles] = useState<PendingFile[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -277,8 +294,8 @@ export function Composer({ mode: space, running, activity, mic, speaking, onMic,
     clearBlobUrls();
     setMenuDismissed(false);
     haptic();
-    void send(value, shell ? 'shell' : 'ask', files.map(({ name, size, content, mimeType, data }) => ({ name, size, content, mimeType, data })), settings.reasoningEffort || null);
-  }, [text, files, running, mode, shell, matches, runCommand, send, clearBlobUrls, settings.reasoningEffort]);
+    void send(value, shell ? 'shell' : 'ask', files.map(({ name, size, content, mimeType, data }) => ({ name, size, content, mimeType, data })), activeEffort);
+  }, [text, files, running, mode, shell, matches, runCommand, send, clearBlobUrls, activeEffort]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.nativeEvent.isComposing) return;
@@ -358,9 +375,6 @@ export function Composer({ mode: space, running, activity, mic, speaking, onMic,
   // Per-space model picker. The list comes from the model registry in
   // ~/.config/shmakk/endpoints.json (env vars are only the fallback);
   // "default" clears the override.
-  const DEFAULT_MODEL = '__default';
-  const modelByMode = settings.modelByMode || ({} as Record<Mode, string | null>);
-  const currentModel = modelByMode[space] || provider.model || 'default';
   const setModel = (v: string) => patchSettings({ modelByMode: { ...modelByMode, [space]: v === DEFAULT_MODEL ? null : v } });
 
   const modelMenu = (
@@ -382,14 +396,22 @@ export function Composer({ mode: space, running, activity, mic, speaking, onMic,
     </DropdownMenu>
   );
 
-  // Reasoning effort for reasoning-capable models (xAI/Grok, OpenAI o-series,
-  // OpenRouter, ...). "auto" clears the override and lets the provider decide.
+  // Reasoning effort — only for models that actually accept reasoning_effort.
+  // Levels come from the provider (live /models catalog, name heuristics, or an
+  // endpoints.json `effort` override). Empty list hides the control entirely.
   const DEFAULT_EFFORT = '__default';
-  const EFFORT_LEVELS: EffortLevel[] = ['minimal', 'low', 'medium', 'high', 'xhigh'];
-  const effort = settings.reasoningEffort || DEFAULT_EFFORT;
+  const effort = activeEffort || DEFAULT_EFFORT;
   const setEffort = (v: string) => patchSettings({ reasoningEffort: v === DEFAULT_EFFORT ? null : (v as EffortLevel) });
 
-  const effortMenu = (
+  // Drop a stale effort when the active model cannot take it (e.g. switched
+  // from grok-4.7 to deepseek). Keeps settings honest without a manual reset.
+  useEffect(() => {
+    if (!settings.reasoningEffort) return;
+    if (effortSupported && effortLevels.includes(settings.reasoningEffort)) return;
+    patchSettings({ reasoningEffort: null });
+  }, [settings.reasoningEffort, effortSupported, effortLevels, patchSettings]);
+
+  const effortMenu = effortSupported ? (
     <DropdownMenu>
       <Tip label="Reasoning effort" side="top">
         <DropdownMenuTrigger asChild>
@@ -402,11 +424,11 @@ export function Composer({ mode: space, running, activity, mic, speaking, onMic,
         <DropdownMenuLabel>Reasoning effort</DropdownMenuLabel>
         <DropdownMenuRadioGroup value={effort} onValueChange={setEffort}>
           <DropdownMenuRadioItem value={DEFAULT_EFFORT}>auto <span className="text-faint">· provider default</span></DropdownMenuRadioItem>
-          {EFFORT_LEVELS.map((e) => <DropdownMenuRadioItem key={e} value={e}>{e}</DropdownMenuRadioItem>)}
+          {effortLevels.map((e) => <DropdownMenuRadioItem key={e} value={e}>{e}</DropdownMenuRadioItem>)}
         </DropdownMenuRadioGroup>
       </DropdownMenuContent>
     </DropdownMenu>
-  );
+  ) : null;
 
   return (
     <div className="relative shrink-0 px-5.5 pb-3 max-md:px-2 max-md:pb-2">

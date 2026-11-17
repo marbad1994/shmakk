@@ -873,10 +873,173 @@ function isDeepSeekProvider() {
 }
 
 const REASONING_EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh']);
+const ALL_EFFORT_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh'];
 
 function normalizeEffort(effort) {
   const v = String(effort || '').trim().toLowerCase();
   return REASONING_EFFORTS.has(v) ? v : null;
+}
+
+// Live catalog of reasoning_effort levels discovered from provider /models
+// responses (xAI exposes capabilities.reasoning_effort). Keyed by model id
+// and alias. Cleared when the base URL changes.
+const effortCatalog = new Map(); // modelId -> EffortLevel[]
+let effortCatalogBase = null;
+
+function clearEffortCatalog() {
+  effortCatalog.clear();
+  effortCatalogBase = null;
+}
+
+/** Normalize an endpoints.json `effort` override into a level list, or null when unset. */
+function parseEffortOverride(raw) {
+  if (raw === undefined) return null;
+  if (raw === false || raw === null) return [];
+  if (raw === true) return ALL_EFFORT_LEVELS.slice();
+  const list = Array.isArray(raw)
+    ? raw
+    : String(raw).split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
+  // Keep only levels shmakk knows; drop provider-only tokens like "none".
+  return list.map((s) => String(s).trim().toLowerCase()).filter((v) => REASONING_EFFORTS.has(v));
+}
+
+function filterEffortLevels(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const raw of list) {
+    const v = String(raw || '').trim().toLowerCase();
+    if (REASONING_EFFORTS.has(v) && !out.includes(v)) out.push(v);
+  }
+  return out;
+}
+
+/**
+ * Name/provider heuristics used when the live /models catalog has nothing for
+ * this id. Returns [] when the model is known not to take reasoning_effort
+ * (dropdown should hide). Unknown models also return [] so we never send a
+ * parameter the provider will reject.
+ */
+function heuristicEffortLevels(model, { baseUrl = '', provider = '' } = {}) {
+  const m = String(model || '').toLowerCase();
+  const base = String(baseUrl || '').toLowerCase();
+  const p = String(provider || '').toLowerCase();
+  if (!m && !base && !p) return [];
+
+  // DeepSeek: thinking is an on/off switch managed by shmakk, not a user
+  // effort ladder.
+  if (base.includes('deepseek') || p.includes('deepseek') || m.includes('deepseek')) return [];
+
+  // Anthropic extended thinking uses budget tokens, not reasoning_effort.
+  if (p === 'anthropic' || /(^|\/)claude/.test(m)) return [];
+
+  // OpenAI o-series (o1, o3, o4-mini, ...).
+  if (/(^|\/)o[1-9]([.-]|$)/.test(m) || /(^|[^a-z])o[1-9](-mini|-pro)?\b/.test(m)) {
+    return ['low', 'medium', 'high'];
+  }
+
+  // GPT-5 family. Pro/codex variants accept xhigh; the rest stop at high.
+  if (/gpt-5/.test(m)) {
+    if (/pro|codex/.test(m)) return ['minimal', 'low', 'medium', 'high', 'xhigh'];
+    return ['minimal', 'low', 'medium', 'high'];
+  }
+
+  // xAI / Grok — mirror the public model catalog when live fetch is unavailable.
+  const xai = base.includes('x.ai') || p === 'xai' || p === 'grok' || m.startsWith('grok');
+  if (xai) {
+    if (/non-reasoning|imagine/.test(m)) return [];
+    // grok-4.3 ships "none" as the off switch; our UI uses auto for that.
+    if (/grok-4\.3\b/.test(m)) return ['low', 'medium', 'high', 'xhigh'];
+    if (/grok-4\.[5-9]\b|grok-4\.[1-9]\d/.test(m)) return ['low', 'medium', 'high', 'xhigh'];
+    if (/grok-3/.test(m)) return ['low', 'high'];
+    // grok-build / code-fast and several 4.20 variants reason but expose no effort knob.
+    return [];
+  }
+
+  return [];
+}
+
+function lookupEffortCatalog(model) {
+  const id = String(model || '').trim();
+  if (!id) return null;
+  if (effortCatalog.has(id)) return effortCatalog.get(id);
+  const lower = id.toLowerCase();
+  for (const [key, levels] of effortCatalog.entries()) {
+    if (key.toLowerCase() === lower) return levels;
+  }
+  return null;
+}
+
+/**
+ * Levels the UI may offer for a model. Order of precedence:
+ *   1. endpoints.json `effort` override on the entry
+ *   2. live /models catalog (when the provider advertises capabilities)
+ *   3. name/provider heuristics
+ * Empty array => model does not take reasoning_effort; hide the control.
+ */
+function effortLevelsForModel(model, opts = {}) {
+  const override = parseEffortOverride(opts.effort);
+  if (override) return override;
+
+  const live = lookupEffortCatalog(model);
+  // null = catalog has no entry (fall through); [] = provider said no effort.
+  if (live !== null) return live.slice();
+
+  return heuristicEffortLevels(model, opts);
+}
+
+/** Ingest a /models page (OpenAI-shaped) into the live effort catalog. */
+function ingestEffortCatalog(models, baseUrl = null) {
+  const base = baseUrl == null ? effortCatalogBase : String(baseUrl || '');
+  if (effortCatalogBase !== base) {
+    effortCatalog.clear();
+    effortCatalogBase = base;
+  }
+  const list = Array.isArray(models) ? models : [];
+  for (const entry of list) {
+    if (!entry || typeof entry !== 'object') continue;
+    const id = String(entry.id || entry.name || '').trim();
+    if (!id) continue;
+    const caps = entry.capabilities || entry.features || {};
+    const raw =
+      caps.reasoning_effort ||
+      caps.reasoningEffort ||
+      (caps.reasoningEffortOptions && caps.reasoningEffortOptions.supportedEfforts) ||
+      entry.reasoning_effort ||
+      null;
+    // Only write an entry when the provider spoke about effort. Models with no
+    // capabilities block stay absent so heuristics can still apply.
+    if (raw == null) continue;
+    const levels = filterEffortLevels(raw);
+    effortCatalog.set(id, levels);
+    const aliases = Array.isArray(entry.aliases) ? entry.aliases : [];
+    for (const alias of aliases) {
+      const a = String(alias || '').trim();
+      if (a) effortCatalog.set(a, levels);
+    }
+  }
+  return effortCatalog.size;
+}
+
+/**
+ * Pull /models from the active client and refresh the effort catalog.
+ * Failures are silent — heuristics remain the fallback.
+ */
+async function refreshEffortCatalog(client, baseUrl = null) {
+  if (!client || !client.models || typeof client.models.list !== 'function') return 0;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    let page;
+    try {
+      page = await client.models.list({ signal: ctrl.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+    const models = (page && page.data) || (Array.isArray(page) ? page : []);
+    return ingestEffortCatalog(models, baseUrl);
+  } catch {
+    return 0;
+  }
 }
 
 // Reasoning / thinking options for a request.
@@ -884,8 +1047,9 @@ function normalizeEffort(effort) {
 // DeepSeek manages reasoning via its own `thinking` flag, so it keeps the
 // existing behavior and ignores the `effort` argument. Other OpenAI-compatible
 // providers (xAI/Grok, OpenAI, OpenRouter, ...) take an explicit
-// `reasoning_effort` when the caller asked for one.
-function getReasoningOptions(taskType, effort = null) {
+// `reasoning_effort` when the caller asked for one — and only when the model
+// is known to accept it.
+function getReasoningOptions(taskType, effort = null, model = null) {
   if (isDeepSeekProvider()) {
     // Respect runtime override (set after a DSML leak).
     const forceNoThinking = process.env._SHMAKK_FORCE_NO_THINKING === '1';
@@ -923,8 +1087,17 @@ function getReasoningOptions(taskType, effort = null) {
   }
 
   const level = normalizeEffort(effort);
-  if (level) return { reasoning_effort: level };
-  return {};
+  if (!level) return {};
+
+  // Drop levels the active model cannot take (stale UI setting, wrong model).
+  const resolvedModel = model || modelFor();
+  const cfg = envForProvider();
+  const supported = effortLevelsForModel(resolvedModel, {
+    baseUrl: cfg.baseURL || process.env.SHMAKK_BASE_URL || '',
+    provider: '',
+  });
+  if (!supported.includes(level)) return {};
+  return { reasoning_effort: level };
 }
 
 // ── Vision fallback: describe images via a vision-capable endpoint ────────
@@ -1052,6 +1225,13 @@ module.exports = {
   getReasoningOptions,
   normalizeEffort,
   isDeepSeekProvider,
+  effortLevelsForModel,
+  heuristicEffortLevels,
+  ingestEffortCatalog,
+  refreshEffortCatalog,
+  clearEffortCatalog,
+  parseEffortOverride,
+  ALL_EFFORT_LEVELS,
   supportsVision,
   describeImages,
   userContentWithImages,

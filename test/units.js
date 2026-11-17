@@ -1839,26 +1839,62 @@ test('webui chat: attachments are inlined into the prompt and kept off the store
 
   test('llm: reasoning effort is normalised and only sent when asked for', () => {
     const llm = require('../src/llm');
-    for (const k of ['SHMAKK_BASE_URL', 'SHMAKK_ENDPOINTS_FILE', '_SHMAKK_FORCE_NO_THINKING']) delete process.env[k];
+    for (const k of ['SHMAKK_BASE_URL', 'SHMAKK_ENDPOINTS_FILE', '_SHMAKK_FORCE_NO_THINKING', 'SHMAKK_MODEL']) delete process.env[k];
+    llm.clearEffortCatalog();
 
     assert.strictEqual(llm.normalizeEffort(' HIGH '), 'high');
     assert.strictEqual(llm.normalizeEffort('xhigh'), 'xhigh');
     assert.strictEqual(llm.normalizeEffort(''), null);
     assert.strictEqual(llm.normalizeEffort('maximum'), null);
 
-    // Non-DeepSeek endpoints pass the level straight through as reasoning_effort.
+    // Non-DeepSeek endpoints pass the level only when the model accepts it.
     process.env.SHMAKK_BASE_URL = 'http://127.0.0.1:8787/v1';
-    assert.deepStrictEqual(llm.getReasoningOptions('chat', 'low'), { reasoning_effort: 'low' });
-    assert.deepStrictEqual(llm.getReasoningOptions('chat', 'bogus'), {}, 'an unknown level is not forwarded');
-    assert.deepStrictEqual(llm.getReasoningOptions('chat', null), {}, 'no effort means the provider default');
+    process.env.SHMAKK_MODEL = 'o3';
+    assert.deepStrictEqual(llm.getReasoningOptions('chat', 'low', 'o3'), { reasoning_effort: 'low' });
+    assert.deepStrictEqual(llm.getReasoningOptions('chat', 'bogus', 'o3'), {}, 'an unknown level is not forwarded');
+    assert.deepStrictEqual(llm.getReasoningOptions('chat', null, 'o3'), {}, 'no effort means the provider default');
+    assert.deepStrictEqual(llm.getReasoningOptions('chat', 'minimal', 'o3'), {}, 'o-series has no minimal');
+    assert.deepStrictEqual(llm.getReasoningOptions('chat', 'high', 'gpt-4o'), {}, 'non-reasoning models get no effort');
 
     // DeepSeek keeps its thinking switch and never mixes in reasoning_effort.
     process.env.SHMAKK_BASE_URL = 'https://api.deepseek.com/v1';
+    process.env.SHMAKK_MODEL = 'deepseek-chat';
     const loop = llm.getReasoningOptions('tool_loop', 'high');
     assert.strictEqual(loop.reasoning_effort, undefined);
     assert.deepStrictEqual(loop.extra_body, { thinking: { type: 'disabled' } });
     assert.strictEqual(llm.getReasoningOptions('chat', 'high').reasoning_effort, 'high');
     delete process.env.SHMAKK_BASE_URL;
+    delete process.env.SHMAKK_MODEL;
+    llm.clearEffortCatalog();
+  });
+
+  test('llm: effort levels come from catalog, heuristics, or endpoints override', () => {
+    const llm = require('../src/llm');
+    llm.clearEffortCatalog();
+
+    assert.deepStrictEqual(llm.effortLevelsForModel('deepseek-v4-flash', { baseUrl: 'https://api.deepseek.com' }), []);
+    assert.deepStrictEqual(llm.effortLevelsForModel('gpt-4o', { baseUrl: 'https://api.openai.com/v1' }), []);
+    assert.deepStrictEqual(llm.effortLevelsForModel('o3', {}), ['low', 'medium', 'high']);
+    assert.deepStrictEqual(llm.effortLevelsForModel('gpt-5', {}), ['minimal', 'low', 'medium', 'high']);
+    assert.deepStrictEqual(llm.effortLevelsForModel('grok-4.7', { baseUrl: 'https://api.x.ai/v1' }), ['low', 'medium', 'high', 'xhigh']);
+    assert.deepStrictEqual(llm.effortLevelsForModel('grok-build-0.1', { baseUrl: 'https://api.x.ai/v1' }), []);
+
+    // endpoints.json override wins over heuristics.
+    assert.deepStrictEqual(llm.effortLevelsForModel('gpt-4o', { effort: ['low', 'high'] }), ['low', 'high']);
+    assert.deepStrictEqual(llm.effortLevelsForModel('o3', { effort: false }), []);
+
+    // Live /models catalog (xAI shape) beats heuristics for that id.
+    llm.ingestEffortCatalog([{
+      id: 'grok-4.3',
+      aliases: ['grok-4.3-latest'],
+      capabilities: { reasoning_effort: ['none', 'low', 'medium', 'high', 'xhigh'] },
+    }], 'https://api.x.ai/v1');
+    assert.deepStrictEqual(llm.effortLevelsForModel('grok-4.3'), ['low', 'medium', 'high', 'xhigh']);
+    assert.deepStrictEqual(llm.effortLevelsForModel('grok-4.3-latest'), ['low', 'medium', 'high', 'xhigh']);
+    // Provider said this id has no effort block → stay absent, heuristics apply.
+    llm.ingestEffortCatalog([{ id: 'plain-model' }], 'https://api.x.ai/v1');
+    assert.deepStrictEqual(llm.effortLevelsForModel('plain-model', { baseUrl: 'https://api.x.ai/v1' }), []);
+    llm.clearEffortCatalog();
   });
 
   test('cli: --effort accepts the known levels and rejects everything else', () => {

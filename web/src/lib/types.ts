@@ -117,6 +117,8 @@ export interface RegistryModel {
   provider: string | null; vision: boolean; hasApiKey: boolean; default: boolean; fast: boolean;
   baseUrl: string; registry: string; headers: string | Record<string, string>;
   visionExplicit: boolean; // "vision" written on the entry instead of auto-detected
+  /** Optional override: false hides effort, true = all levels, or an explicit list. */
+  effort?: boolean | EffortLevel[] | string | null;
 }
 export interface Provider {
   configured: boolean; endpoint: string | null; endpoints: string[]; baseUrl: string; model: string;
@@ -127,6 +129,10 @@ export interface Provider {
   modelsSource: 'registry' | 'endpoint' | 'env';
   vision?: boolean; // the active model is sent images
   visionFromEndpoint?: boolean; // decided by endpoints.json, not by the Settings switch
+  /** reasoning_effort levels the active model accepts (empty = hide the control). */
+  effortLevels?: EffortLevel[];
+  /** Per selectable model id (and registry preset name) → accepted effort levels. */
+  effortByModel?: Record<string, EffortLevel[]>;
 }
 export interface Features {
   terminal: boolean; terminalReason: string | null; sessionSearch: boolean; stt: boolean; tts: boolean;

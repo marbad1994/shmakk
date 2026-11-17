@@ -79,6 +79,25 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // OpenAI-compatible model list. Includes capabilities.reasoning_effort so
+  // shmakk can discover which effort levels the mock accepts (mirrors xAI).
+  if (req.method === 'GET' && /\/models\/?$/.test(req.url.split('?')[0])) {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({
+      object: 'list',
+      data: [{
+        id: 'mock',
+        object: 'model',
+        owned_by: 'shmakk-mock',
+        capabilities: {
+          reasoning_effort: ['minimal', 'low', 'medium', 'high', 'xhigh'],
+          default_reasoning_effort: 'medium',
+        },
+      }],
+    }));
+    return;
+  }
+
   if (req.method !== 'POST' || !req.url.endsWith('/chat/completions')) {
     res.writeHead(404).end('not found');
     return;

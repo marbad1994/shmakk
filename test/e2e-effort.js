@@ -68,7 +68,9 @@ const clearCaptured = async () => {
 
 const isChatRequest = (p) => {
   const sys = (p.messages || []).find((m) => m.role === 'system');
-  return !!sys && /You are shmakk, a thoughtful/i.test(String(sys.content || ''));
+  const content = String((sys && sys.content) || '');
+  // Match both the agent system prompt and the older short chat prompt.
+  return !!sys && /You are (?:an expert AI coding assistant running inside shmakk|shmakk, a thoughtful)/i.test(content);
 };
 
 // Pipes truncate console output when process.exit follows right after, so the
@@ -89,7 +91,10 @@ process.on('unhandledRejection', (e) => { say(`E2E FAIL: ${e && e.message}` , 2)
   const PORT = await freePort();
   MOCK_PORT = await freePort();
 
-  const mock = spawn('node', ['test/mock-llm.js', String(MOCK_PORT)], { stdio: 'ignore' });
+  let mockOut = '';
+  const mock = spawn('node', ['test/mock-llm.js', String(MOCK_PORT)], { stdio: ['ignore', 'pipe', 'pipe'] });
+  mock.stdout.on('data', (c) => { mockOut += c; });
+  mock.stderr.on('data', (c) => { mockOut += c; });
   procs.push(mock);
   await waitForPort(MOCK_PORT);
 
@@ -116,22 +121,32 @@ process.on('unhandledRejection', (e) => { say(`E2E FAIL: ${e && e.message}` , 2)
     const { chromium } = require('playwright');
     browser = await chromium.launch({ executablePath: '/usr/bin/chromium', args: ['--no-sandbox'] });
     const page = await browser.newPage();
+    const step = (m) => say(`step: ${m}`);
     await page.goto(`http://127.0.0.1:${PORT}/?token=${TOKEN}`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('textarea', { timeout: 20000 });
 
-    // 1. The effort control starts on "auto" (provider default).
+    step('checking default effort');
+
+    // 1. The effort control appears once the mock /models catalog is ingested
+    // (models without reasoning_effort hide it entirely) and starts on "auto".
     const trigger = page.locator('button:has(svg.lucide-gauge)');
-    if (await trigger.count() !== 1) throw new Error(`effort control not found (matched ${await trigger.count()})`);
+    await waitFor(async () => (await trigger.count()) === 1, 10000, 'effort control after capability discovery');
     if (!/auto/.test(await trigger.innerText())) throw new Error(`effort should start on auto, got "${await trigger.innerText()}"`);
+
+    step('picking high');
 
     // 2. Pick "high" from the dropdown.
     await trigger.click();
     await page.getByRole('menuitemradio', { name: /^high$/ }).click();
     await waitFor(async () => /high/.test(await trigger.innerText()), 5000, 'effort chip to read high');
 
+    step('checking settings persisted');
+
     // 3. The choice is persisted in settings.
     const settings = await page.evaluate(async () => (await fetch('/api/settings')).json());
     if (settings.reasoningEffort !== 'high') throw new Error(`settings.reasoningEffort = ${JSON.stringify(settings.reasoningEffort)}`);
+
+    step('sending message with high');
 
     // 4. Sending a message carries reasoning_effort to the provider.
     await clearCaptured();
@@ -141,9 +156,15 @@ process.on('unhandledRejection', (e) => { say(`E2E FAIL: ${e && e.message}` , 2)
     const sent = await waitForValue(async () => {
       const all = (await captured()).filter(isChatRequest);
       return all.length ? all : false;
-    }, 10000, 'chat request at the mock');
+    }, 10000, 'chat request at the mock').catch(async (e) => {
+      const raw = await captured();
+      say(`DEBUG captured=${raw.length} prompts=${JSON.stringify(raw.map((p) => String(((p.messages || []).find((m) => m.role === 'system') || {}).content || '').slice(0, 80)))}`, 2);
+      throw e;
+    });
     const highReq = sent[sent.length - 1];
     if (highReq.reasoning_effort !== 'high') throw new Error(`expected reasoning_effort=high, got ${JSON.stringify(highReq.reasoning_effort)}`);
+
+    step('switching back to auto');
 
     // 5. Switching back to auto drops the override from the next request.
     await trigger.click();
@@ -169,6 +190,15 @@ process.on('unhandledRejection', (e) => { say(`E2E FAIL: ${e && e.message}` , 2)
     process.exit(0);
   } catch (e) {
     say(`E2E FAIL: ${e.message}`, 2);
+    if (browser) {
+      try {
+        const pages = browser.contexts()[0].pages();
+        const pg = pages[pages.length - 1];
+        say(`DEBUG url=${pg.url()}`, 2);
+        say(`DEBUG body=${(await pg.locator('body').innerText()).slice(0, 700).replace(/\n/g, ' | ')}`, 2);
+      } catch {}
+    }
+    say(`DEBUG mock: ${mockOut.slice(-700).replace(/\n/g, ' | ')}`, 2);
     cleanup();
     fs.rmSync(tmp, { recursive: true, force: true });
     process.exit(1);
