@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { AlertTriangle, Camera, Check, ChevronDown, ChevronRight, ListChecks, Mic, MicOff, MonitorPlay, Pause, Play, Plus, Save, Square, Trash2, Workflow, X } from 'lucide-react';
+import { AlertTriangle, Camera, Check, ChevronDown, ChevronRight, FileCode2, ListChecks, Mic, MicOff, MonitorPlay, Pause, Play, Plus, Save, Square, Trash2, Workflow, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -20,8 +20,24 @@ type Deliverable = 'tasks' | 'automation';
 interface AutomationAction { action: string; description: string; target?: string; value?: string | null; key?: string | null }
 interface AutomationResult { summary: string; goal: string; actions: AutomationAction[]; warnings: string[] }
 
+/** One distinct request found in the recording, with the tasks written for it. */
+interface Topic {
+  title: string;
+  kind: 'bug' | 'change' | 'feature' | 'question';
+  summary: string;
+  quote: string | null;
+  start: number;
+  end: number;
+  frames: { file: string; t: number; transcript: string | null }[];
+  tasks: ProposedTask[];
+  filesRead: string[];
+  toolCalls: number;
+}
+type TopicDraft = Topic & { include: boolean };
+
 interface S2PResult {
   mode: Deliverable;
+  topics?: Topic[];
   automation?: AutomationResult;
   title: string;
   summary: string;
@@ -33,13 +49,13 @@ interface S2PResult {
   via: 'model' | 'fallback';
   uncertain: string[];
 }
-interface S2PStatus { id: string; stage: string; error: string | null; warnings: string[]; frames: number; result: S2PResult | null }
+interface S2PStatus { id: string; stage: string; error: string | null; warnings: string[]; frames: number; result: S2PResult | null; progress: { done: number; total: number; topic: string | null; note: string | null } | null }
 
 const STAGES: { id: string; label: string }[] = [
   { id: 'uploading', label: 'Uploading audio' },
   { id: 'transcribing', label: 'Transcribing what you said' },
-  { id: 'analyzing', label: 'Reading the recording and writing tasks' },
-  { id: 'planning', label: 'Finding the code each task touches' },
+  { id: 'topics', label: 'Finding the separate requests' },
+  { id: 'investigating', label: 'Reading the code for each request' },
 ];
 
 /** The prompt a Cowork automation step runs, from one recorded action. */
@@ -85,6 +101,8 @@ export function Show2Plan() {
   const [interim, setInterim] = useState('');
   const [micNote, setMicNote] = useState<string | null>(null);
   const [tasks, setTasks] = useState<ProposedTask[]>([]);
+  const [topics, setTopics] = useState<TopicDraft[]>([]);
+  const [planPerTopic, setPlanPerTopic] = useState(false);
   const [title, setTitle] = useState('');
   const [signoff, setSignoff] = useState(true);
   const [creating, setCreating] = useState(false);
@@ -107,7 +125,7 @@ export function Show2Plan() {
     recRef.current = null;
     stoppingRef.current = false;
     setPhase('setup'); setError(null); setSessionId(null); setElapsed(0); setPaused(false); setFrames(0);
-    setLevel(0); setSegments([]); setInterim(''); setMicNote(null); setTasks([]); setTitle(''); setShowTranscript(false);
+    setLevel(0); setSegments([]); setInterim(''); setMicNote(null); setTasks([]); setTopics([]); setTitle(''); setShowTranscript(false);
   }, []);
 
   useEffect(() => { if (open) { reset(); setActions([]); } }, [open, reset]);
@@ -142,6 +160,7 @@ export function Show2Plan() {
     if (!d || phase !== 'processing') return;
     if (d.stage === 'done' && d.result) {
       setTasks(d.result.tasks);
+      setTopics((d.result.topics ?? []).map((t) => ({ ...t, include: true })));
       setActions(d.result.automation?.actions ?? []);
       setTitle(d.result.title);
       setPhase('review');
@@ -222,20 +241,33 @@ export function Show2Plan() {
   };
 
 
+  const included = topics.filter((t) => t.include && t.tasks.length);
+  const taskCount = topics.length ? included.reduce((n, t) => n + t.tasks.length, 0) : tasks.length;
+
   const createPlan = async (startNow: boolean) => {
     if (!sessionId) return;
     setCreating(true);
     try {
       const result = status.data?.result;
-      const plan = await api.post<PlanFull>('/api/plans', {
-        title, source: 'show2plan', requireSignoff: signoff, show2planId: sessionId, tasks,
-        summary: [result?.summary, result?.transcript.text ? `Narration: "${result.transcript.text.slice(0, 1500)}"` : null].filter(Boolean).join('\n\n'),
-      });
-      if (startNow) await api.post(`/api/plans/${plan.id}/run`);
+      const narration = result?.transcript.text ? `Narration: "${result.transcript.text.slice(0, 1500)}"` : null;
+      // Each task says which request it belongs to: plans hold tasks from several.
+      const tagged = (t: Topic) => t.tasks.map((x) => ({ ...x, instructions: `_Request: ${t.title}_\n\n${x.instructions}` }));
+      const groups = !topics.length
+        ? [{ title, summary: result?.summary || '', tasks }]
+        : planPerTopic
+          ? included.map((t) => ({ title: t.title, summary: [t.summary, t.quote ? `In their words: "${t.quote}"` : null].filter(Boolean).join('\n\n'), tasks: t.tasks }))
+          : [{ title, summary: [result?.summary, ...included.map((t, i) => `${i + 1}. ${t.title}: ${t.summary}`)].filter(Boolean).join('\n'), tasks: included.flatMap(tagged) }];
+      const plans: PlanFull[] = [];
+      for (const g of groups) {
+        plans.push(await api.post<PlanFull>('/api/plans', { title: g.title, source: 'show2plan', requireSignoff: signoff, show2planId: sessionId, tasks: g.tasks, summary: [g.summary, narration].filter(Boolean).join('\n\n') }));
+      }
+      // Plans running side by side would edit the same workspace at once, so
+      // only a single plan is started; separate plans are left as drafts.
+      if (startNow && plans.length === 1) await api.post(`/api/plans/${plans[0].id}/run`);
       discard();
       setOpen(false);
-      toast.success(startNow ? 'Plan started' : 'Plan created', { action: { label: 'Open', onClick: () => openPlan(plan.id) } });
-      openPlan(plan.id);
+      toast.success(plans.length > 1 ? `${plans.length} plans created. Start them one at a time in Plans.` : startNow ? 'Plan started' : 'Plan created', { action: { label: 'Open', onClick: () => openPlan(plans[0].id) } });
+      openPlan(plans[0].id);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     } finally {
@@ -353,7 +385,14 @@ export function Show2Plan() {
                   return (
                     <li key={s.id} className={cn('flex items-center gap-2.5 rounded-lg border px-3 py-2 text-[13px]', active ? 'border-line-strong bg-panel' : 'border-transparent')}>
                       {done ? <Check className="size-4 text-accent" /> : active ? <Spinner className="size-4" /> : <span className={cn('size-4 rounded-full border-2', error && i === stageIdx ? 'border-danger' : 'border-line')} />}
-                      <span className={done ? 'text-fg' : 'text-dim'}>{s.label}</span>
+                      <span className="grid min-w-0">
+                        <span className={done ? 'text-fg' : 'text-dim'}>{s.label}</span>
+                        {active && s.id === 'investigating' && status.data?.progress?.total ? (
+                          <span className="truncate text-[12px] text-faint">
+                            Request {Math.min(status.data.progress.done + 1, status.data.progress.total)} of {status.data.progress.total}{status.data.progress.topic ? `: ${status.data.progress.topic}` : ''}{status.data.progress.note ? ` · ${status.data.progress.note}` : ''}
+                          </span>
+                        ) : null}
+                      </span>
                     </li>
                   );
                 })}
@@ -367,20 +406,6 @@ export function Show2Plan() {
               {result.summary ? <p className="m-0 text-[13.5px] text-fg">{result.summary}</p> : null}
               {warnings.map((w) => <p key={w} className="m-0 flex items-start gap-2 rounded-lg border border-warn/40 bg-warn/10 px-3 py-2 text-[12.5px] text-warn"><AlertTriangle className="mt-0.5 size-3.5 shrink-0" />{w}</p>)}
 
-              {result.frames.length ? (
-                <div className="grid gap-1.5">
-                  <span className="text-[12px] font-medium text-dim">Screenshots the model read ({result.frames.length} of {result.allFrames} captured)</span>
-                  <div className="flex gap-1.5 overflow-x-auto pb-1">
-                    {result.frames.map((f) => (
-                      <a key={f.file} href={frameSrc(f.file)} target="_blank" rel="noreferrer" className="relative shrink-0" title={f.transcript || f.reason}>
-                        <img src={frameSrc(f.file)} alt={`Moment at ${fmt(f.t)}`} loading="lazy" className="h-20 w-auto rounded-md border border-line object-contain" />
-                        <span className="absolute bottom-0.5 left-0.5 rounded bg-black/65 px-1 text-[10.5px] text-white">{fmt(f.t)}</span>
-                      </a>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-
               {result.transcript.text ? (
                 <div>
                   <button type="button" className="inline-flex items-center gap-1 text-[12.5px] text-dim hover:text-fg" onClick={() => setShowTranscript((v) => !v)} aria-expanded={showTranscript}>
@@ -390,10 +415,12 @@ export function Show2Plan() {
                 </div>
               ) : null}
 
-              <div className="grid gap-1.5">
-                <label htmlFor="s2p-title" className="text-[12px] font-medium text-dim">Plan title</label>
-                <Input id="s2p-title" value={title} onChange={(e) => setTitle(e.target.value)} />
-              </div>
+              {result.mode !== 'automation' && !planPerTopic ? (
+                <div className="grid gap-1.5">
+                  <label htmlFor="s2p-title" className="text-[12px] font-medium text-dim">Plan title</label>
+                  <Input id="s2p-title" value={title} onChange={(e) => setTitle(e.target.value)} />
+                </div>
+              ) : null}
               {result.mode === 'automation' ? (
                 <div className="grid gap-2">
                   {(result.automation?.warnings ?? []).map((w) => <p key={w} className="m-0 rounded-lg border border-warn/40 bg-warn/10 px-3 py-2 text-[12.5px] text-warn">{w}</p>)}
@@ -411,6 +438,17 @@ export function Show2Plan() {
                       ))}
                     </ol>
                   ) : <p className="m-0 text-[13px] text-dim">No steps were recognised. Record again and say each action as you do it.</p>}
+                </div>
+              ) : topics.length ? (
+                <div className="grid gap-3">
+                  <p className="m-0 text-[12.5px] font-medium text-dim">{topics.length === 1 ? '1 request in this recording' : `${topics.length} separate requests in this recording`}</p>
+                  {topics.map((t, i) => (
+                    <TopicCard key={`${i}-${t.title}`} index={i} topic={t} frameSrc={frameSrc}
+                      onChange={(next) => setTopics(topics.map((x, j) => (j === i ? next : x)))} />
+                  ))}
+                  {topics.length > 1 ? (
+                    <label className="inline-flex items-center gap-2 text-[12.5px] text-dim"><Switch checked={planPerTopic} onCheckedChange={setPlanPerTopic} />A separate plan per request (created as drafts; start them one at a time)</label>
+                  ) : null}
                 </div>
               ) : tasks.length ? <TaskDrafts tasks={tasks} onChange={setTasks} frameSrc={frameSrc} /> : (
                 <div className="grid gap-2 rounded-lg border border-dashed border-line-strong px-3 py-4 text-center text-[13px] text-dim">
@@ -456,8 +494,14 @@ export function Show2Plan() {
                 <Button variant="primary" disabled={!actions.length || creating} onClick={() => void saveAutomation()}>{creating ? <Spinner className="size-4" /> : <Save />}Save to Cowork</Button>
               ) : (
                 <>
-                  <Button disabled={!tasks.length || creating} onClick={() => void createPlan(false)}><Plus />Create plan</Button>
-                  <Button variant="primary" disabled={!tasks.length || creating} onClick={() => void createPlan(true)}>{creating ? <Spinner className="size-4" /> : <Play />}Create and start</Button>
+                  {planPerTopic && included.length > 1 ? (
+                    <Button variant="primary" disabled={!taskCount || creating} onClick={() => void createPlan(false)}>{creating ? <Spinner className="size-4" /> : <Plus />}Create {included.length} plans</Button>
+                  ) : (
+                    <>
+                      <Button disabled={!taskCount || creating} onClick={() => void createPlan(false)}><Plus />Create plan</Button>
+                      <Button variant="primary" disabled={!taskCount || creating} onClick={() => void createPlan(true)}>{creating ? <Spinner className="size-4" /> : <Play />}Create and start</Button>
+                    </>
+                  )}
                 </>
               )}
             </>
@@ -465,6 +509,56 @@ export function Show2Plan() {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+const KIND_LABEL: Record<Topic['kind'], string> = { bug: 'Bug', change: 'Change', feature: 'Feature', question: 'Question' };
+
+/** One request from the recording: its words, its screenshots, the code read, its tasks. */
+function TopicCard({ index, topic, onChange, frameSrc }: { index: number; topic: TopicDraft; onChange: (t: TopicDraft) => void; frameSrc: (file: string) => string }) {
+  const [showFiles, setShowFiles] = useState(false);
+  return (
+    <section className={cn('grid gap-2.5 rounded-2xl border p-3', topic.include ? 'border-line-strong bg-panel' : 'border-line opacity-60')} aria-label={`Request ${index + 1}`}>
+      <div className="flex items-start gap-2.5">
+        <span className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-full bg-accent/15 text-[12px] font-semibold text-accent">{index + 1}</span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            <h3 className="m-0 text-[14px] font-semibold text-fg">{topic.title}</h3>
+            <span className="text-[11.5px] text-faint">{KIND_LABEL[topic.kind]} · {fmt(topic.start)}-{fmt(topic.end)}</span>
+          </div>
+          <p className="m-0 mt-0.5 text-[12.5px] text-dim">{topic.summary}</p>
+          {topic.quote ? <p className="m-0 mt-1 text-[12px] italic text-faint">"{topic.quote}"</p> : null}
+        </div>
+        <label className="inline-flex shrink-0 items-center gap-1.5 text-[12px] text-dim"><Switch checked={topic.include} onCheckedChange={(v) => onChange({ ...topic, include: v })} aria-label={`Include request ${index + 1}`} />Include</label>
+      </div>
+      {topic.include ? (
+        <>
+          {topic.frames.length ? (
+            <div className="flex gap-1.5 overflow-x-auto pb-0.5">
+              {topic.frames.map((f) => (
+                <a key={f.file} href={frameSrc(f.file)} target="_blank" rel="noreferrer" className="relative shrink-0" title={f.transcript || undefined}>
+                  <img src={frameSrc(f.file)} alt={`Screenshot at ${fmt(f.t)}`} loading="lazy" className="h-24 w-auto rounded-md border border-line object-contain" />
+                  <span className="absolute bottom-0.5 left-0.5 rounded bg-black/65 px-1 text-[10.5px] text-white">{fmt(f.t)}</span>
+                </a>
+              ))}
+            </div>
+          ) : null}
+          {topic.filesRead.length ? (
+            <div>
+              <button type="button" onClick={() => setShowFiles((v) => !v)} aria-expanded={showFiles} className="inline-flex items-center gap-1 text-[12px] text-dim hover:text-fg">
+                {showFiles ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}Read {topic.filesRead.length} file{topic.filesRead.length === 1 ? '' : 's'} in the codebase
+              </button>
+              {showFiles ? (
+                <ul className="m-0 mt-1 grid list-none gap-0.5 p-0">
+                  {topic.filesRead.map((f) => <li key={f} className="flex items-center gap-1.5 text-[12px] text-faint"><FileCode2 className="size-3 shrink-0" /><span className="truncate">{f}</span></li>)}
+                </ul>
+              ) : null}
+            </div>
+          ) : <p className="m-0 text-[12px] text-warn">The code was not investigated for this request; its task has no file references.</p>}
+          <TaskDrafts tasks={topic.tasks} onChange={(next) => onChange({ ...topic, tasks: next })} />
+        </>
+      ) : null}
+    </section>
   );
 }
 

@@ -3052,53 +3052,80 @@ function highlightDiffLines(text) {
   });
 }
 
-// ── show & tell: single-call analysis (ported from the show2plan prototype) ──
+// ── show & tell: topics, then investigation in the code ─────────────────────
 {
   const A = require('../src/services/show2plan-analyze');
+  const os = require('os');
+  const path = require('path');
 
-  test('show2plan-analyze: questions stay out of tasks, flows ordered, priorities mapped', () => {
-    const r = A.normalizeAnalysis({ title: 'T', summary: 'S', tasks: [
-      { title: 'Fix login', type: 'bug', group: 'independent', description: 'd', visualContext: 'The "Sign in" button', acceptanceCriteria: ['a'], priority: 'critical', layer: 'backend', frameIndices: [1], timestampSeconds: 3 },
-      { title: 'Step two', type: 'ux', group: 'userflow', flowName: 'Checkout', step: 2, description: 'd2', frameIndices: [], timestampSeconds: 20 },
-      { title: 'Unclear?', type: 'question', description: 'q' },
-      { title: 'Step one', type: 'feature', group: 'userflow', flowName: 'Checkout', step: 1, description: 'd1', frameIndices: [] },
-    ] }, { frameFiles: ['f0', 'f1', 'f2'], frameTimes: [0, 5, 19] });
-    assert.deepStrictEqual(r.tasks.map((t) => t.title), ['Fix login', 'Step one', 'Step two']);
-    assert.deepStrictEqual(r.questions, ['Unclear?: q']);
-    assert.strictEqual(r.tasks[0].priority, 'high');
-    assert.strictEqual(r.tasks[0].kind, 'bug');
-    assert.deepStrictEqual(r.tasks[0].evidence.frames, ['f1']);
-    assert.deepStrictEqual(r.tasks[2].evidence.frames, ['f2']); // nearest to 20 s
-    assert.ok(r.tasks[0].instructions.includes('On screen'));
-    assert.ok(r.tasks[1].instructions.includes('Checkout, step 1'));
+  test('show2plan-analyze: topics keep only valid screenshot numbers, max 3, in time order', () => {
+    const r = A.normalizeTopics({ title: 'T', topics: [
+      { title: 'Second', kind: 'bug', summary: 's', start: 10, end: 14, frames: [9, 1, 1, 2, 3, 4] },
+      { title: 'First', kind: 'weird', summary: 'f', start: 2, end: 1, frames: [] },
+      { summary: '' },
+    ] }, { frameCount: 5, durationSec: 20 });
+    assert.deepStrictEqual(r.topics.map((t) => t.title), ['First', 'Second']);
+    assert.deepStrictEqual(r.topics[1].frames, [1, 2, 3]);
+    assert.strictEqual(r.topics[0].kind, 'change');
+    assert.strictEqual(r.topics[0].end, 20);
   });
 
-  test('show2plan-analyze: frames sampled evenly across the whole recording', () => {
-    const frames = Array.from({ length: 50 }, (_, i) => ({ file: `f${i}`, t: i }));
-    const s = A.selectFrames(frames, 10);
-    assert.strictEqual(s.length, 10);
-    assert.strictEqual(s[0].file, 'f0');
-    assert.strictEqual(s[9].file, 'f49');
+  test('show2plan-analyze: submitted files must have been seen; deps remapped', () => {
+    const topic = { title: 'T', kind: 'bug', quote: 'q', frames: ['f1'] };
+    const tasks = A.normalizeSubmitted({ tasks: [
+      { key: 'db', title: 'Add column', layer: 'database', description: 'd', instructions: 'i', acceptance: ['a'], files: [{ path: 'db/schema.sql' }, { path: 'made/up.ts' }] },
+      { key: 'ui', title: 'Show it', layer: 'frontend', description: 'd', instructions: 'i', acceptance: ['a'], dependsOn: ['db', 'ghost'], files: ['./src/App.tsx'] },
+    ] }, topic, { seen: new Set(['db/schema.sql', 'src/App.tsx']), prefix: 'b' });
+    assert.deepStrictEqual(tasks.map((t) => t.key), ['b1', 'b2']);
+    assert.deepStrictEqual(tasks[0].files.map((f) => f.path), ['db/schema.sql']);
+    assert.deepStrictEqual(tasks[1].files.map((f) => f.path), ['src/App.tsx']);
+    assert.deepStrictEqual(tasks[1].dependsOn, ['b1']);
+    assert.deepStrictEqual(tasks[0].evidence.frames, ['f1']);
+    assert.ok(tasks[0].instructions.includes('What to change'));
   });
 
-  test('show2plan-analyze: timed transcript buckets and quoted labels', () => {
-    assert.strictEqual(A.timedTranscript({ segments: [{ start: 0, end: 2, text: 'a' }, { start: 9, end: 10, text: 'b' }] }), '[0:00-0:02] a\n[0:09-0:10] b');
-    assert.deepStrictEqual(A.quotedLabels({ visualContext: 'A "Save profile" button and “Cancel”', description: '' }), ['Save profile', 'Cancel']);
+  test('show2plan-analyze: transcript excerpt limited to the topic, untimed passes through', () => {
+    const tr = { durationSec: 30, segments: [{ start: 0, end: 2, text: 'a' }, { start: 20, end: 22, text: 'b' }] };
+    assert.strictEqual(A.timedTranscript(tr, { from: 18, to: 25 }), '[0:20-0:22] b');
+    assert.ok(A.timedTranscript({ durationSec: 10, segments: [{ start: 0, end: 10, text: 'all' }] }).startsWith('[timing not available]'));
   });
 
-  test('show2plan-analyze: one model call writes the tasks, with images attached', async () => {
-    const os = require('os');
-    const path = require('path');
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 's2pa-'));
-    const f = path.join(dir, 'frame_0000.jpg');
-    fs.writeFileSync(f, Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==', 'base64'));
-    let seen = null;
-    const client = { model: 'm', vision: true, client: { chat: { completions: { create: async (p) => { seen = p; return { choices: [{ message: { content: JSON.stringify({ title: 'T', summary: 'S', tasks: [{ title: 'Do', description: 'd', visualContext: '', acceptanceCriteria: ['x'], priority: 'low', type: 'chore', group: 'independent', timestampSeconds: 0, frameIndices: [0] }] }) } }] }; } } } } };
-    const out = await A.analyzeShowAndTell({ frames: [{ file: 'frame_0000.jpg', path: f, t: 0 }], transcript: { text: 'hi', segments: [{ start: 0, end: 1, text: 'hi' }] }, client });
-    assert.strictEqual(out.tasks.length, 1);
-    assert.ok(seen.messages[0].content.includes('text must stand alone'));
-    assert.ok(seen.messages[1].content.some((c) => c.type === 'image_url'));
-    fs.rmSync(dir, { recursive: true, force: true });
+  test('show2plan-analyze: the investigator explores with tools, then submits', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 's2pi-'));
+    fs.mkdirSync(path.join(root, 'src'));
+    fs.writeFileSync(path.join(root, 'src', 'Card.tsx'), 'export const Card = () => <button>Save profile</button>;\n');
+    const calls = [];
+    const client = { model: 'm', vision: false, client: { chat: { completions: { create: async (p) => {
+      const n = p.messages.filter((m) => m.role === 'tool').length;
+      calls.push(p.tools.map((t) => t.function.name));
+      const tc = (name, args) => ({ choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: `c${n}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] } }] });
+      if (n === 0) return tc('search', { pattern: 'Save profile' });
+      if (n === 1) { assert.ok(p.messages[p.messages.length - 1].content.includes('src/Card.tsx:1')); return tc('read_file', { path: 'src/Card.tsx' }); }
+      return tc('submit_tasks', { tasks: [{ key: 'k', title: 'Bigger button', layer: 'frontend', description: 'd', instructions: 'Edit Card', acceptance: ['big'], files: [{ path: 'src/Card.tsx' }, { path: 'src/Nope.tsx' }] }] });
+    } } } } };
+    const r = await A.investigateTopic({ topic: { title: 'T', kind: 'change', summary: 's', quote: null, start: 0, end: 1, frames: [] }, index: 0, total: 1, frames: [], transcript: { text: 'x', segments: [] }, root, overview: 'tree', client });
+    assert.deepStrictEqual(r.filesRead, ['src/Card.tsx']);
+    assert.deepStrictEqual(r.tasks[0].files.map((f) => f.path), ['src/Card.tsx']);
+    assert.strictEqual(r.toolCalls, 2);
+    assert.ok(calls[0].includes('read_file') && calls[0].includes('submit_tasks'));
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  test('repo-tools: read-only, confined to the workspace, records what was read', () => {
+    const { createRepoTools } = require('../src/services/repo-tools');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-'));
+    fs.mkdirSync(path.join(root, 'web'));
+    fs.writeFileSync(path.join(root, 'web', 'App.tsx'), 'line1\nline2\nline3\n');
+    fs.mkdirSync(path.join(root, '.git'));
+    fs.writeFileSync(path.join(root, '.git', 'config'), 'secret');
+    const t = createRepoTools(root);
+    assert.ok(t.call('read_file', { path: 'web/App.tsx', start: 2, end: 2 }).includes('2  line2'));
+    assert.ok(t.call('read_file', { path: '../../../../../../etc/hostname' }).startsWith('error'));
+    assert.ok(t.call('read_file', { path: '.git/config' }).startsWith('error'));
+    assert.strictEqual(t.call('find_files', { query: 'app tsx' }), 'web/App.tsx');
+    assert.ok(t.call('rm', { path: 'web' }).startsWith('error: unknown tool'));
+    assert.deepStrictEqual([...t.read], ['web/App.tsx']);
+    fs.rmSync(root, { recursive: true, force: true });
   });
 }
 

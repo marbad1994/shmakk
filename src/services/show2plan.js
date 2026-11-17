@@ -10,11 +10,12 @@
 // Processing turns that into shmakk tasks:
 //   1. transcript  — xAI or DeepSeek speech-to-text when configured, else
 //                    local Whisper, else the browser's live transcript;
-//   2. tasks       — one vision call over ~20 frames spread across the whole
-//                    recording plus the timed transcript writes standalone
-//                    tasks directly (show2plan-analyze.js);
-//   3. grounding   — labels the tasks quote are searched in the workspace to
-//                    point at the files that render them.
+//   2. topics      — one low-resolution vision pass separates the distinct
+//                    requests, each with its time range and the 1-3
+//                    screenshots that actually show it;
+//   3. investigate — per topic, an agent with read-only repository tools
+//                    reads the code behind it and writes the tasks
+//                    (show2plan-analyze.js, repo-tools.js).
 // The result is reviewed in the UI and sent to Plans as a review-gated plan.
 
 const fs = require('fs');
@@ -246,29 +247,32 @@ function createShow2PlanManager({ getWorkspace, broadcast = () => {}, getModel =
     const durationSec = Number(opts.durationSec) || transcript.durationSec || 0;
     if (opts.mode === 'automation') return runAutomation(s, opts, transcript, durationSec, instructions, stage);
 
-    // Tasks: one vision call writes the tasks directly from the frames and the
-    // timed transcript (see show2plan-analyze.js). No second model rewrites them.
-    stage('analyzing');
+    // Tasks: separate the topics, then investigate each one in the code
+    // (see show2plan-analyze.js).
+    stage('topics');
     const analyze = require('./show2plan-analyze');
     const frames = s.frames.map((f) => ({ ...f, path: path.join(dirOf(s.id), 'frames', f.file) }));
     if (!transcript.text && !frames.length) throw new Error('Nothing was captured: no narration and no screenshots. Keep the shared window visible and talk while you record.');
-    const out = await analyze.analyzeShowAndTell({ frames, transcript, instructions, durationSec, signal: s.ctrl.signal });
-    if (!out.sawImages && frames.length) s.warnings.push(`The model "${out.model}" cannot read images, so the tasks were written from the narration only. Configure a vision-capable model for much better tasks.`);
-    if (!out.tasks.length && !out.questions.length) throw new Error('The model found nothing to turn into tasks. Record again and say what should change while you show it.');
-
-    stage('planning');
-    analyze.groundTasks(getWorkspace(), out.tasks);
+    const out = await analyze.analyzeShowAndTell({
+      frames, transcript, instructions, durationSec, root: getWorkspace(), signal: s.ctrl.signal,
+      onProgress: (p) => { if (p.step === 'investigating') stage('investigating', { done: p.done, total: p.total, topic: p.topic || null, note: p.note || null }); },
+    });
+    if (!out.sawImages && frames.length) s.warnings.push(`The model "${out.model}" cannot read images, so the topics were separated from the narration only. Turn on "This model can read images" in Settings if it can, or configure a vision-capable model.`);
+    s.warnings.push(...out.warnings);
+    if (!out.topics.length && !out.questions.length) throw new Error('No requests were found in the recording. Record again and say what should change while you show it.');
 
     const segmentAt = (t) => (transcript.segments || []).find((x) => t >= x.start - 0.5 && t <= x.end + 1.5);
+    const frameInfo = (file) => { const f = s.frames.find((x) => x.file === file); return f ? { file, t: f.t, transcript: (segmentAt(f.t) || {}).text || null } : null; };
     s.result = {
       mode: 'tasks',
-      title: out.title || (out.tasks[0] && out.tasks[0].title) || 'Show & tell',
+      title: out.title,
       summary: out.summary,
       app: null,
       transcript: { text: transcript.text, segments: transcript.segments, source: transcript.source },
-      frames: out.framesSent.map((f) => ({ file: f.file, t: f.t, reason: 'sent to the model', transcript: (segmentAt(f.t) || {}).text || null })),
+      topics: out.topics.map((t) => ({ ...t, frames: t.frames.map(frameInfo).filter(Boolean) })),
+      tasks: out.topics.flatMap((t) => t.tasks),
+      frames: [],
       allFrames: s.frames.length,
-      tasks: out.tasks,
       via: 'model',
       model: out.model,
       uncertain: out.questions,
