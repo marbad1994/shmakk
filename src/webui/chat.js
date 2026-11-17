@@ -17,7 +17,7 @@ const { setMaxListeners } = require('events');
 const { correct } = require('../correction');
 const { runAgent, clearTaskJournal, summarizeToolResult } = require('../agent');
 const { TOOLS, dispatchTool } = require('../tools');
-const { makeClient, modelFor, userContentWithImages, stripImageBlocks } = require('../llm');
+const { makeClientForModel, modelFor, userContentWithImages, stripImageBlocks } = require('../llm');
 const { renderMemoryForPrompt } = require('../memory');
 const design = require('./design');
 const { buildContext } = require('./projects');
@@ -1104,7 +1104,7 @@ class ChatManager {
       this._notice(conv, 'No AI provider configured. Add a base URL and model in Settings.', 'warn', { action: 'open:settings' });
       return;
     }
-    const client = makeClient();
+    const { client, model: resolvedModel } = makeClientForModel(this._modelFor(conv));
     const tools = TOOLS.filter((t) => t.function.name === 'web_search' || t.function.name === 'fetch_url');
     const system = [
       `You are shmakk, a thoughtful, direct assistant. Today is ${new Date().toDateString()}.`,
@@ -1120,7 +1120,7 @@ class ChatManager {
 
     for (let round = 0; round < 6; round++) {
       sink({ type: 'status', label: round === 0 ? 'thinking' : 'reading' });
-      const stream = await client.chat.completions.create({ model: this._modelFor(conv), messages, tools, stream: true }, { signal: ctrl.signal });
+      const stream = await client.chat.completions.create({ model: resolvedModel, messages, tools, stream: true }, { signal: ctrl.signal });
       let content = '';
       const calls = [];
       for await (const chunk of stream) {

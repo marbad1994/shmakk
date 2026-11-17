@@ -54,6 +54,7 @@ class NodeHub {
     this.remoteClients = new Map(); // endpoint → { ws, token, retry, pending }
     this.tunnelProc = null;
     this.tunnelExposed = new Set();
+    this.exposedIds = new Set();    // session ids this node has exposed (echo filter)
   }
 
   nodeId() { return ensureNodeId(this.ctx.settings); }
@@ -157,6 +158,12 @@ class NodeHub {
       let msg;
       try { msg = JSON.parse(data.toString('utf8')); } catch { return; }
       if (!msg || !msg.t || msg.t === 'hello') return;
+      // The cloud also broadcasts this desktop's own remote sessions (a `conv`
+      // with remote:true, and `conv.deleted` when they are unregistered). Those
+      // already live locally, so don't echo them back as if they were cloud
+      // sessions; doing so would mislabel them in the sidebar.
+      if (msg.t === 'conv' && msg.conv && msg.conv.remote) return;
+      if (msg.t === 'conv.deleted' && this.exposedIds.has(msg.id)) return;
       this.ctx.broadcast({ ...msg, node: 'cloud' });
     });
     ws.on('close', () => {
@@ -197,9 +204,16 @@ class NodeHub {
   // ── remote session registry (host side) ──────────────────────────────────
 
   registerRemote(sessionId, entry) {
-    this.registry.set(sessionId, { ...entry, registeredAt: Date.now() });
+    const rec = { ...entry, registeredAt: Date.now() };
+    this.registry.set(sessionId, rec);
     saveRegistry(this.registry);
-    this.ctx.broadcast({ t: 'conv', conv: { id: sessionId, remote: true, ...entry.meta } });
+    // `remote: true` must win over the meta's own `remote: false`, otherwise
+    // the client treats this as a plain local conversation and 404s on open.
+    this.ctx.broadcast({ t: 'conv', conv: { ...(entry.meta || {}), id: sessionId, remote: true } });
+    // Connect to the desktop's WebSocket now so live transcript updates flow
+    // as soon as the session is exposed, not only after this node sends a
+    // message (the client is otherwise created lazily in _sendToRemote).
+    this._ensureRemoteClient(rec);
   }
 
   unregisterRemote(sessionId) {
@@ -245,6 +259,19 @@ class NodeHub {
       let msg;
       try { msg = JSON.parse(data.toString('utf8')); } catch { return; }
       if (!msg || !msg.t || msg.t === 'hello') return;
+      // Messages tagged `node: 'cloud'` are this node's own broadcasts echoed
+      // back through the desktop's cloud relay; re-broadcasting them would
+      // loop forever between the two relays.
+      if (msg.node === 'cloud') return;
+      // The desktop's /ws broadcasts every local conversation, not just the
+      // ones exposed here. Relay only conversation messages for registered
+      // remote sessions, and re-tag their meta as remote (the desktop reports
+      // remote:false because the session runs locally there; if it leaked
+      // through as-is the client would route it to the local store and 404).
+      const id = (msg.conv && msg.conv.id) || msg.convId || msg.id;
+      if (!id || !this.registry.has(id)) return;
+      if (msg.t === 'conv' && msg.conv) msg = { ...msg, conv: { ...msg.conv, remote: true } };
+      if (msg.t === 'conv.deleted') { this.registry.delete(id); saveRegistry(this.registry); }
       this.ctx.broadcast(msg);
     });
     ws.on('close', () => {
@@ -271,6 +298,7 @@ class NodeHub {
 
   async expose(sessionId, meta) {
     this.tunnelExposed.add(sessionId);
+    this.exposedIds.add(sessionId);
     await this._ensureTunnel();
     if (!this.tunnelProc) {
       this.tunnelExposed.delete(sessionId);

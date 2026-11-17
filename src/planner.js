@@ -15,7 +15,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { makeClient, modelFor } = require('./llm');
+const { makeClientForModel } = require('./llm');
 
 // Questions and conversational inputs that should bypass planning.
 // These get direct answers from the agent without plan overhead.
@@ -83,8 +83,9 @@ function shouldPlan(input) {
 // generatePlan calls the LLM to decompose the user's request into a plan.
 // Returns a plan object or throws.
 async function generatePlan(input, { signal, model: modelOverride } = {}) {
-  const client = makeClient('agent');
-  const model = modelOverride || modelFor('agent');
+  const resolved = makeClientForModel(modelOverride);
+  const client = resolved.client;
+  const model = resolved.model;
 
   // Estimate complexity: longer requests with more context likely need more steps
   const textLen = String(input).length;

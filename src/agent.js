@@ -7,7 +7,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { makeClient, modelFor, isConfigured, getDeepSeekOptions, supportsVision, describeImages, userContentWithImages, stripImageBlocks, imageBlocks, normalizeImages, skippedNote } = require('./llm');
+const { makeClientForModel, modelFor, isConfigured, getDeepSeekOptions, supportsVision, describeImages, userContentWithImages, stripImageBlocks, imageBlocks, normalizeImages, skippedNote } = require('./llm');
 const {
   sanitizeAssistantContent,
   isLeakedToolMarkup,
@@ -125,8 +125,9 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
     write(`[shmakk] AI not configured (set SHMAKK_BASE_URL).\n`);
     return history;
   }
-  const client = makeClient('agent');
-  const modelName = model || modelFor('agent');
+  const resolved = makeClientForModel(model);
+  const client = resolved.client;
+  const modelName = resolved.model;
   const rootList = roots.length === 1 ? roots[0] : roots.join(', ');
   const priorJournal = loadTaskJournal(roots[0]);
   const activeSkillText = renderActiveSkillForPrompt(roots[0], Number(process.env.SHMAKK_SKILL_PROMPT_MAX_BYTES) || 12000);

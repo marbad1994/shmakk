@@ -535,7 +535,7 @@ async function translate(opts = {}) {
 
   let llm = null;
   try { llm = require('../llm'); } catch {}
-  const c = opts.client || (llm && llm.isConfigured() ? { client: llm.makeClient(), model: opts.model || llm.modelFor() } : null);
+  const c = opts.client || (llm && llm.isConfigured() ? llm.makeClientForModel(opts.model) : null);
   if (!c) {
     return { tasks: fallbackTasks(requests, grounding), summary: '', requests, stack, via: 'fallback', error: 'no AI provider configured' };
   }

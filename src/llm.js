@@ -225,6 +225,24 @@ function makeClientForEndpoint(name) {
   };
 }
 
+// Resolve the client for a requested model id. When the id (or a registry
+// entry name) matches an entry in endpoints.json, that entry's base URL, key,
+// headers and provider are used, so picking a model from the registry also
+// switches provider instead of sending a foreign model name to the active one.
+function makeClientForModel(modelId) {
+  const requested = String(modelId || '').trim();
+  const registry = getModelRegistry();
+  if (requested) {
+    for (const [name, cfg] of Object.entries(registry.models || {})) {
+      if (name === requested || (cfg.model || name) === requested) {
+        const config = configFromModelEntry(name, cfg);
+        return { model: config.model, client: makeProviderClient(config) };
+      }
+    }
+  }
+  return { model: requested || modelFor(), client: makeClient() };
+}
+
 function modelFor() {
   if (recommendationMode()) return process.env._SHMAKK_LAST_MODEL || 'model-recommendation';
   const activeEndpoint = getCurrentEndpoint();
@@ -1008,6 +1026,7 @@ function stripImageBlocks(messages) {
 module.exports = {
   makeClient,
   makeClientForEndpoint,
+  makeClientForModel,
   modelFor,
   isConfigured,
   ensureModelRuntime,

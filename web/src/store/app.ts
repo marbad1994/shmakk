@@ -148,11 +148,12 @@ function upsertMeta(list: ConvMeta[], conv: ConvMeta) {
   return next.sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
-// Conversations owned by the cloud node go through the `/api/node/cloud` proxy;
-// everything else is served by this node directly. `/api/x` becomes
-// `/api/node/cloud/x`, which the server forwards to the cloud's `/api/x`.
+// Conversations not owned by this node go through the `/api/node/<node>` proxy:
+// `cloud` forwards to the configured cloud node, and a remote session id
+// forwards through the cloud's remote-session registry. `/api/x` becomes
+// `/api/node/<node>/x`, which the server forwards to that node's `/api/x`.
 const convApi = (node: string, path: string) =>
-  node === 'cloud' ? path.replace(/^\/api\//, '/api/node/cloud/') : path;
+  node === 'local' ? path : path.replace(/^\/api\//, `/api/node/${encodeURIComponent(node)}/`);
 
 export const useApp = create<AppState>((set, get) => {
   function onMessage(msg: ServerMsg) {
@@ -245,10 +246,12 @@ export const useApp = create<AppState>((set, get) => {
   async function loadConvs(node: string) {
     try {
       const r = await api.get<{ conversations: ConvMeta[] }>(node === 'local' ? '/api/conversations' : `/api/node/${node}/conversations`);
-      // Remote sessions are this node's own sessions listed on the cloud; they
-      // already live in the local list, so don't duplicate them under the cloud.
-      const list = (r.conversations || []).filter((c) => !c.remote);
-      set(node === 'local' ? { convs: list } : { cloudConvs: list });
+      const list = r.conversations || [];
+      // Remote sessions belong in the local list (they run on a desktop but are
+      // listed on the cloud). When listing the *cloud* node, skip them so a
+      // desktop's own exposed sessions don't reappear under the cloud.
+      const filtered = node === 'local' ? list : list.filter((c) => !c.remote);
+      set(node === 'local' ? { convs: filtered } : { cloudConvs: filtered });
     } catch { /* offline */ }
   }
 
@@ -317,6 +320,9 @@ export const useApp = create<AppState>((set, get) => {
       });
       socket.connect();
       void get().refreshNodes();
+      // Populate the cloud node's conversation list up front so its chats show
+      // in the sidebar without the user having to click the cloud tab first.
+      void loadConvs('cloud');
       const { view, conv, project } = readHash();
       // Settings is a modal, not a screen: remember the intention, stay on the chat.
       const openingSettings = view === 'settings';
@@ -386,9 +392,13 @@ export const useApp = create<AppState>((set, get) => {
       await loadConvs(node);
     },
 
-    // Which node owns a conversation id (remote sessions stay local).
+    // Which node owns a conversation id. Cloud-owned sessions route to `cloud`;
+    // a remote session (a desktop session listed on the cloud) routes through
+    // the remote-session registry under its own id; everything else is local.
     nodeOf(id) {
       if (get().cloudConvs.some((c) => c.id === id)) return 'cloud';
+      const local = get().convs.find((c) => c.id === id);
+      if (local && local.remote) return id;
       return 'local';
     },
 

@@ -412,7 +412,7 @@ function createPlanManager(ctx) {
     if (ctx.reviewClient) return ctx.reviewClient;
     const llm = require('../llm');
     if (!llm.isConfigured()) return null;
-    return { client: llm.makeClient(), model: model || llm.modelFor() };
+    return llm.makeClientForModel(model);
   };
 
   function load(id, root = ws()) {

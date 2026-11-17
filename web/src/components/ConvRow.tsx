@@ -1,4 +1,4 @@
-import { ArrowRightLeft, Check, Cloud, CloudOff, Copy, FolderMinus, GitBranch, MoreHorizontal, Pencil, Pin, PinOff, Trash2, Zap } from 'lucide-react';
+import { ArrowRightLeft, Check, Cloud, CloudOff, Copy, FolderMinus, GitBranch, MoreHorizontal, Pencil, Pin, PinOff, Radio, Trash2, Zap } from 'lucide-react';
 import type { ConvMeta, Project } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { useApp } from '@/store/app';
@@ -41,6 +41,7 @@ export function ConvRow({ conv, active, running, projects, onRename, showProject
         {conv.repo ? <GitBranch className="size-3.5 shrink-0 text-violet" aria-label={`GitHub session on ${conv.repo.fullName}`} /> : null}
         {conv.automationId ? <Zap className="size-3.5 shrink-0 text-warn" aria-label="Automation run" /> : null}
         {node === 'cloud' ? <Cloud className="size-3.5 shrink-0 text-accent" aria-label="Cloud session" /> : null}
+        {conv.remote ? <Radio className="size-3.5 shrink-0 text-accent" aria-label="Remote session" /> : null}
         <span className="truncate">{conv.title}</span>
         {showProject && project ? <span className={cn('ml-auto size-2 shrink-0 rounded-full', PROJECT_COLORS[project.color] || 'bg-accent')} title={`In project ${project.name}`} /> : null}
       </button>
@@ -63,7 +64,7 @@ export function ConvRow({ conv, active, running, projects, onRename, showProject
               {conv.projectId ? <DropdownMenuItem onSelect={() => void moveConv(conv.id, null)}><FolderMinus />Remove from project</DropdownMenuItem> : null}
             </>
           ) : null}
-          {cloudAvailable ? (
+          {cloudAvailable && !conv.remote ? (
             <>
               <DropdownMenuSeparator />
               <DropdownMenuLabel>{node === 'cloud' ? 'Send to this computer' : 'Send to cloud'}</DropdownMenuLabel>
