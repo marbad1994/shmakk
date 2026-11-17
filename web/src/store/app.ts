@@ -17,7 +17,7 @@ function readHash(): { view: ViewId; conv: string | null; project: string | null
 
 const MODE_IDS: Mode[] = ['chat', 'code', 'design', 'cowork'];
 const savedMode = (): Mode => { const m = localStorage.getItem('shmakk.mode') as Mode | null; return m && MODE_IDS.includes(m) ? m : 'code'; };
-const PANES: DocPane[] = ['browser', 'changes', 'plan'];
+const PANES: DocPane[] = ['browser', 'live', 'changes', 'plan'];
 const savedPane = (): DocPane => { const p = localStorage.getItem('shmakk.rightPane') as DocPane | null; return p && PANES.includes(p) ? p : 'browser'; };
 
 // Inspector width: a comfortable default, clamped so the chat never collapses.
@@ -232,6 +232,11 @@ export const useApp = create<AppState>((set, get) => {
         void queryClient.invalidateQueries({ queryKey: ['plan-full', msg.planId] });
         break;
       case 'show2plan': void queryClient.invalidateQueries({ queryKey: ['show2plan', msg.id] }); break;
+      case 'browser.open': {
+        const { setRightPane } = get();
+        setRightPane('live');
+        break;
+      }
       case 'toast': (msg.level === 'error' ? toast.error : toast)(msg.text); break;
       default:
     }

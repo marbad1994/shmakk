@@ -506,14 +506,46 @@ async function startWebServer(opts = {}) {
 
   // ── WebSocket: live transcript updates + terminals ──
   const wss = new WebSocketServer({ noServer: true, maxPayload: 4 * 1024 * 1024 });
+
+  // ── WebSocket: live browser pane (screencast + input) ──
+  const bwss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 });
+
   server.on('upgrade', (req, socket, head) => {
     let pathname = '';
     try { pathname = new URL(req.url, 'http://localhost').pathname; } catch {}
-    if (pathname !== '/ws' || !isAuthed(req) || !originOk(req)) {
+    if (!isAuthed(req) || !originOk(req)) {
       socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
       return socket.destroy();
     }
+    if (pathname === '/ws/browser') {
+      bwss.handleUpgrade(req, socket, head, (ws) => bwss.emit('connection', ws, req));
+      return;
+    }
+    if (pathname !== '/ws') {
+      socket.write('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
+      return socket.destroy();
+    }
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+  });
+
+  bwss.on('connection', (ws) => {
+    ws.isAlive = true;
+    ws.on('pong', () => { ws.isAlive = true; });
+    const live = require('../core/browser-live');
+    const unsub = live.subscribe({
+      onMessage: (s) => { if (ws.readyState === 1) { try { ws.send(s); } catch {} } },
+    });
+    ws.on('message', (data) => {
+      let msg;
+      try { msg = JSON.parse(data.toString('utf8')); } catch { return; }
+      if (msg && msg.t === 'ping') {
+        try { ws.send(JSON.stringify({ t: 'pong' })); } catch {}
+        return;
+      }
+      if (msg && msg.t === 'input') live.input(msg.event || {});
+    });
+    ws.on('close', () => { try { unsub(); } catch {} });
+    ws.on('error', () => {});
   });
 
   wss.on('connection', (ws) => {
@@ -567,6 +599,11 @@ async function startWebServer(opts = {}) {
 
   const heartbeat = setInterval(() => {
     for (const ws of clients) {
+      if (!ws.isAlive) { try { ws.terminate(); } catch {} continue; }
+      ws.isAlive = false;
+      try { ws.ping(); } catch {}
+    }
+    for (const ws of bwss.clients) {
       if (!ws.isAlive) { try { ws.terminate(); } catch {} continue; }
       ws.isAlive = false;
       try { ws.ping(); } catch {}

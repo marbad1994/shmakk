@@ -175,9 +175,10 @@ export type ServerMsg =
   | { t: 'term.exit'; id: string; code: number; error?: string }
   | { t: 'plans.changed'; planId: string }
   | { t: 'show2plan'; id: string; stage: string }
+  | { t: 'browser.open'; url: string }
   | { t: 'pong' };
 
 export type ViewId = 'chat' | 'project' | 'automations' | 'github' | 'skills' | 'memory' | 'plan' | 'changes' | 'recall' | 'team' | 'mcp' | 'activity' | 'artefacts' | 'settings';
 
 /** Panes of the right-hand inspector, in tab order. */
-export type DocPane = 'browser' | 'changes' | 'plan';
+export type DocPane = 'browser' | 'live' | 'changes' | 'plan';

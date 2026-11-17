@@ -1151,6 +1151,9 @@ class ChatManager {
         sink({ type: 'tool_start', id: c.id, name: c.function.name, args });
         const allowed = tools.some((t) => t.function.name === c.function.name);
         const result = allowed ? await dispatchTool(c.function.name, args, [], null, ctrl.signal, null) : { error: 'tool not available in Chat mode' };
+        if (c.function.name === 'browser' && args && args.command === 'show' && result && result.ok) {
+          try { this.ctx.broadcast({ t: 'browser.open', url: result.url || args.url || '' }); } catch {}
+        }
         sink({ type: 'tool_end', id: c.id, name: c.function.name, args, result, summary: summarizeToolResult(c.function.name, result), error: result && result.error ? result.error : null });
         messages.push({ role: 'tool', tool_call_id: c.id, content: JSON.stringify(result).slice(0, 8000) });
         if (ctrl.signal.aborted) throw new Error('stopped');

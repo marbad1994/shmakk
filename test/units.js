@@ -501,6 +501,7 @@ const test = (name, fn) => tests.push({ name, fn });
     assert.strictEqual(classifyBrowserCommand({ command: 'screenshot' }), 'safe');
     assert.strictEqual(classifyBrowserCommand({ command: 'wait' }), 'safe');
     assert.strictEqual(classifyBrowserCommand({ command: 'close' }), 'safe');
+    assert.strictEqual(classifyBrowserCommand({ command: 'show' }), 'safe');
   });
 
   test('browser: classifies interactive commands as uncertain', () => {
@@ -517,6 +518,7 @@ const test = (name, fn) => tests.push({ name, fn });
 
   test('browser: describeTool returns readable descriptions', () => {
     assert.strictEqual(describeTool('browser', { command: 'navigate', url: 'https://x.com' }), 'browser navigate https://x.com');
+    assert.strictEqual(describeTool('browser', { command: 'show', url: 'https://x.com' }), 'browser show https://x.com');
     assert.strictEqual(describeTool('browser', { command: 'click', selector: '#btn' }), 'browser click #btn');
     assert.strictEqual(describeTool('browser', { command: 'read_page' }), 'browser read page content');
   });

@@ -5,6 +5,17 @@
 const path = require('path');
 const fs = require('fs');
 
+// The live screencast/input bridge used by the web UI's "live" pane. Loaded
+// lazily so the CLI path never touches the web UI code.
+let live = null;
+function liveStream() {
+  if (!live) {
+    live = require('./core/browser-live');
+    live.setPageProvider(() => ensurePage());
+  }
+  return live;
+}
+
 let pw = null;       // playwright module (lazy-loaded)
 let browser = null;   // Browser instance
 let context = null;   // BrowserContext
@@ -52,6 +63,7 @@ async function navigate(args) {
   const p = await ensurePage();
   try {
     const resp = await p.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
+    try { liveStream().notify(p.url()); } catch {}
     return {
       ok: true,
       url: p.url(),
@@ -71,6 +83,7 @@ async function click(args) {
   try {
     await p.click(sel, { timeout: 5000 });
     await p.waitForTimeout(500); // settle
+    try { liveStream().notify(p.url()); } catch {}
     return { ok: true, clicked: sel, url: p.url(), title: await p.title() };
   } catch (e) {
     return { error: `click failed: ${e.message}` };
@@ -270,6 +283,11 @@ async function dispatchBrowser(args) {
   const cmd = String(args.command || '').toLowerCase();
 
   switch (cmd) {
+    case 'show': {
+      const url = String(args.url || '').trim();
+      if (!url) return { error: 'url required for show' };
+      return liveStream().show(url);
+    }
     case 'navigate': return navigate(args);
     case 'click': return click(args);
     case 'type': return type(args);
@@ -286,11 +304,12 @@ async function dispatchBrowser(args) {
       }
       return { ok: true, message: 'browser closed' };
     default:
-      return { error: `unknown browser command: ${cmd}. Use: navigate, click, type, read_page, screenshot, evaluate, select, wait, scroll, close` };
+      return { error: `unknown browser command: ${cmd}. Use: show, navigate, click, type, read_page, screenshot, evaluate, select, wait, scroll, close` };
   }
 }
 
 async function closeBrowser() {
+  if (live) { try { live.reset(); } catch {} }
   if (browser) {
     try { await browser.close(); } catch {}
     browser = null; context = null; page = null;
@@ -300,7 +319,7 @@ async function closeBrowser() {
 // Safety classification per browser command
 function classifyBrowserCommand(args) {
   const cmd = String(args.command || '').toLowerCase();
-  if (cmd === 'read_page' || cmd === 'screenshot' || cmd === 'wait' || cmd === 'close') return 'safe';
+  if (cmd === 'read_page' || cmd === 'screenshot' || cmd === 'wait' || cmd === 'close' || cmd === 'show') return 'safe';
   return 'uncertain';
 }
 

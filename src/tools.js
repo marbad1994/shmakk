@@ -175,12 +175,12 @@ const TOOLS = [
   }},
   { type: 'function', function: {
     name: 'browser',
-    description: 'Control a headless browser. Commands: navigate (go to URL), click (CSS selector), type (fill input), read_page (extract page content, links, forms), screenshot (save PNG), evaluate (run JS), select (dropdown), wait (for selector or seconds), scroll (up/down), close.',
+    description: 'Control a headless browser. Commands: show (open the live browser pane in the web UI and navigate to a URL), navigate (go to URL), click (CSS selector), type (fill input), read_page (extract page content, links, forms), screenshot (save PNG), evaluate (run JS), select (dropdown), wait (for selector or seconds), scroll (up/down), close.',
     parameters: {
       type: 'object',
       required: ['command'],
       properties: {
-        command: { type: 'string', enum: ['navigate', 'click', 'type', 'read_page', 'screenshot', 'evaluate', 'select', 'wait', 'scroll', 'close'] },
+        command: { type: 'string', enum: ['show', 'navigate', 'click', 'type', 'read_page', 'screenshot', 'evaluate', 'select', 'wait', 'scroll', 'close'] },
         url: { type: 'string', description: 'URL for navigate' },
         selector: { type: 'string', description: 'CSS selector for click/type/select/wait' },
         text: { type: 'string', description: 'Text to type or option to select' },
@@ -396,6 +396,7 @@ function describeTool(name, args, mcpManager) {
   if (name === 'deliver_file') return `deliver ${args.name || 'file'}`;
   if (name === 'browser') {
     const cmd = args.command || '';
+    if (cmd === 'show') return `browser show ${args.url || ''}`;
     if (cmd === 'navigate') return `browser navigate ${args.url || ''}`;
     if (cmd === 'click') return `browser click ${args.selector || ''}`;
     if (cmd === 'type') return `browser type into ${args.selector || ''}`;
