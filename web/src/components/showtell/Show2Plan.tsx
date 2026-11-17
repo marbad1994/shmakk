@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { AlertTriangle, Bookmark, Camera, Check, ChevronDown, ChevronRight, ListChecks, Mic, MicOff, MonitorPlay, Pause, Play, Plus, Save, Square, Trash2, Workflow, X } from 'lucide-react';
+import { AlertTriangle, Camera, Check, ChevronDown, ChevronRight, ListChecks, Mic, MicOff, MonitorPlay, Pause, Play, Plus, Save, Square, Trash2, Workflow, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -38,9 +38,8 @@ interface S2PStatus { id: string; stage: string; error: string | null; warnings:
 const STAGES: { id: string; label: string }[] = [
   { id: 'uploading', label: 'Uploading audio' },
   { id: 'transcribing', label: 'Transcribing what you said' },
-  { id: 'selecting', label: 'Picking the key moments' },
-  { id: 'analyzing', label: 'Reading the screenshots' },
-  { id: 'planning', label: 'Turning it into tasks for this codebase' },
+  { id: 'analyzing', label: 'Reading the recording and writing tasks' },
+  { id: 'planning', label: 'Finding the code each task touches' },
 ];
 
 /** The prompt a Cowork automation step runs, from one recorded action. */
@@ -61,7 +60,7 @@ const fmt = (sec: number) => { const s = Math.max(0, Math.floor(sec)); return `$
 
 /**
  * Show & tell: record the screen and talk through bugs, changes or tasks.
- * shmakk keeps the moments that matter (speech cues, your marks, visual
+ * shmakk samples the screen across the whole recording (and on every visual
  * changes), reads them with the transcript, and drafts tasks grounded in the
  * workspace. You review them, then they go to Plans, where every task is
  * reviewed before it counts as done.
@@ -81,7 +80,6 @@ export function Show2Plan() {
   const [elapsed, setElapsed] = useState(0);
   const [paused, setPaused] = useState(false);
   const [frames, setFrames] = useState(0);
-  const [marks, setMarks] = useState(0);
   const [level, setLevel] = useState(0);
   const [segments, setSegments] = useState<LiveSegment[]>([]);
   const [interim, setInterim] = useState('');
@@ -108,7 +106,7 @@ export function Show2Plan() {
     recRef.current?.release();
     recRef.current = null;
     stoppingRef.current = false;
-    setPhase('setup'); setError(null); setSessionId(null); setElapsed(0); setPaused(false); setFrames(0); setMarks(0);
+    setPhase('setup'); setError(null); setSessionId(null); setElapsed(0); setPaused(false); setFrames(0);
     setLevel(0); setSegments([]); setInterim(''); setMicNote(null); setTasks([]); setTitle(''); setShowTranscript(false);
   }, []);
 
@@ -161,7 +159,7 @@ export function Show2Plan() {
       sessionRef.current = id;
       setSessionId(id);
       const rec = new ScreenRecorder(id, {
-        onFrame: (n, marked) => { setFrames(n); if (marked) setMarks((m) => m + 1); },
+        onFrame: (n) => setFrames(n),
         onLevel: setLevel,
         onTranscript: (segs, live) => { setSegments(segs); setInterim(live); },
         onEnded: () => { void stop(); },
@@ -223,15 +221,6 @@ export function Show2Plan() {
     setPaused(rec.paused);
   };
 
-  // M marks the moment while recording (when the dialog has focus).
-  useEffect(() => {
-    if (phase !== 'recording') return;
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.key === 'm' || e.key === 'M') && !(e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement)) { e.preventDefault(); recRef.current?.mark(); }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [phase]);
 
   const createPlan = async (startNow: boolean) => {
     if (!sessionId) return;
@@ -285,7 +274,7 @@ export function Show2Plan() {
 
   const header: Record<Phase, { title: string; desc: string }> = {
     setup: { title: 'Show & tell', desc: 'Record your screen and talk through bugs, changes or tasks. shmakk keeps the key moments and turns what you say into tasks for this workspace.' },
-    recording: { title: 'Recording', desc: 'Point at things and say what is wrong or what should change. Press Mark when the screen shows exactly what you mean.' },
+    recording: { title: 'Recording', desc: 'Click through the product and say what is wrong or should change, as you show it. Keep the shared window visible.' },
     uploading: { title: 'Finishing up', desc: 'Sending the recording to shmakk.' },
     processing: { title: 'Making tasks', desc: 'This usually takes under a minute.' },
     review: status.data?.result?.mode === 'automation'
@@ -344,7 +333,6 @@ export function Show2Plan() {
                   </span>
                 ) : null}
                 <span>{frames} moment{frames === 1 ? '' : 's'} kept</span>
-                {marks ? <span className="text-violet">{marks} marked</span> : null}
               </div>
               {micNote ? <p className="m-0 text-[12px] text-warn">{micNote}</p> : null}
               {segments.length || interim ? (
@@ -381,12 +369,12 @@ export function Show2Plan() {
 
               {result.frames.length ? (
                 <div className="grid gap-1.5">
-                  <span className="text-[12px] font-medium text-dim">Key moments ({result.frames.length} of {result.allFrames} kept)</span>
+                  <span className="text-[12px] font-medium text-dim">Screenshots the model read ({result.frames.length} of {result.allFrames} captured)</span>
                   <div className="flex gap-1.5 overflow-x-auto pb-1">
                     {result.frames.map((f) => (
                       <a key={f.file} href={frameSrc(f.file)} target="_blank" rel="noreferrer" className="relative shrink-0" title={f.transcript || f.reason}>
                         <img src={frameSrc(f.file)} alt={`Moment at ${fmt(f.t)}`} loading="lazy" className="h-20 w-auto rounded-md border border-line object-contain" />
-                        <span className="absolute bottom-0.5 left-0.5 rounded bg-black/65 px-1 text-[10.5px] text-white">{fmt(f.t)}{f.reason === 'marked' ? ' · marked' : ''}</span>
+                        <span className="absolute bottom-0.5 left-0.5 rounded bg-black/65 px-1 text-[10.5px] text-white">{fmt(f.t)}</span>
                       </a>
                     ))}
                   </div>
@@ -396,7 +384,7 @@ export function Show2Plan() {
               {result.transcript.text ? (
                 <div>
                   <button type="button" className="inline-flex items-center gap-1 text-[12.5px] text-dim hover:text-fg" onClick={() => setShowTranscript((v) => !v)} aria-expanded={showTranscript}>
-                    {showTranscript ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}What you said ({result.transcript.source === 'browser' ? 'live transcript' : 'server transcription'})
+                    {showTranscript ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}What you said ({result.transcript.source === 'browser' ? 'live transcript' : result.transcript.source === 'xai' ? 'xAI speech-to-text' : result.transcript.source === 'deepseek' ? 'DeepSeek speech-to-text' : 'Whisper'})
                   </button>
                   {showTranscript ? <p className="m-0 mt-1.5 rounded-lg border border-line bg-sunken px-3 py-2 text-[12.5px] text-dim">{result.transcript.text}</p> : null}
                 </div>
@@ -432,7 +420,7 @@ export function Show2Plan() {
               )}
               {result.uncertain.length ? (
                 <div className="grid gap-1 rounded-lg border border-line px-3 py-2">
-                  <span className="text-[12px] font-semibold text-dim">Unclear from the recording</span>
+                  <span className="text-[12px] font-semibold text-dim">Questions to answer first</span>
                   <ul className="m-0 grid gap-0.5 pl-4 text-[12.5px] text-dim">{result.uncertain.map((u) => <li key={u}>{u}</li>)}</ul>
                 </div>
               ) : null}
@@ -452,7 +440,6 @@ export function Show2Plan() {
             <>
               <Button variant="ghost" onClick={() => { discard(); reset(); }}><X />Discard</Button>
               <Button onClick={togglePause}>{paused ? <Play /> : <Pause />}{paused ? 'Resume' : 'Pause'}</Button>
-              <Button onClick={() => recRef.current?.mark()} title="Shortcut: M"><Bookmark />Mark moment</Button>
               <Button variant="primary" onClick={() => void stop()}><Square />Stop and make tasks</Button>
             </>
           ) : null}

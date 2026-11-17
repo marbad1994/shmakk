@@ -4,19 +4,17 @@
 // browser does the capture (getDisplayMedia + microphone) so it works the same
 // on a laptop and against a shmakk running in Docker, where the server has no
 // screen at all. While recording, the browser samples frames whenever the
-// picture changes (and whenever the person presses "Mark"), and uploads them
-// with the microphone audio when the recording stops.
+// picture changes (and at least every few seconds), and uploads them with the
+// microphone audio when the recording stops.
 //
 // Processing turns that into shmakk tasks:
-//   1. transcript  — server Whisper with timestamps when installed, otherwise
-//                    the browser's live transcript (Web Speech API);
-//   2. key frames  — the moments the person was pointing or acting (speech
-//                    cues, see frames.selectTimestamps), every marked moment,
-//                    and the biggest visual changes, within a budget;
-//   3. findings    — one vision call over those frames + the transcript;
-//   4. tasks       — the intake layer grounds each finding in the workspace
-//                    and splits it into layered, ordered tasks with
-//                    instructions and acceptance criteria.
+//   1. transcript  — xAI or DeepSeek speech-to-text when configured, else
+//                    local Whisper, else the browser's live transcript;
+//   2. tasks       — one vision call over ~20 frames spread across the whole
+//                    recording plus the timed transcript writes standalone
+//                    tasks directly (show2plan-analyze.js);
+//   3. grounding   — labels the tasks quote are searched in the workspace to
+//                    point at the files that render them.
 // The result is reviewed in the UI and sent to Plans as a review-gated plan.
 
 const fs = require('fs');
@@ -219,12 +217,12 @@ function createShow2PlanManager({ getWorkspace, broadcast = () => {}, getModel =
     // Server transcription: DeepSeek's hosted ASR when configured, else local Whisper.
     let canStt = false;
     try { require.resolve('@huggingface/transformers'); canStt = true; } catch {}
-    try { if (!canStt && require('./stt')._deepseekAsrConfig()) canStt = true; } catch {}
+    try { const stt = require('./stt'); if (!canStt && (stt._xaiSttConfig() || stt._deepseekAsrConfig())) canStt = true; } catch {}
     if (s.hasAudio && canStt) {
       try {
         const { transcribeTimestamped } = require('./stt');
         const r = await transcribeTimestamped(wav, { language: opts.language });
-        const pick = chooseTranscript({ ...r, source: r.engine === 'deepseek-asr' ? 'deepseek' : 'whisper' }, live);
+        const pick = chooseTranscript({ ...r, source: r.engine === 'deepseek-asr' ? 'deepseek' : r.engine === 'xai-stt' ? 'xai' : 'whisper' }, live);
         if (pick.dropped && pick.transcript === live && live.text) s.warnings.push('Server transcription heard little or no speech, so the live browser transcript was used.');
         if (pick.transcript && pick.transcript.text) return pick.transcript;
       } catch (e) {
@@ -238,7 +236,6 @@ function createShow2PlanManager({ getWorkspace, broadcast = () => {}, getModel =
 
   async function runPipeline(s, opts) {
     const stage = (name, progress = null) => { s.stage = name; s.progress = progress; emit(s); };
-    const root = getWorkspace();
     const instructions = String(opts.instructions || '').trim().slice(0, 4000);
 
     stage('transcribing');
@@ -246,101 +243,64 @@ function createShow2PlanManager({ getWorkspace, broadcast = () => {}, getModel =
     fs.writeFileSync(path.join(dirOf(s.id), 'transcript.json'), JSON.stringify(transcript, null, 2));
     if (s.ctrl.signal.aborted) throw new Error('cancelled');
 
-    stage('selecting');
     const durationSec = Number(opts.durationSec) || transcript.durationSec || 0;
+    if (opts.mode === 'automation') return runAutomation(s, opts, transcript, durationSec, instructions, stage);
+
+    // Tasks: one vision call writes the tasks directly from the frames and the
+    // timed transcript (see show2plan-analyze.js). No second model rewrites them.
+    stage('analyzing');
+    const analyze = require('./show2plan-analyze');
+    const frames = s.frames.map((f) => ({ ...f, path: path.join(dirOf(s.id), 'frames', f.file) }));
+    if (!transcript.text && !frames.length) throw new Error('Nothing was captured: no narration and no screenshots. Keep the shared window visible and talk while you record.');
+    const out = await analyze.analyzeShowAndTell({ frames, transcript, instructions, durationSec, signal: s.ctrl.signal });
+    if (!out.sawImages && frames.length) s.warnings.push(`The model "${out.model}" cannot read images, so the tasks were written from the narration only. Configure a vision-capable model for much better tasks.`);
+    if (!out.tasks.length && !out.questions.length) throw new Error('The model found nothing to turn into tasks. Record again and say what should change while you show it.');
+
+    stage('planning');
+    analyze.groundTasks(getWorkspace(), out.tasks);
+
+    const segmentAt = (t) => (transcript.segments || []).find((x) => t >= x.start - 0.5 && t <= x.end + 1.5);
+    s.result = {
+      mode: 'tasks',
+      title: out.title || (out.tasks[0] && out.tasks[0].title) || 'Show & tell',
+      summary: out.summary,
+      app: null,
+      transcript: { text: transcript.text, segments: transcript.segments, source: transcript.source },
+      frames: out.framesSent.map((f) => ({ file: f.file, t: f.t, reason: 'sent to the model', transcript: (segmentAt(f.t) || {}).text || null })),
+      allFrames: s.frames.length,
+      tasks: out.tasks,
+      via: 'model',
+      model: out.model,
+      uncertain: out.questions,
+    };
+    fs.writeFileSync(path.join(dirOf(s.id), 'result.json'), JSON.stringify(s.result, null, 2));
+    stage('done');
+  }
+
+  // Automation: the narration is a sequence of steps to replay, not changes
+  // to the code. That needs the vision model to see what was acted on.
+  async function runAutomation(s, opts, transcript, durationSec, instructions, stage) {
+    stage('analyzing');
+    const vision = require('./vision');
+    if (!vision.findVisionClient()) throw new Error('An automation needs a vision-capable model to see what you clicked. Configure one (a visionSupport endpoint, or a model marked vision:true), or record Tasks instead.');
     const selected = pickFrames(s.frames, transcript.segments, { durationSec, budget: Number(opts.budget) || DEFAULT_BUDGET });
     const segmentAt = (t) => (transcript.segments || []).find((x) => t >= x.start - 0.5 && t <= x.end + 1.5);
     const frameObjs = selected.map((f, i) => ({ index: i, file: f.file, path: path.join(dirOf(s.id), 'frames', f.file), t: f.t, reason: f.reason, transcript: (segmentAt(f.t) || {}).text || null }));
-
-    let analysis = null;
-    let rawAnalysis = null;
-    let findings = [];
-    stage('analyzing');
-    const vision = require('./vision');
-    if (frameObjs.length && vision.findVisionClient()) {
-      try {
-        const a = await vision.analyzeRecording({ frames: frameObjs, transcript, instructions, signal: s.ctrl.signal });
-        const { normalizeAnalysis } = require('./showtell');
-        rawAnalysis = a.analysis;
-        analysis = normalizeAnalysis(a.analysis);
-        findings = analysis.findings;
-      } catch (e) {
-        if (s.ctrl.signal.aborted) throw e;
-        s.warnings.push(`Vision analysis failed (${e.message}); tasks are built from the narration alone.`);
-      }
-    } else if (frameObjs.length) {
-      s.warnings.push('No vision-capable model is configured, so screenshots were not analysed. Tasks are built from the narration; the screenshots stay attached as context.');
-    }
-
-    // Automation: the narration is a sequence of steps to replay, not changes
-    // to the code. That needs the vision model to see what was acted on.
-    if (opts.mode === 'automation') {
-      if (!rawAnalysis) throw new Error('An automation needs a vision-capable model to see what you clicked. Configure one (a visionSupport endpoint, or a model marked vision:true), or record Tasks instead.');
-      const { toAutomation } = require('./showtell');
-      const automation = toAutomation(rawAnalysis);
-      s.result = {
-        mode: 'automation',
-        title: analysis.goal || analysis.summary || 'Recorded automation',
-        summary: analysis.summary || '',
-        app: analysis.app,
-        transcript: { text: transcript.text, segments: transcript.segments, source: transcript.source },
-        frames: frameObjs.map((f) => ({ file: f.file, t: f.t, reason: f.reason, transcript: f.transcript })),
-        allFrames: s.frames.length,
-        tasks: [],
-        automation,
-        via: 'model',
-        uncertain: analysis.uncertain || [],
-      };
-      fs.writeFileSync(path.join(dirOf(s.id), 'result.json'), JSON.stringify(s.result, null, 2));
-      stage('done');
-      return;
-    }
-
-    const frameFiles = frameObjs.map((f) => f.file);
-    let requests = requestsFromFindings(findings, frameFiles);
-    if (!requests.length) requests = requestsFromTranscript(transcript, selected, instructions);
-    if (!requests.length) throw new Error('Nothing to turn into tasks: no narration was transcribed and nothing was pointed out. Record again and say what should change, or type it in the box before you start.');
-
-    stage('planning');
-    const intake = require('./intake');
-    const context = [
-      instructions ? `What they typed before recording: ${instructions}` : null,
-      analysis && analysis.summary ? `Summary of the recording: ${analysis.summary}` : null,
-      analysis && analysis.app ? `App: ${analysis.app}` : null,
-      transcript.text ? `Full narration: "${transcript.text.slice(0, 3000)}"` : null,
-    ].filter(Boolean).join('\n');
-    const out = await intake.translate({ root, requests, source: 'show2plan', context, model: getModel(), signal: s.ctrl.signal });
-    if (out.error) s.warnings.push(out.via === 'fallback' ? `Tasks were drafted without the model (${out.error}); review them carefully.` : out.error);
-
-    // Carry each request's evidence onto the tasks made from it.
-    const reqById = new Map(out.requests.map((r) => [r.id, r]));
-    const tasks = out.tasks.map((t) => {
-      const reqs = (t.requestIds.length ? t.requestIds : []).map((id) => reqById.get(id)).filter(Boolean);
-      const frames = [...new Set(reqs.flatMap((r) => r.frames))].slice(0, 4);
-      return {
-        ...t,
-        evidence: {
-          frames,
-          quote: reqs.map((r) => r.quote).filter(Boolean).join(' / ').slice(0, 1000) || null,
-          page: reqs.map((r) => r.where.page).find(Boolean) || null,
-          element: reqs.map((r) => r.where.element).find(Boolean) || null,
-        },
-      };
-    });
-
+    const a = await vision.analyzeRecording({ frames: frameObjs, transcript, instructions, signal: s.ctrl.signal });
+    const { normalizeAnalysis, toAutomation } = require('./showtell');
+    const analysis = normalizeAnalysis(a.analysis);
     s.result = {
-      mode: 'tasks',
-      title: (analysis && (analysis.goal || analysis.summary)) || out.summary || (tasks[0] && tasks[0].title) || 'Show & tell',
-      summary: (analysis && analysis.summary) || out.summary || '',
-      app: analysis && analysis.app,
+      mode: 'automation',
+      title: analysis.goal || analysis.summary || 'Recorded automation',
+      summary: analysis.summary || '',
+      app: analysis.app,
       transcript: { text: transcript.text, segments: transcript.segments, source: transcript.source },
       frames: frameObjs.map((f) => ({ file: f.file, t: f.t, reason: f.reason, transcript: f.transcript })),
       allFrames: s.frames.length,
-      findings,
-      tasks,
-      via: out.via,
-      stack: out.stack,
-      uncertain: (analysis && analysis.uncertain) || [],
+      tasks: [],
+      automation: toAutomation(a.analysis),
+      via: 'model',
+      uncertain: analysis.uncertain || [],
     };
     fs.writeFileSync(path.join(dirOf(s.id), 'result.json'), JSON.stringify(s.result, null, 2));
     stage('done');

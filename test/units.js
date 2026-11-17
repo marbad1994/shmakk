@@ -3052,6 +3052,56 @@ function highlightDiffLines(text) {
   });
 }
 
+// ── show & tell: single-call analysis (ported from the show2plan prototype) ──
+{
+  const A = require('../src/services/show2plan-analyze');
+
+  test('show2plan-analyze: questions stay out of tasks, flows ordered, priorities mapped', () => {
+    const r = A.normalizeAnalysis({ title: 'T', summary: 'S', tasks: [
+      { title: 'Fix login', type: 'bug', group: 'independent', description: 'd', visualContext: 'The "Sign in" button', acceptanceCriteria: ['a'], priority: 'critical', layer: 'backend', frameIndices: [1], timestampSeconds: 3 },
+      { title: 'Step two', type: 'ux', group: 'userflow', flowName: 'Checkout', step: 2, description: 'd2', frameIndices: [], timestampSeconds: 20 },
+      { title: 'Unclear?', type: 'question', description: 'q' },
+      { title: 'Step one', type: 'feature', group: 'userflow', flowName: 'Checkout', step: 1, description: 'd1', frameIndices: [] },
+    ] }, { frameFiles: ['f0', 'f1', 'f2'], frameTimes: [0, 5, 19] });
+    assert.deepStrictEqual(r.tasks.map((t) => t.title), ['Fix login', 'Step one', 'Step two']);
+    assert.deepStrictEqual(r.questions, ['Unclear?: q']);
+    assert.strictEqual(r.tasks[0].priority, 'high');
+    assert.strictEqual(r.tasks[0].kind, 'bug');
+    assert.deepStrictEqual(r.tasks[0].evidence.frames, ['f1']);
+    assert.deepStrictEqual(r.tasks[2].evidence.frames, ['f2']); // nearest to 20 s
+    assert.ok(r.tasks[0].instructions.includes('On screen'));
+    assert.ok(r.tasks[1].instructions.includes('Checkout, step 1'));
+  });
+
+  test('show2plan-analyze: frames sampled evenly across the whole recording', () => {
+    const frames = Array.from({ length: 50 }, (_, i) => ({ file: `f${i}`, t: i }));
+    const s = A.selectFrames(frames, 10);
+    assert.strictEqual(s.length, 10);
+    assert.strictEqual(s[0].file, 'f0');
+    assert.strictEqual(s[9].file, 'f49');
+  });
+
+  test('show2plan-analyze: timed transcript buckets and quoted labels', () => {
+    assert.strictEqual(A.timedTranscript({ segments: [{ start: 0, end: 2, text: 'a' }, { start: 9, end: 10, text: 'b' }] }), '[0:00-0:02] a\n[0:09-0:10] b');
+    assert.deepStrictEqual(A.quotedLabels({ visualContext: 'A "Save profile" button and “Cancel”', description: '' }), ['Save profile', 'Cancel']);
+  });
+
+  test('show2plan-analyze: one model call writes the tasks, with images attached', async () => {
+    const os = require('os');
+    const path = require('path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 's2pa-'));
+    const f = path.join(dir, 'frame_0000.jpg');
+    fs.writeFileSync(f, Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==', 'base64'));
+    let seen = null;
+    const client = { model: 'm', vision: true, client: { chat: { completions: { create: async (p) => { seen = p; return { choices: [{ message: { content: JSON.stringify({ title: 'T', summary: 'S', tasks: [{ title: 'Do', description: 'd', visualContext: '', acceptanceCriteria: ['x'], priority: 'low', type: 'chore', group: 'independent', timestampSeconds: 0, frameIndices: [0] }] }) } }] }; } } } } };
+    const out = await A.analyzeShowAndTell({ frames: [{ file: 'frame_0000.jpg', path: f, t: 0 }], transcript: { text: 'hi', segments: [{ start: 0, end: 1, text: 'hi' }] }, client });
+    assert.strictEqual(out.tasks.length, 1);
+    assert.ok(seen.messages[0].content.includes('text must stand alone'));
+    assert.ok(seen.messages[1].content.some((c) => c.type === 'image_url'));
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+}
+
 (async () => {
   let pass = 0, fail = 0;
   for (const { name, fn } of tests) {

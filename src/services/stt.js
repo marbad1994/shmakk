@@ -158,6 +158,63 @@ async function _transcribeDeepSeek(audioPath) {
   return { text, durationSec };
 }
 
+// ── xAI speech-to-text (cloud, word timestamps) ────────────────────────────
+// POST https://api.x.ai/v1/stt with multipart form (file last). Returns words
+// with start/end times, which is what lets Show & tell line the narration up
+// with the screenshots. Used when an x.ai endpoint or key is configured;
+// force with SHMAKK_STT=xai.
+
+function _xaiSttConfig() {
+  const isXai = (u) => /(^|\/\/)([^/]*\.)?x\.ai(\/|$)/i.test(String(u || ''));
+  if (process.env.XAI_API_KEY) return { base: 'https://api.x.ai', key: process.env.XAI_API_KEY };
+  const base = process.env.SHMAKK_STT_BASE_URL || process.env.SHMAKK_BASE_URL || '';
+  const key = process.env.SHMAKK_STT_API_KEY || process.env.SHMAKK_API_KEY || '';
+  if (isXai(base) && key) return { base: 'https://api.x.ai', key };
+  try {
+    const { getModelRegistry } = require('../endpoints');
+    for (const cfg of Object.values(getModelRegistry().models || {})) {
+      if (cfg && isXai(cfg.base_url) && cfg.api_key) return { base: 'https://api.x.ai', key: cfg.api_key };
+    }
+  } catch {}
+  return null;
+}
+
+/** Group xAI words into short timed segments (break on pauses or ~8 s). */
+function _wordsToSegments(words) {
+  const out = [];
+  let cur = null;
+  for (const w of words) {
+    const text = String(w.text || '').trim();
+    if (!text) continue;
+    const start = Number(w.start) || 0;
+    const end = Number(w.end) || start;
+    if (!cur || start - cur.end > 0.8 || end - cur.start > 8) { cur = { start, end, text }; out.push(cur); } else { cur.text += ` ${text}`; cur.end = end; }
+  }
+  return out;
+}
+
+async function _transcribeXai(audioPath, opts = {}) {
+  const cfg = _xaiSttConfig();
+  if (!cfg) return null;
+  const buf = fs.readFileSync(audioPath);
+  const fd = new FormData();
+  fd.append('format', 'true');
+  if (opts.language && /^[a-z]{2}$/i.test(opts.language)) fd.append('language', opts.language.toLowerCase());
+  fd.append('filler_words', 'false');
+  fd.append('file', new Blob([buf], { type: 'audio/wav' }), 'audio.wav'); // file must be last
+  const res = await fetch(`${cfg.base}/v1/stt`, { method: 'POST', headers: { authorization: `Bearer ${cfg.key}` }, body: fd });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw new Error(`xAI speech-to-text failed (${res.status}): ${detail.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  const text = String((data && data.text) || '').trim();
+  const words = Array.isArray(data && data.words) ? data.words : [];
+  const durationSec = Number(data && data.duration) || _wavDurationSec(audioPath) || 0;
+  const segments = words.length ? _wordsToSegments(words) : (text ? [{ start: 0, end: durationSec, text }] : []);
+  return { text, segments, durationSec, language: (data && data.language) || null, engine: 'xai-stt' };
+}
+
 /**
  * Transcribe a WAV file to text.
  * @param {string} audioPath - path to WAV audio file
@@ -249,8 +306,19 @@ async function transcribeTimestamped(audioPath, opts = {}) {
 
   const engine = String(opts.engine || process.env.SHMAKK_STT || 'auto').toLowerCase();
 
-  // Prefer DeepSeek ASR unless explicitly forced to local Whisper.
-  if (engine !== 'whisper') {
+  // xAI first: it returns word timestamps, which align speech with frames.
+  if (engine === 'auto' || engine === 'xai') {
+    if (engine === 'xai' && !_xaiSttConfig()) throw new Error('xAI speech-to-text requested but no x.ai key is configured');
+    try {
+      const r = await _transcribeXai(audioPath, opts);
+      if (r && r.text) return r;
+    } catch (e) {
+      if (engine === 'xai') throw e;
+    }
+  }
+
+  // Then DeepSeek ASR unless explicitly forced to local Whisper.
+  if (engine !== 'whisper' && engine !== 'xai') {
     const asrCfg = _deepseekAsrConfig();
     if (engine === 'deepseek' && !asrCfg) {
       throw new Error('DeepSeek ASR requested but no DeepSeek endpoint is configured');
@@ -330,4 +398,7 @@ module.exports = {
   _deepseekAsrConfig,
   _wavDurationSec,
   _transcribeDeepSeek,
+  _xaiSttConfig,
+  _wordsToSegments,
+  _transcribeXai,
 };

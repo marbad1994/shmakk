@@ -2,8 +2,8 @@
 //
 // Nothing is recorded as video. While recording we sample the shared screen
 // every half second into a tiny grayscale thumbnail and keep a full frame
-// whenever it differs enough from the last kept one (or every few seconds
-// regardless, or when the person presses Mark). Kept frames upload in the
+// whenever it differs enough from the last kept one, and at least every few
+// seconds so a still screen under narration is covered. Kept frames upload in the
 // background, so stopping is quick. The microphone is recorded with
 // MediaRecorder and converted to 16 kHz mono WAV here, which is what the
 // server's Whisper expects; no ffmpeg needed anywhere.
@@ -11,7 +11,7 @@
 export interface LiveSegment { start: number; end: number; text: string }
 
 export interface RecorderEvents {
-  onFrame?: (n: number, marked: boolean) => void;
+  onFrame?: (n: number) => void;
   onLevel?: (level: number) => void;
   onTranscript?: (segments: LiveSegment[], interim: string) => void;
   onEnded?: () => void; // the person stopped sharing from the browser's own bar
@@ -22,7 +22,7 @@ export interface RecorderResult { durationSec: number; audio: Blob | null; segme
 
 const SAMPLE_MS = 500;
 const CHANGE_THRESHOLD = 0.055;
-const MAX_GAP_SEC = 8;
+const MAX_GAP_SEC = 3;
 const MAX_WIDTH = 1600;
 
 type SpeechRec = {
@@ -32,6 +32,14 @@ type SpeechRec = {
   onerror: ((e: { error: string }) => void) | null;
   onend: (() => void) | null;
 };
+
+function micError(err: unknown): string {
+  const name = err && typeof err === 'object' && 'name' in err ? String((err as { name: string }).name) : '';
+  if (name === 'NotAllowedError' || name === 'PermissionDeniedError') return 'Microphone permission was denied, so only the screen is recorded. Allow the microphone in the site settings (lock icon in the address bar) and record again.';
+  if (name === 'NotFoundError') return 'No microphone was found, so only the screen is recorded.';
+  if (name === 'NotReadableError') return 'The microphone is busy in another app, so only the screen is recorded.';
+  return 'Microphone not available, so only the screen is recorded.';
+}
 
 export function speechRecognitionAvailable() {
   const w = window as unknown as { SpeechRecognition?: unknown; webkitSpeechRecognition?: unknown };
@@ -79,13 +87,25 @@ export class ScreenRecorder {
 
   async start({ microphone = true }: { microphone?: boolean } = {}) {
     if (!navigator.mediaDevices?.getDisplayMedia) throw new Error('This browser cannot share the screen. Use a current Chrome, Edge or Firefox, or the desktop app.');
-    this.display = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 10, max: 15 } }, audio: false });
+    // Microphone FIRST, while the click's user activation is still fresh;
+    // asked for after the screen picker, the prompt is often refused.
     if (microphone) {
       try {
-        this.mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-      } catch {
-        this.ev.onError?.('Microphone not available: recording the screen only. Type what should change in the box instead.');
+        this.mic = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      } catch (first) {
+        try {
+          this.mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
+        } catch {
+          this.ev.onError?.(micError(first));
+        }
       }
+    }
+    try {
+      this.display = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 10, max: 15 } }, audio: false });
+    } catch (e) {
+      this.mic?.getTracks().forEach((t) => t.stop());
+      this.mic = null;
+      throw e;
     }
     const track = this.display.getVideoTracks()[0];
     track.addEventListener('ended', () => { if (!this.stopped) this.ev.onEnded?.(); });
@@ -179,14 +199,11 @@ export class ScreenRecorder {
     const t = this.elapsed();
     if (!this.last || diff > CHANGE_THRESHOLD || t - this.lastKeptT > MAX_GAP_SEC) {
       this.last = gray;
-      this.capture(false, Math.min(1, diff * 4));
+      this.capture(Math.min(1, diff * 4));
     }
   }
 
-  /** Keep a full frame now. Marked frames are always sent to the vision model. */
-  mark() { this.capture(true, 1); }
-
-  private capture(marked: boolean, score: number) {
+  private capture(score: number) {
     if (!this.video || this.video.readyState < 2 || this.stopped) return;
     const vw = this.video.videoWidth;
     const vh = this.video.videoHeight;
@@ -200,11 +217,11 @@ export class ScreenRecorder {
     const t = this.elapsed();
     this.lastKeptT = t;
     this.frames += 1;
-    this.ev.onFrame?.(this.frames, marked);
+    this.ev.onFrame?.(this.frames);
     this.full.toBlob((blob) => {
       if (!blob) return;
       this.queue = this.queue.then(async () => {
-        const res = await fetch(`/api/show2plan/${this.sessionId}/frame?t=${t.toFixed(2)}&mark=${marked ? 1 : 0}&score=${score.toFixed(3)}&type=image/jpeg`, {
+        const res = await fetch(`/api/show2plan/${this.sessionId}/frame?t=${t.toFixed(2)}&score=${score.toFixed(3)}&type=image/jpeg`, {
           method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'image/jpeg' }, body: blob,
         }).catch(() => null);
         if (!res || !res.ok) this.uploadErrors += 1;
