@@ -320,6 +320,11 @@ function saveModel(cwd, name, cfg = {}) {
     if (value && (typeof value === 'object' || value)) next.headers = value;
     else delete next.headers;
   }
+  if (cfg.registry !== undefined) {
+    const value = String(cfg.registry || '').trim();
+    if (value) next.registry = value;
+    else delete next.registry;
+  }
   if (cfg.vision !== undefined) {
     if (cfg.vision === null) delete next.vision;
     else next.vision = !!cfg.vision;
@@ -328,6 +333,9 @@ function saveModel(cwd, name, cfg = {}) {
 
   if (cfg.main === true) raw.main = key;
   else if (cfg.main === false && raw.main === key) delete raw.main;
+
+  if (cfg.fast === true) raw.fast = key;
+  else if (cfg.fast === false && raw.fast === key) delete raw.fast;
 
   writeEditableRegistry(file, raw);
   return { name: key, config: next, path: file };

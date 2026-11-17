@@ -113,7 +113,7 @@ export interface RegistryModel {
   name: string; // preset name in ~/.config/shmakk/endpoints.json
   model: string; // model id sent to the provider
   provider: string | null; vision: boolean; hasApiKey: boolean; default: boolean; fast: boolean;
-  baseUrl: string; headers: string | Record<string, string>;
+  baseUrl: string; registry: string; headers: string | Record<string, string>;
   visionExplicit: boolean; // "vision" written on the entry instead of auto-detected
 }
 export interface Provider {

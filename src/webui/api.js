@@ -115,6 +115,7 @@ function createApi(app) {
         provider: cfg.provider || null,
         baseUrl: cfg.base_url || '',
         headers: cfg.headers && typeof cfg.headers === 'object' ? cfg.headers : (cfg.headers || ''),
+        registry: cfg.registry || '',
         vision: !!cfg.vision,
         visionExplicit: 'vision' in cfg,
         hasApiKey: !!cfg.api_key,

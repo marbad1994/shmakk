@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { CheckCircle2, Cloud, Cpu, Database, Download, Eye, FolderOpen, Info, LogOut, Mic, Monitor, Moon, Palette, Pencil, Plus, Power, ScrollText, SlidersHorizontal, Sun, Trash2, Wrench, XCircle } from 'lucide-react';
+import { CheckCircle2, Cloud, Cpu, Database, Download, FolderOpen, Info, LogOut, Mic, Monitor, Moon, Palette, Pencil, Plus, Power, ScrollText, SlidersHorizontal, Sun, Trash2, Wrench, XCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { COMMANDS } from '@/lib/commands';
@@ -17,9 +17,9 @@ import { Switch } from '@/components/ui/switch';
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Row, Rows, Section } from './Page';
 
-// Provider kinds the runtime special-cases (src/llm.js), plus the fields each
-// one actually reads. Anthropic and Codex authenticate through their local
-// proxy with OAuth, so there is no key to type; NVIDIA pins its own base URL.
+// Provider kinds the runtime special-cases (src/llm.js). Anthropic and Codex
+// authenticate through their local proxy with OAuth, so no key is needed;
+// NVIDIA pins its own base URL.
 const MODEL_PROVIDERS = [
   { value: 'openai-compatible', label: 'OpenAI-compatible' },
   { value: 'openai', label: 'OpenAI' },
@@ -28,21 +28,11 @@ const MODEL_PROVIDERS = [
   { value: 'codex', label: 'Codex (OAuth proxy)' },
 ] as const;
 
-const PROVIDER_FIELDS: Record<string, { baseUrl: boolean; apiKey: boolean }> = {
-  'openai-compatible': { baseUrl: true, apiKey: true },
-  openai: { baseUrl: true, apiKey: true },
-  nvidia: { baseUrl: false, apiKey: true },
-  anthropic: { baseUrl: false, apiKey: false },
-  codex: { baseUrl: false, apiKey: false },
-};
-
-const fieldsFor = (provider: string) => PROVIDER_FIELDS[provider] || PROVIDER_FIELDS['openai-compatible'];
-
 type ModelDraft = {
   original: string | null;
   name: string; provider: string; model: string;
-  baseUrl: string; apiKey: string; headers: string;
-  vision: boolean; main: boolean;
+  baseUrl: string; apiKey: string; registry: string;
+  vision: boolean; main: boolean; fast: boolean;
 };
 
 function draftFor(entry?: RegistryModel | null): ModelDraft {
@@ -53,9 +43,10 @@ function draftFor(entry?: RegistryModel | null): ModelDraft {
     model: entry?.model ?? '',
     baseUrl: entry?.baseUrl || '',
     apiKey: '',
-    headers: entry ? (typeof entry.headers === 'string' ? entry.headers : JSON.stringify(entry.headers)) : '',
+    registry: entry?.registry || '',
     vision: !!entry?.vision,
     main: !!entry?.default,
+    fast: !!entry?.fast,
   };
 }
 
@@ -72,9 +63,10 @@ function RegistryEditor({ provider, suggestions, onPick }: { provider: Provider;
       provider: d.provider,
       model: d.model.trim(),
       baseUrl: d.baseUrl.trim(),
-      headers: d.headers.trim(),
+      registry: d.registry.trim(),
       vision: d.vision,
       main: d.main,
+      fast: d.fast,
       ...(d.apiKey.trim() ? { apiKey: d.apiKey.trim() } : {}),
     }),
     onSuccess: (_r, d) => {
@@ -90,10 +82,9 @@ function RegistryEditor({ provider, suggestions, onPick }: { provider: Provider;
     onSettled: () => setDeleting(null),
   });
 
-  const fields = draft ? fieldsFor(draft.provider) : null;
   const trimmed = draft?.name.trim() || '';
   const duplicate = !!draft && !draft.original && provider.registry.some((m) => m.name.toLowerCase() === trimmed.toLowerCase());
-  const invalid = !draft || !trimmed || duplicate || !draft.model.trim() || (draft.provider === 'openai-compatible' && !draft.baseUrl.trim());
+  const invalid = !draft || !trimmed || duplicate;
 
   return (
     <div className="col-span-full rounded-xl border border-line bg-panel p-3">
@@ -149,44 +140,47 @@ function RegistryEditor({ provider, suggestions, onPick }: { provider: Provider;
           {draft ? (
             <DialogBody>
               <form id="registry-form" className="grid grid-cols-2 gap-3 max-md:grid-cols-1" onSubmit={(e) => { e.preventDefault(); if (!invalid) save.mutate(draft); }}>
-                <Field label="Name" htmlFor="r-name" hint={draft.original ? 'The key in endpoints.json; rename by adding a new entry.' : duplicate ? 'That name is already in the registry.' : 'Key in endpoints.json'}>
+                <Field label="Name" htmlFor="r-name" hint={draft.original ? 'The key in endpoints.json; rename by adding a new entry.' : duplicate ? 'That name is already in the registry.' : 'Required — the key in endpoints.json'}>
                   <Input id="r-name" value={draft.name} disabled={!!draft.original} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="kimi" className="font-mono text-[13px]" spellCheck={false} />
                 </Field>
-                <Field label="Provider" htmlFor="r-provider" hint="Only the fields this provider reads are shown.">
+                <Field label="Provider" htmlFor="r-provider" hint="Optional — defaults to openai-compatible. Anthropic and Codex use their OAuth proxy.">
                   <Select value={draft.provider} onValueChange={(v) => setDraft({ ...draft, provider: v })}>
                     <SelectTrigger id="r-provider" aria-label="Provider"><SelectValue /></SelectTrigger>
                     <SelectContent>{MODEL_PROVIDERS.map((p) => <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>)}</SelectContent>
                   </Select>
                 </Field>
-                <Field label="Model id" htmlFor="r-model" hint="Sent to the provider and shown in the pickers." className="col-span-full">
+                <Field label="Model id" htmlFor="r-model" hint="Optional — defaults to the name. Sent to the provider and shown in the pickers." className="col-span-full">
                   <Input id="r-model" list="registry-model-list" value={draft.model} onChange={(e) => setDraft({ ...draft, model: e.target.value })} placeholder="moonshotai/kimi-k2.6" className="font-mono text-[13px]" spellCheck={false} />
                   <datalist id="registry-model-list">{suggestions.map((m) => <option key={m} value={m} />)}</datalist>
                 </Field>
-                {fields?.baseUrl ? (
-                  <Field label="Base URL" htmlFor="r-base" hint={draft.provider === 'openai-compatible' ? 'Required — the OpenAI-compatible endpoint' : 'Optional — the provider default is used when blank'} className="col-span-full">
-                    <Input id="r-base" value={draft.baseUrl} onChange={(e) => setDraft({ ...draft, baseUrl: e.target.value })} placeholder="https://api.example.com/v1" className="font-mono text-[13px]" spellCheck={false} />
-                  </Field>
-                ) : null}
-                {fields?.apiKey ? (
-                  <Field label="API key" htmlFor="r-key" hint="Stored in endpoints.json (owner-only). Leave blank to keep the current key." className="col-span-full">
-                    <Input id="r-key" type="password" autoComplete="off" value={draft.apiKey} onChange={(e) => setDraft({ ...draft, apiKey: e.target.value })} placeholder="sk-…" className="font-mono text-[13px]" />
-                  </Field>
-                ) : null}
-                <Field label="Extra headers" htmlFor="r-headers" hint="k=v,k=v — optional" className="col-span-full">
-                  <Input id="r-headers" value={draft.headers} onChange={(e) => setDraft({ ...draft, headers: e.target.value })} className="font-mono text-[13px]" spellCheck={false} />
+                <Field label="Base URL" htmlFor="r-base" hint="Optional — required only for OpenAI-compatible endpoints; OpenAI, NVIDIA and the proxies set their own." className="col-span-full">
+                  <Input id="r-base" value={draft.baseUrl} onChange={(e) => setDraft({ ...draft, baseUrl: e.target.value })} placeholder="https://api.example.com/v1" className="font-mono text-[13px]" spellCheck={false} />
+                </Field>
+                <Field label="API key" htmlFor="r-key" hint="Optional — stored in endpoints.json (owner-only). Leave blank to keep the current key." className="col-span-full">
+                  <Input id="r-key" type="password" autoComplete="off" value={draft.apiKey} onChange={(e) => setDraft({ ...draft, apiKey: e.target.value })} placeholder="sk-…" className="font-mono text-[13px]" />
+                </Field>
+                <Field label="Model list" htmlFor="r-registry" hint="Optional — comma-separated models this endpoint exposes (SHMAKK_REGISTRY)." className="col-span-full">
+                  <Input id="r-registry" value={draft.registry} onChange={(e) => setDraft({ ...draft, registry: e.target.value })} placeholder="model-a, model-b" className="font-mono text-[13px]" spellCheck={false} />
                 </Field>
                 <label className="flex items-start gap-2.5 text-[13px]">
                   <Switch checked={draft.vision} onCheckedChange={(v) => setDraft({ ...draft, vision: v })} aria-label="This model can read images" className="mt-0.5" />
                   <span className="grid gap-0.5">
                     <span className="font-medium text-fg">Reads images</span>
-                    <span className="text-xs text-faint">Writes “vision” on the entry, overriding name detection.</span>
+                    <span className="text-xs text-faint">Optional — writes “vision” on the entry, overriding name detection.</span>
                   </span>
                 </label>
                 <label className="flex items-start gap-2.5 text-[13px]">
                   <Switch checked={draft.main} onCheckedChange={(v) => setDraft({ ...draft, main: v })} aria-label="Default model" className="mt-0.5" />
                   <span className="grid gap-0.5">
                     <span className="font-medium text-fg">Default model</span>
-                    <span className="text-xs text-faint">Sets “main” in endpoints.json.</span>
+                    <span className="text-xs text-faint">Optional — sets “main” in endpoints.json.</span>
+                  </span>
+                </label>
+                <label className="flex items-start gap-2.5 text-[13px]">
+                  <Switch checked={draft.fast} onCheckedChange={(v) => setDraft({ ...draft, fast: v })} aria-label="Fast model" className="mt-0.5" />
+                  <span className="grid gap-0.5">
+                    <span className="font-medium text-fg">Fast model</span>
+                    <span className="text-xs text-faint">Optional — sets “fast” in endpoints.json.</span>
                   </span>
                 </label>
               </form>
@@ -206,17 +200,17 @@ function RegistryEditor({ provider, suggestions, onPick }: { provider: Provider;
 
 function ProviderSection() {
   const provider = useApp((s) => s.provider);
-  const [form, setForm] = useState({ baseUrl: '', model: '', apiKey: '', headers: '', modelList: '' });
+  const [form, setForm] = useState({ baseUrl: '', model: '', apiKey: '', modelList: '' });
   const [test, setTest] = useState<{ ok: boolean; ms?: number; error?: string; model?: string } | null>(null);
   useEffect(() => {
-    setForm({ baseUrl: provider.baseUrl || '', model: provider.model || '', apiKey: '', headers: provider.headers || '', modelList: provider.modelList || '' });
-  }, [provider.baseUrl, provider.model, provider.headers, provider.modelList, provider.endpoint]);
+    setForm({ baseUrl: provider.baseUrl || '', model: provider.model || '', apiKey: '', modelList: provider.modelList || '' });
+  }, [provider.baseUrl, provider.model, provider.modelList, provider.endpoint]);
 
   const models = useQuery({ queryKey: ['models', provider.baseUrl, provider.endpoint], queryFn: () => api.get<{ models: string[]; error?: string }>('/api/models'), enabled: provider.configured, staleTime: 60_000 });
   // Registry first, then whatever the live endpoint reports.
   const suggestions = Array.from(new Set([...provider.models, ...(models.data?.models || [])]));
   const save = useMutation({
-    mutationFn: () => api.put<Provider>('/api/provider', { baseUrl: form.baseUrl.trim(), model: form.model.trim(), headers: form.headers.trim(), modelList: form.modelList.trim(), ...(form.apiKey ? { apiKey: form.apiKey } : {}) }),
+    mutationFn: () => api.put<Provider>('/api/provider', { baseUrl: form.baseUrl.trim(), model: form.model.trim(), modelList: form.modelList.trim(), ...(form.apiKey ? { apiKey: form.apiKey } : {}) }),
     onSuccess: () => { toast.success('Provider saved'); setForm((f) => ({ ...f, apiKey: '' })); setTest(null); },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -236,7 +230,7 @@ function ProviderSection() {
     onSuccess: setTest,
     onError: (e: Error) => setTest({ ok: false, error: e.message }),
   });
-  const dirty = form.baseUrl !== (provider.baseUrl || '') || form.model !== (provider.model || '') || !!form.apiKey || form.headers !== (provider.headers || '') || form.modelList !== (provider.modelList || '');
+  const dirty = form.baseUrl !== (provider.baseUrl || '') || form.model !== (provider.model || '') || !!form.apiKey || form.modelList !== (provider.modelList || '');
 
   return (
     <Section id="set-provider" title="Model provider" aside={provider.configured ? null : <Badge tone="warn">not configured</Badge>}>
@@ -267,9 +261,6 @@ function ProviderSection() {
         >
           <Input id="p-model" list="model-list" value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} placeholder="gpt-4o-mini" className="font-mono text-[13px]" spellCheck={false} />
           <datalist id="model-list">{suggestions.map((m) => <option key={m} value={m} />)}</datalist>
-        </Field>
-        <Field label="Extra headers" htmlFor="p-headers" hint="k=v,k=v (SHMAKK_HEADERS)">
-          <Input id="p-headers" value={form.headers} onChange={(e) => setForm({ ...form, headers: e.target.value })} className="font-mono text-[13px]" spellCheck={false} />
         </Field>
         <RegistryEditor provider={provider} suggestions={suggestions} onPick={(model) => setForm((f) => ({ ...f, model }))} />
         {provider.registry.length ? null : (
