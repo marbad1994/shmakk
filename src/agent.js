@@ -357,7 +357,7 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
         model: modelName,
         messages, tools: allTools, tool_choice: toolChoiceForThisIter,
         temperature: 0, stream: true,
-        ...getReasoningOptions('tool_loop', effortLevel),
+        ...getReasoningOptions('tool_loop', effortLevel, modelName),
       }, { signal });
     } catch (e) {
       stopTaskSpinner();
@@ -655,7 +655,7 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
       temperature: 0,
       tool_choice: 'none',
       stream: false,
-      ...getReasoningOptions('tool_loop', effortLevel),
+      ...getReasoningOptions('tool_loop', effortLevel, modelName),
     }, { signal });
     const finalText = final.choices?.[0]?.message?.content || '';
     if (finalText) {

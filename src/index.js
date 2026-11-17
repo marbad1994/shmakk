@@ -1,7 +1,7 @@
 const { parseArgs, HELP, resolveHelp } = require('./cli');
 const { normalizeProfile, resolveProfile } = require('./profiles');
 const { applyEndpoint, getCurrentEndpoint, getCurrentEndpointName } = require('./endpoints');
-const { ensureModelRuntime } = require('./llm');
+const { ensureModelRuntime, KNOWN_EFFORT_LEVELS } = require('./llm');
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
@@ -78,8 +78,8 @@ async function main() {
 
   if (opts.effort !== null) {
     const v = String(opts.effort).toLowerCase();
-    if (!['minimal', 'low', 'medium', 'high', 'xhigh'].includes(v)) {
-      process.stderr.write('[shmakk] invalid --effort. Use: minimal|low|medium|high|xhigh\n');
+    if (!KNOWN_EFFORT_LEVELS.includes(v)) {
+      process.stderr.write(`[shmakk] invalid --effort. Use: ${KNOWN_EFFORT_LEVELS.join('|')}\n`);
       process.exit(2);
     }
     process.env.SHMAKK_EFFORT = v;

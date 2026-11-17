@@ -364,7 +364,7 @@ function createApi(app) {
     }
     if (body.reasoningEffort !== undefined) {
       const v = String(body.reasoningEffort || '').trim().toLowerCase();
-      app.settings.reasoningEffort = ['minimal', 'low', 'medium', 'high', 'xhigh'].includes(v) ? v : null;
+      app.settings.reasoningEffort = llm.KNOWN_EFFORT_LEVELS.includes(v) ? v : null;
     }
     app.saveSettings();
     return publicSettings(app.settings);

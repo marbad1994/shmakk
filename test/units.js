@@ -1856,13 +1856,23 @@ test('webui chat: attachments are inlined into the prompt and kept off the store
     assert.deepStrictEqual(llm.getReasoningOptions('chat', 'minimal', 'o3'), {}, 'o-series has no minimal');
     assert.deepStrictEqual(llm.getReasoningOptions('chat', 'high', 'gpt-4o'), {}, 'non-reasoning models get no effort');
 
-    // DeepSeek keeps its thinking switch and never mixes in reasoning_effort.
+    // DeepSeek chat turns honor the composer level. Tool loops still disable
+    // thinking and never send reasoning_effort (DSML leak guard).
     process.env.SHMAKK_BASE_URL = 'https://api.deepseek.com/v1';
     process.env.SHMAKK_MODEL = 'deepseek-chat';
-    const loop = llm.getReasoningOptions('tool_loop', 'high');
+    const loop = llm.getReasoningOptions('tool_loop', 'max');
     assert.strictEqual(loop.reasoning_effort, undefined);
     assert.deepStrictEqual(loop.extra_body, { thinking: { type: 'disabled' } });
     assert.strictEqual(llm.getReasoningOptions('chat', 'high').reasoning_effort, 'high');
+    assert.strictEqual(llm.getReasoningOptions('chat', null).reasoning_effort, 'high', 'unset stays at the provider default');
+    assert.strictEqual(llm.getReasoningOptions('chat', 'low', 'deepseek-v4-pro').reasoning_effort, 'low');
+    assert.strictEqual(llm.getReasoningOptions('chat', 'max', 'deepseek-v4-pro').reasoning_effort, 'max');
+    assert.deepStrictEqual(llm.getReasoningOptions('chat', 'max', 'deepseek-v4-pro').extra_body, { thinking: { type: 'enabled' } });
+    // Selected model wins over the active endpoint, so a grok default still
+    // talks to DeepSeek with thinking controls when that model is picked.
+    process.env.SHMAKK_BASE_URL = 'https://api.x.ai/v1';
+    assert.strictEqual(llm.getReasoningOptions('chat', 'max', 'deepseek-v4-flash').reasoning_effort, 'max');
+    assert.strictEqual(llm.getReasoningOptions('tool_loop', 'max', 'deepseek-v4-flash').reasoning_effort, undefined);
     delete process.env.SHMAKK_BASE_URL;
     delete process.env.SHMAKK_MODEL;
     llm.clearEffortCatalog();
@@ -1872,7 +1882,8 @@ test('webui chat: attachments are inlined into the prompt and kept off the store
     const llm = require('../src/llm');
     llm.clearEffortCatalog();
 
-    assert.deepStrictEqual(llm.effortLevelsForModel('deepseek-v4-flash', { baseUrl: 'https://api.deepseek.com' }), []);
+    assert.deepStrictEqual(llm.effortLevelsForModel('deepseek-v4-flash', { baseUrl: 'https://api.deepseek.com' }), ['low', 'high', 'max']);
+    assert.deepStrictEqual(llm.effortLevelsForModel('deepseek-v4-pro', { provider: 'deepseek' }), ['low', 'high', 'max']);
     assert.deepStrictEqual(llm.effortLevelsForModel('gpt-4o', { baseUrl: 'https://api.openai.com/v1' }), []);
     assert.deepStrictEqual(llm.effortLevelsForModel('o3', {}), ['low', 'medium', 'high']);
     assert.deepStrictEqual(llm.effortLevelsForModel('gpt-5', {}), ['minimal', 'low', 'medium', 'high']);
@@ -1894,6 +1905,12 @@ test('webui chat: attachments are inlined into the prompt and kept off the store
     // Provider said this id has no effort block → stay absent, heuristics apply.
     llm.ingestEffortCatalog([{ id: 'plain-model' }], 'https://api.x.ai/v1');
     assert.deepStrictEqual(llm.effortLevelsForModel('plain-model', { baseUrl: 'https://api.x.ai/v1' }), []);
+    // DeepSeek /models advertises effort.supported_levels, not capabilities.reasoning_effort.
+    llm.ingestEffortCatalog([{
+      id: 'deepseek-v4-pro',
+      effort: { supported_levels: ['low', 'high', 'max'], default_level: 'high' },
+    }], 'https://api.deepseek.com');
+    assert.deepStrictEqual(llm.effortLevelsForModel('deepseek-v4-pro'), ['low', 'high', 'max']);
     llm.clearEffortCatalog();
   });
 

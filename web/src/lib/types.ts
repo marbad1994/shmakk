@@ -1,7 +1,7 @@
 // Wire types shared with the server (src/webui/*.js).
 
 export type Mode = 'chat' | 'code' | 'design' | 'cowork';
-export type EffortLevel = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+export type EffortLevel = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type Safety = 'safe' | 'uncertain' | 'unsafe';
 export type AskStatus = 'pending' | 'yes' | 'no' | 'expired';
 

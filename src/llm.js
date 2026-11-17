@@ -872,8 +872,12 @@ function isDeepSeekProvider() {
   return base.includes('deepseek');
 }
 
-const REASONING_EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh']);
+// `max` is DeepSeek's top thinking effort. It is not on the OpenAI ladder
+// (ALL_EFFORT_LEVELS), but it is a real level the composer can store.
+const REASONING_EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
 const ALL_EFFORT_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh'];
+const KNOWN_EFFORT_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+const DEEPSEEK_EFFORT_LEVELS = ['low', 'high', 'max'];
 
 function normalizeEffort(effort) {
   const v = String(effort || '').trim().toLowerCase();
@@ -925,9 +929,12 @@ function heuristicEffortLevels(model, { baseUrl = '', provider = '' } = {}) {
   const p = String(provider || '').toLowerCase();
   if (!m && !base && !p) return [];
 
-  // DeepSeek: thinking is an on/off switch managed by shmakk, not a user
-  // effort ladder.
-  if (base.includes('deepseek') || p.includes('deepseek') || m.includes('deepseek')) return [];
+  // DeepSeek thinking effort is low/high/max (api-docs thinking mode). Legacy
+  // aliases such as deepseek-v4-flash are not always listed by /models, so the
+  // name or host is enough to show the control.
+  if (base.includes('deepseek') || p.includes('deepseek') || m.includes('deepseek')) {
+    return DEEPSEEK_EFFORT_LEVELS.slice();
+  }
 
   // Anthropic extended thinking uses budget tokens, not reasoning_effort.
   if (p === 'anthropic' || /(^|\/)claude/.test(m)) return [];
@@ -999,13 +1006,7 @@ function ingestEffortCatalog(models, baseUrl = null) {
     if (!entry || typeof entry !== 'object') continue;
     const id = String(entry.id || entry.name || '').trim();
     if (!id) continue;
-    const caps = entry.capabilities || entry.features || {};
-    const raw =
-      caps.reasoning_effort ||
-      caps.reasoningEffort ||
-      (caps.reasoningEffortOptions && caps.reasoningEffortOptions.supportedEfforts) ||
-      entry.reasoning_effort ||
-      null;
+    const raw = advertisedEffortLevels(entry);
     // Only write an entry when the provider spoke about effort. Models with no
     // capabilities block stay absent so heuristics can still apply.
     if (raw == null) continue;
@@ -1042,25 +1043,71 @@ async function refreshEffortCatalog(client, baseUrl = null) {
   }
 }
 
+/** Levels a /models entry advertises, or null when it said nothing about effort. */
+function advertisedEffortLevels(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const caps = entry.capabilities || entry.features || {};
+  const effortObj = [entry.effort, caps.effort].find((v) => v && typeof v === 'object' && !Array.isArray(v));
+  return (
+    caps.reasoning_effort ||
+    caps.reasoningEffort ||
+    (caps.reasoningEffortOptions && caps.reasoningEffortOptions.supportedEfforts) ||
+    entry.reasoning_effort ||
+    (effortObj && (effortObj.supported_levels || effortObj.supportedLevels || effortObj.levels)) ||
+    (Array.isArray(entry.effort) ? entry.effort : null) ||
+    null
+  );
+}
+
+function providerBaseUrl() {
+  const cfg = envForProvider();
+  return cfg.baseURL || process.env.SHMAKK_BASE_URL || '';
+}
+
+/** Base URL of the registry entry that would actually serve this model id. */
+function baseUrlForModel(model) {
+  const id = String(model || '').trim();
+  if (id) {
+    try {
+      const registry = getModelRegistry();
+      for (const [name, cfg] of Object.entries((registry && registry.models) || {})) {
+        if (name === id || String(cfg.model || name) === id) return cfg.base_url || '';
+      }
+    } catch { /* registry missing: fall through to the active endpoint */ }
+  }
+  return providerBaseUrl();
+}
+
+function isDeepSeekTarget(model, baseUrl) {
+  const m = String(model || '').toLowerCase();
+  const base = String(baseUrl || '').toLowerCase();
+  if (m.includes('deepseek') || base.includes('deepseek')) return true;
+  // No model id: the active endpoint decides (CLI and the default chat model).
+  if (!model) return isDeepSeekProvider();
+  return false;
+}
+
+// DeepSeek maps the OpenAI ladder onto low/high, and only `max` stays max.
+function mapDeepSeekEffort(effort) {
+  const level = normalizeEffort(effort);
+  if (level === 'minimal' || level === 'low') return 'low';
+  if (level === 'max') return 'max';
+  return 'high';
+}
+
 // Reasoning / thinking options for a request.
 //
-// DeepSeek manages reasoning via its own `thinking` flag, so it keeps the
-// existing behavior and ignores the `effort` argument. Other OpenAI-compatible
-// providers (xAI/Grok, OpenAI, OpenRouter, ...) take an explicit
-// `reasoning_effort` when the caller asked for one — and only when the model
-// is known to accept it.
+// DeepSeek takes `reasoning_effort` (low/high/max) plus its own `thinking`
+// flag. Tool and mutation turns still disable thinking and omit effort: high
+// or max thinking makes DSML leaks more likely in streaming tool loops.
+// Other OpenAI-compatible providers take `reasoning_effort` only when the
+// caller asked for a level the model accepts.
 function getReasoningOptions(taskType, effort = null, model = null) {
-  if (isDeepSeekProvider()) {
+  const resolvedModel = model || modelFor();
+  const baseUrl = baseUrlForModel(resolvedModel);
+  if (isDeepSeekTarget(resolvedModel, baseUrl)) {
     // Respect runtime override (set after a DSML leak).
     const forceNoThinking = process.env._SHMAKK_FORCE_NO_THINKING === '1';
-
-    if (forceNoThinking) {
-      return {
-        extra_body: {
-          thinking: { type: 'disabled' },
-        },
-      };
-    }
 
     const toolOrMutationTurn =
       taskType === 'edit_file' ||
@@ -1068,7 +1115,7 @@ function getReasoningOptions(taskType, effort = null, model = null) {
       taskType === 'apply_patch' ||
       taskType === 'tool_loop';
 
-    if (toolOrMutationTurn) {
+    if (forceNoThinking || toolOrMutationTurn) {
       return {
         extra_body: {
           thinking: { type: 'disabled' },
@@ -1077,9 +1124,10 @@ function getReasoningOptions(taskType, effort = null, model = null) {
       };
     }
 
-    // Non-mutation / planning turns: reasoning is fine.
+    // Chat / planning turns: honor the composer selection. Unset stays at
+    // the provider default, which is high.
     return {
-      reasoning_effort: 'high',
+      reasoning_effort: mapDeepSeekEffort(effort),
       extra_body: {
         thinking: { type: 'enabled' },
       },
@@ -1089,11 +1137,9 @@ function getReasoningOptions(taskType, effort = null, model = null) {
   const level = normalizeEffort(effort);
   if (!level) return {};
 
-  // Drop levels the active model cannot take (stale UI setting, wrong model).
-  const resolvedModel = model || modelFor();
-  const cfg = envForProvider();
+  // Drop levels the model actually being called cannot take.
   const supported = effortLevelsForModel(resolvedModel, {
-    baseUrl: cfg.baseURL || process.env.SHMAKK_BASE_URL || '',
+    baseUrl: baseUrl || providerBaseUrl(),
     provider: '',
   });
   if (!supported.includes(level)) return {};
@@ -1232,6 +1278,7 @@ module.exports = {
   clearEffortCatalog,
   parseEffortOverride,
   ALL_EFFORT_LEVELS,
+  KNOWN_EFFORT_LEVELS,
   supportsVision,
   describeImages,
   userContentWithImages,

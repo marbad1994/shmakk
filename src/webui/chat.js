@@ -1121,7 +1121,7 @@ class ChatManager {
 
     for (let round = 0; round < 6; round++) {
       sink({ type: 'status', label: round === 0 ? 'thinking' : 'reading' });
-      const stream = await client.chat.completions.create({ model: resolvedModel, messages, tools, stream: true, ...getReasoningOptions('chat', conv.run && conv.run.effort) }, { signal: ctrl.signal });
+      const stream = await client.chat.completions.create({ model: resolvedModel, messages, tools, stream: true, ...getReasoningOptions('chat', conv.run && conv.run.effort, resolvedModel) }, { signal: ctrl.signal });
       let content = '';
       const calls = [];
       for await (const chunk of stream) {

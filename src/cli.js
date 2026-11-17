@@ -269,7 +269,7 @@ Control (run from inside an shmakk session):
   shmakk --restart                Restart the inner shell (preserves window)
   shmakk --reset                  Clear the AI conversation history (keep session)
   shmakk --profile-set <name>     Switch profile and restart (tiny|balanced|deep|builder|large-app)
-  shmakk --effort <level>         Reasoning effort (minimal|low|medium|high|xhigh; SHMAKK_EFFORT)
+  shmakk --effort <level>         Reasoning effort (minimal|low|medium|high|xhigh|max; SHMAKK_EFFORT)
   shmakk --colors <true|false>    Enable or disable ANSI colors + code highlighting
 
   Type "help" inside a session to see this same text.
@@ -355,7 +355,7 @@ HELP_SECTIONS.launch = `══════════════════�
   --profile <name>                 Startup profile: tiny|balanced|deep|builder|large-app
   --colors <true|false>            Enable or disable ANSI colors
   --markdown <true|false>          Enable or disable markdown rendering
-  --effort <level>                 Reasoning effort: minimal|low|medium|high|xhigh
+  --effort <level>                 Reasoning effort: minimal|low|medium|high|xhigh|max
                                    (default: provider decides; env SHMAKK_EFFORT)
   --vim <vi|vim|disable>           Intercept vi/vim inside shmakk (default: vi)
   --notify                         Desktop notifications for Y/n prompts
