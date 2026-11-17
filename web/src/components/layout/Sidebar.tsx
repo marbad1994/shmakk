@@ -1,11 +1,11 @@
 import { useMemo, useState } from 'react';
 import {
-  Activity, Boxes, Brain, ChevronRight, Folder, FolderKanban, FolderMinus, FolderPlus, GitBranch, History, ListChecks, MoreHorizontal,
-  PanelLeftClose, Pencil, Pin, PinOff, Plug, Plus, Server, Settings, Sparkles, Trash2, Users, Zap,
+  Activity, Boxes, Brain, ChevronRight, Cloud, Folder, FolderKanban, FolderPlus, GitBranch, History, ListChecks, Monitor,
+  PanelLeftClose, Plug, Plus, Server, Settings, Sparkles, Users, Zap,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { historyGroups } from '@/lib/history';
-import { MODES, PROJECT_COLORS, modeInfo } from '@/lib/modes';
+import { MODES, modeInfo } from '@/lib/modes';
 import { loadOpenProjects, saveOpenProjects, sessionsByProject, toggleOpenProject } from '@/lib/projectFold';
 import type { ConvMeta, Project } from '@/lib/types';
 import { basename, cn, modKey } from '@/lib/utils';
@@ -19,51 +19,13 @@ import { Switch } from '@/components/ui/switch';
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { SshHostsDialog } from './SshHostsDialog';
-
-function ConvRow({ conv, active, running, projects, onRename, showProject = true }: { conv: ConvMeta; active: boolean; running: boolean; projects: Project[]; onRename(c: ConvMeta): void; showProject?: boolean }) {
-  const openConv = useApp((s) => s.openConv);
-  const pinConv = useApp((s) => s.pinConv);
-  const deleteConv = useApp((s) => s.deleteConv);
-  const moveConv = useApp((s) => s.moveConv);
-  const project = projects.find((p) => p.id === conv.projectId);
-  return (
-    <div role="listitem" className={cn('group relative flex items-center rounded-lg text-dim hover:bg-hover hover:text-fg', active && 'bg-raised text-fg shadow-[inset_2px_0_0_var(--accent)]')}>
-      <button type="button" aria-current={active || undefined} onClick={() => openConv(conv.id)} className="flex min-w-0 flex-1 items-center gap-2 py-1.5 pl-2.5 pr-1 text-left touch:py-2.5 touch:text-[15px]">
-        {running ? <span className="size-[7px] shrink-0 animate-pulse rounded-full bg-accent" aria-label="Running" /> : null}
-        {conv.repo ? <GitBranch className="size-3.5 shrink-0 text-violet" aria-label={`GitHub session on ${conv.repo.fullName}`} /> : null}
-        {conv.automationId ? <Zap className="size-3.5 shrink-0 text-warn" aria-label="Automation run" /> : null}
-        <span className="truncate">{conv.title}</span>
-        {showProject && project ? <span className={cn('ml-auto size-2 shrink-0 rounded-full', PROJECT_COLORS[project.color] || 'bg-accent')} title={`In project ${project.name}`} /> : null}
-      </button>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button type="button" aria-label={`Options for ${conv.title}`} className="mr-1 grid size-6 shrink-0 place-items-center rounded-md text-faint opacity-0 hover:bg-line hover:text-fg focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100 touch:size-9 touch:opacity-100">
-            <MoreHorizontal className="size-4" />
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start">
-          <DropdownMenuItem onSelect={() => onRename(conv)}><Pencil />Rename</DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => pinConv(conv.id, !conv.pinned)}>{conv.pinned ? <PinOff /> : <Pin />}{conv.pinned ? 'Unpin' : 'Pin'}</DropdownMenuItem>
-          {projects.length ? (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuLabel>Project</DropdownMenuLabel>
-              {projects.filter((p) => p.id !== conv.projectId).slice(0, 8).map((p) => (
-                <DropdownMenuItem key={p.id} onSelect={() => void moveConv(conv.id, p.id)}><span className={cn('size-2.5 rounded-full', PROJECT_COLORS[p.color])} />Move to {p.name}</DropdownMenuItem>
-              ))}
-              {conv.projectId ? <DropdownMenuItem onSelect={() => void moveConv(conv.id, null)}><FolderMinus />Remove from project</DropdownMenuItem> : null}
-            </>
-          ) : null}
-          <DropdownMenuSeparator />
-          <DropdownMenuItem danger onSelect={() => { if (!conv.repo || confirm(`Delete this session and its clone of ${conv.repo.fullName}? Unpushed work will be lost.`)) void deleteConv(conv.id); }}><Trash2 />{conv.repo ? 'Delete session & clone' : 'Delete'}</DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </div>
-  );
-}
+import { ConvRow } from '@/components/ConvRow';
 
 export function Sidebar() {
   const convs = useApp((s) => s.convs);
+  const cloudConvs = useApp((s) => s.cloudConvs);
+  const activeNode = useApp((s) => s.activeNode);
+  const nodes = useApp((s) => s.nodes);
   const runs = useApp((s) => s.runs);
   const activeId = useApp((s) => s.activeId);
   const view = useApp((s) => s.view);
@@ -72,7 +34,7 @@ export function Sidebar() {
   const projectId = useApp((s) => s.projectId);
   const workspace = useApp((s) => s.workspace);
   const home = useApp((s) => s.home);
-  const { newChat, setView, setMode, toggleSidebar, renameConv, openProject, refreshProjects, createWorkspace } = useApp.getState();
+  const { newChat, setView, setMode, toggleSidebar, renameConv, openProject, refreshProjects, createWorkspace, setNode } = useApp.getState();
   const [renaming, setRenaming] = useState<ConvMeta | null>(null);
   const [title, setTitle] = useState('');
   const [creating, setCreating] = useState(false);
@@ -84,11 +46,13 @@ export function Sidebar() {
   // The Linux account name, shown in the bottom-left account menu.
   const user = basename(home) || 'you';
 
+  // Which node's conversations are listed; cloud sessions live on the cloud node.
+  const listConvs = activeNode === 'cloud' ? cloudConvs : convs;
   // Chats assigned to a project are reachable through PROJECTS, not here.
-  const groups = useMemo(() => historyGroups(convs, mode), [convs, mode]);
+  const groups = useMemo(() => historyGroups(listConvs, mode), [listConvs, mode]);
   // Which project folders are unfolded, remembered across reloads.
   const [openProjects, setOpenProjects] = useState<string[]>(loadOpenProjects);
-  const byProject = useMemo(() => sessionsByProject(convs), [convs]);
+  const byProject = useMemo(() => sessionsByProject(listConvs), [listConvs]);
 
   const toggleProject = (id: string) => {
     haptic();
@@ -152,6 +116,20 @@ export function Sidebar() {
           <button type="button" aria-current={view === 'automations' ? 'page' : undefined} onClick={() => setView('automations')} className={cn(navBtn, view === 'automations' && navOn)}><Zap className="size-4" />Automations</button>
         ) : null}
       </div>
+
+      {nodes.length > 1 ? (
+        <div role="tablist" aria-label="Node" className="mx-2.5 mb-1.5 grid grid-cols-2 gap-0.5 rounded-xl border border-line bg-sunken p-[3px]">
+          {nodes.map((n) => (
+            <button key={n.id} type="button" role="tab" aria-selected={activeNode === n.id} onClick={() => { haptic(); void setNode(n.id); }}
+              className={cn('flex items-center justify-center gap-1.5 rounded-[9px] px-1 py-1.5 text-[11px] font-medium text-faint hover:text-fg touch:py-2', activeNode === n.id && 'bg-raised shadow-sm text-fg')}>
+              {n.kind === 'cloud' ? <Cloud className="size-3.5 shrink-0" /> : <Monitor className="size-3.5 shrink-0" />}
+              <span className="min-w-0 truncate">{n.label}</span>
+              <span className={cn('size-1.5 shrink-0 rounded-full', n.online ? 'bg-accent' : 'bg-line')} aria-label={n.online ? 'online' : 'offline'} />
+            </button>
+          ))}
+        </div>
+      ) : null}
+
       <div className="mx-2.5 border-b border-line" />
 
       <div className="scroll-touch min-h-0 flex-1 overflow-y-auto px-2.5 pb-3 pt-1">

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { CheckCircle2, Cpu, Database, Download, Eye, FolderOpen, Info, LogOut, Mic, Monitor, Moon, Palette, Power, ScrollText, SlidersHorizontal, Sun, Wrench, XCircle } from 'lucide-react';
+import { CheckCircle2, Cloud, Cpu, Database, Download, Eye, FolderOpen, Info, LogOut, Mic, Monitor, Moon, Palette, Power, ScrollText, SlidersHorizontal, Sun, Wrench, XCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { COMMANDS } from '@/lib/commands';
@@ -204,12 +204,97 @@ function PromptSection() {
   );
 }
 
+function CloudSection() {
+  const settings = useApp((s) => s.settings);
+  const patch = useApp((s) => s.patchSettings);
+  const cloud = settings.cloud;
+  const [form, setForm] = useState({ url: '', label: '', token: '', sshHost: '', remotePort: '', remoteBind: '' });
+  useEffect(() => {
+    setForm({
+      url: cloud?.url || '',
+      label: cloud?.label || '',
+      token: '',
+      sshHost: cloud?.sshHost || '',
+      remotePort: cloud?.remotePort ? String(cloud.remotePort) : '',
+      remoteBind: cloud?.remoteBind || '',
+    });
+  }, [cloud?.url, cloud?.label, cloud?.sshHost, cloud?.remotePort, cloud?.remoteBind]);
+
+  const save = useMutation({
+    mutationFn: () => patch({
+      cloud: {
+        enabled: cloud?.enabled ?? true,
+        url: form.url.trim(),
+        label: form.label.trim(),
+        sshHost: form.sshHost.trim(),
+        remotePort: form.remotePort.trim() ? Number(form.remotePort.trim()) : null,
+        remoteBind: form.remoteBind.trim(),
+        ...(form.token.trim() ? { token: form.token.trim() } : {}),
+      },
+    }),
+    onSuccess: () => { toast.success('Cloud node saved'); setForm((f) => ({ ...f, token: '' })); },
+    onError: (e: Error) => toast.error(e.message),
+  });
+  const configured = !!cloud?.url;
+  const dirty =
+    form.url !== (cloud?.url || '') ||
+    form.label !== (cloud?.label || '') ||
+    form.sshHost !== (cloud?.sshHost || '') ||
+    form.remotePort !== (cloud?.remotePort ? String(cloud.remotePort) : '') ||
+    form.remoteBind !== (cloud?.remoteBind || '') ||
+    !!form.token;
+
+  return (
+    <Section id="set-cloud" title="Cloud" aside={configured ? <Badge tone="ok">connected</Badge> : <Badge tone="warn">not configured</Badge>}>
+      <Rows>
+        <Toggle
+          title="Connect to cloud"
+          sub="Reach a cloud shmakk through this computer and move sessions to and from it"
+          checked={configured && cloud?.enabled !== false}
+          onChange={(v) => patch({ cloud: { ...(cloud ?? {}), enabled: v } })}
+        />
+        <Row title="Session transfer" sub="What happens when a session moves between this computer and the cloud">
+          <Segmented<'copy' | 'move'> label="Transfer" value={settings.transfer ?? 'copy'} onChange={(v) => patch({ transfer: v })} options={[
+            { value: 'copy', label: 'copy' },
+            { value: 'move', label: 'move' },
+          ]} />
+        </Row>
+      </Rows>
+      <form className="mt-4 grid min-w-0 grid-cols-2 gap-3 rounded-2xl border border-line bg-raised p-4 max-md:grid-cols-1" onSubmit={(e) => { e.preventDefault(); save.mutate(); }}>
+        <Field label="Cloud URL" htmlFor="cloud-url" hint="The cloud node's base URL, e.g. https://sh.makketing.com" className="col-span-full">
+          <Input id="cloud-url" value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} placeholder="https://sh.example.com" className="font-mono text-[13px]" spellCheck={false} />
+        </Field>
+        <Field label="Label" htmlFor="cloud-label" hint="Name shown in the node switcher">
+          <Input id="cloud-label" value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} placeholder="cloud" />
+        </Field>
+        <Field label="Access token" htmlFor="cloud-token" hint={configured ? "The cloud node's token; leave blank to keep the saved one" : "The cloud node's shmakk access token"}>
+          <Input id="cloud-token" type="password" autoComplete="off" value={form.token} onChange={(e) => setForm({ ...form, token: e.target.value })} placeholder="••••••••" className="font-mono text-[13px]" />
+        </Field>
+        <Field label="SSH host" htmlFor="cloud-ssh-host" hint="SSH alias in ~/.config/shmakk/hosts.json, used to 'expose to cloud'" className="col-span-full">
+          <Input id="cloud-ssh-host" value={form.sshHost} onChange={(e) => setForm({ ...form, sshHost: e.target.value })} placeholder="prod" className="font-mono text-[13px]" spellCheck={false} />
+        </Field>
+        <Field label="Remote port" htmlFor="cloud-remote-port" hint="Port the cloud host binds for the reverse tunnel">
+          <Input id="cloud-remote-port" inputMode="numeric" value={form.remotePort} onChange={(e) => setForm({ ...form, remotePort: e.target.value.replace(/[^0-9]/g, '') })} placeholder="0" className="font-mono text-[13px]" />
+        </Field>
+        <Field label="Bind address" htmlFor="cloud-remote-bind" hint="Tunnel bind on the cloud host (default 0.0.0.0)">
+          <Input id="cloud-remote-bind" value={form.remoteBind} onChange={(e) => setForm({ ...form, remoteBind: e.target.value })} placeholder="0.0.0.0" className="font-mono text-[13px]" spellCheck={false} />
+        </Field>
+        <div className="col-span-full flex items-center gap-2">
+          <Button type="submit" disabled={save.isPending || !dirty}>{save.isPending ? <Spinner /> : null}Save</Button>
+          <Button type="button" variant="ghost" onClick={() => patch({ cloud: null })} disabled={!configured}>Disconnect</Button>
+        </div>
+      </form>
+    </Section>
+  );
+}
+
 const SECTIONS = [
   { id: 'provider', label: 'Model provider', icon: <Cpu /> },
   { id: 'behaviour', label: 'Behaviour', icon: <SlidersHorizontal /> },
   { id: 'prompts', label: 'Prompts', icon: <ScrollText /> },
   { id: 'voice', label: 'Voice', icon: <Mic /> },
   { id: 'workspace', label: 'Workspace', icon: <FolderOpen /> },
+  { id: 'cloud', label: 'Cloud', icon: <Cloud /> },
   { id: 'appearance', label: 'Appearance', icon: <Palette /> },
   { id: 'maintenance', label: 'Maintenance', icon: <Wrench /> },
   { id: 'about', label: 'About', icon: <Info /> },
@@ -347,6 +432,8 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                   </Row>
                 </Rows>
               </Section>
+
+              <CloudSection />
 
               <Section id="set-appearance" title="Appearance">
                 <Rows>

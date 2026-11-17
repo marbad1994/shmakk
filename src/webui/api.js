@@ -73,10 +73,12 @@ function readJson(p) {
 
 // app: { settings, saveSettings, chat, getWorkspace, setWorkspace, getMcp,
 //        restartMcp, broadcast, version, shutdown, applyProvider }
-// What the browser gets to see of the settings: no token, no API key.
+// What the browser gets to see of the settings: no token, no API key, no
+// cloud token (the node proxy injects it server-side).
 function publicSettings(settings) {
-  const { token: _t, provider: _p, github: _g, ...rest } = settings;
-  return rest;
+  const { token: _t, provider: _p, github: _g, cloud: _c, ...rest } = settings;
+  if (!_c) return rest;
+  return { ...rest, cloud: { ..._c, token: undefined } };
 }
 
 function createApi(app) {
@@ -220,8 +222,13 @@ function createApi(app) {
   // narrows the list to a single project.
   const historyList = (query) => {
     const p = query && query.project;
-    if (typeof p !== 'string' || !p || p === 'all') return app.chat.list();
-    return app.chat.list({ project: p });
+    const own = typeof p !== 'string' || !p || p === 'all' ? app.chat.list() : app.chat.list({ project: p });
+    // Remote sessions (exposed by desktop nodes) are listed alongside the
+    // cloud's own conversations so they can be opened and driven from here.
+    const remotes = (app.nodes && app.nodes.remoteMetaList()) || [];
+    if (!remotes.length) return own;
+    const list = own.filter((c) => !remotes.some((r) => r.id === c.id)).concat(remotes);
+    return list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   };
 
   add('GET', '/api/bootstrap', ({ query }) => ({
@@ -271,6 +278,24 @@ function createApi(app) {
     if ('voiceLanguage' in body) app.settings.voiceLanguage = body.voiceLanguage ? String(body.voiceLanguage).slice(0, 20) : null;
     if ('systemPrompt' in body) app.settings.systemPrompt = typeof body.systemPrompt === 'string' ? body.systemPrompt.slice(0, 20000) : '';
     if ('workspacesRoot' in body) app.settings.workspacesRoot = body.workspacesRoot ? String(body.workspacesRoot).trim() || null : null;
+    if ('transfer' in body) app.settings.transfer = body.transfer === 'move' ? 'move' : 'copy';
+    if ('cloud' in body) {
+      const c = body.cloud;
+      const prev = app.settings.cloud || {};
+      if (!c || c === null) {
+        app.settings.cloud = null;
+      } else {
+        app.settings.cloud = {
+          enabled: c.enabled !== false,
+          url: c.url != null ? String(c.url).trim().replace(/\/+$/, '') : prev.url,
+          token: (typeof c.token === 'string' && c.token.trim()) ? c.token.trim() : (prev.token || null),
+          label: c.label != null ? String(c.label).slice(0, 60) : prev.label,
+          sshHost: c.sshHost != null ? String(c.sshHost).slice(0, 120) : prev.sshHost,
+          remotePort: c.remotePort != null ? Number(c.remotePort) : prev.remotePort,
+          remoteBind: c.remoteBind != null ? String(c.remoteBind).slice(0, 40) : prev.remoteBind,
+        };
+      }
+    }
     if (body.modelByMode && typeof body.modelByMode === 'object') {
       const cur = app.settings.modelByMode || {};
       const next = { ...cur };
@@ -447,6 +472,167 @@ function createApi(app) {
   });
   add('POST', '/api/conversations/:id/stop', ({ params }) => ({ ok: app.chat.stop(params.id) }));
   add('POST', '/api/conversations/:id/answer', ({ params, body }) => ({ ok: app.chat.answer(params.id, body.askId, body.value) }));
+
+  // ── node federation ─────────────────────────────────────────────────────
+
+  const nodesHub = () => app.nodes;
+
+  // One generic proxy target resolver: "cloud" is the configured cloud node;
+  // any other name is looked up in the remote-session registry.
+  function proxyTarget(node) {
+    if (!app.nodes) return null;
+    return app.nodes.proxyTarget(node);
+  }
+
+  function transferMode(body) {
+    if (body && (body.transfer === 'move' || body.transfer === 'copy')) return body.transfer;
+    return app.settings.transfer === 'move' ? 'move' : 'copy';
+  }
+
+  // Re-root an extracted workspace into the node's workspaces root, avoiding
+  // collisions. Returns the final directory.
+  async function settleImportedWorkspace(srcDir, convData) {
+    const root = workspacesRoot() || path.join(os.homedir(), 'workspaces');
+    const base = path.basename(String(convData.workspace || '').replace(/[\\/]+$/, '')) || 'workspace';
+    fs.mkdirSync(root, { recursive: true });
+    let target = path.join(root, base);
+    let n = 2;
+    while (fs.existsSync(target)) target = path.join(root, `${base}-${n++}`);
+    fs.mkdirSync(target, { recursive: true });
+    for (const ent of await fs.promises.readdir(srcDir)) {
+      await fs.promises.rename(path.join(srcDir, ent), path.join(target, ent));
+    }
+    return target;
+  }
+
+  // Accept a session bundle uploaded by another node. The server streams the
+  // request body here (see server.js), so this never buffers the workspace.
+  async function importSession(req) {
+    const { unpackStream } = require('./tarball');
+    const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'shmakk-import-'));
+    try {
+      const convData = await unpackStream(req, tmp);
+      if (!convData) throw new HttpError(400, 'invalid session bundle');
+      const wsDir = path.join(tmp, 'workspace');
+      let targetWs = null;
+      if (fs.existsSync(wsDir)) targetWs = await settleImportedWorkspace(wsDir, convData);
+      const conv = app.chat.importConv(convData, { workspaceDir: targetWs });
+      return { ok: true, conv: { id: conv.id, title: conv.title } };
+    } finally {
+      fs.promises.rm(tmp, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+  app.importSession = importSession;
+
+  add('GET', '/api/nodes', () => ({
+    nodes: nodesHub() ? nodesHub().nodes() : [{ id: 'local', label: 'This computer', kind: 'local', url: '', online: true }],
+    tunnel: nodesHub() ? nodesHub().tunnelStatus() : { up: false, exposed: [] },
+  }));
+
+  // Remote-session registry, called by desktop nodes over the authenticated
+  // proxy. The cloud keeps `sessionId → { nodeId, endpoint, token }`.
+  add('POST', '/api/remote/register', ({ body }) => {
+    const b = body || {};
+    const sessionId = String(b.sessionId || '').trim();
+    const nodeId = String(b.nodeId || '').slice(0, 80);
+    const token = String(b.token || '').slice(0, 200);
+    const remotePort = Number(b.remotePort) || 0;
+    if (!sessionId || !nodeId || !token || !remotePort) throw new HttpError(400, 'sessionId, nodeId, token and remotePort are required');
+    if (!nodesHub()) throw new HttpError(500, 'node hub unavailable');
+    nodesHub().registerRemote(sessionId, {
+      nodeId,
+      token,
+      remotePort,
+      endpoint: `${nodesHub().remoteGateway()}:${remotePort}`,
+      meta: b.meta && typeof b.meta === 'object' ? b.meta : {},
+    });
+    return { ok: true };
+  });
+
+  add('POST', '/api/remote/unregister', ({ body }) => {
+    const sessionId = String((body || {}).sessionId || '').trim();
+    if (nodesHub()) nodesHub().unregisterRemote(sessionId);
+    return { ok: true };
+  });
+
+  // Local → cloud: stream this conversation's bundle to the cloud node.
+  add('POST', '/api/conversations/:id/push', async ({ params, body }) => {
+    const cfg = nodesHub() && nodesHub().cloudConfig();
+    if (!cfg) throw new HttpError(400, 'cloud not configured');
+    const exp = app.chat.exportConv(params.id);
+    if (!exp) throw new HttpError(404, 'conversation not found');
+    const { packBundle } = require('./tarball');
+    const stream = packBundle(exp.conv, exp.workspaceDir);
+    const res = await nodesHub().postStream({ url: cfg.url, token: cfg.token }, '/api/import/session', stream);
+    const buf = Buffer.from(await res.arrayBuffer());
+    let result = null;
+    try { result = JSON.parse(buf.toString('utf8')); } catch { /* non-JSON error body */ }
+    if (res.status >= 300 || !result || !result.ok) throw new HttpError(res.status, (result && result.error) || 'import failed');
+    if (transferMode(body) === 'move') app.chat.remove(params.id);
+    return { ok: true, conv: { id: result.conv.id, node: 'cloud' } };
+  });
+
+  // Cloud → local: download a cloud conversation's bundle and import it here.
+  add('POST', '/api/conversations/:id/pull', async ({ params, body }) => {
+    const cfg = nodesHub() && nodesHub().cloudConfig();
+    if (!cfg) throw new HttpError(400, 'cloud not configured');
+    const res = await nodesHub().getStream({ url: cfg.url, token: cfg.token }, `/api/conversations/${params.id}/export`);
+    if (res.status >= 300) {
+      const buf = Buffer.from(await res.arrayBuffer());
+      let msg = 'export failed';
+      try { msg = JSON.parse(buf.toString('utf8')).error || msg; } catch { /* not JSON */ }
+      throw new HttpError(res.status, msg);
+    }
+    const { unpackStream } = require('./tarball');
+    const { Readable } = require('stream');
+    const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'shmakk-import-'));
+    let conv;
+    try {
+      const convData = await unpackStream(Readable.fromWeb(res.body), tmp);
+      if (!convData) throw new HttpError(400, 'invalid session bundle');
+      const wsDir = path.join(tmp, 'workspace');
+      const targetWs = fs.existsSync(wsDir) ? await settleImportedWorkspace(wsDir, convData) : null;
+      const isMove = transferMode(body) === 'move';
+      conv = app.chat.importConv(convData, { workspaceDir: targetWs, newId: !isMove });
+    } finally {
+      fs.promises.rm(tmp, { recursive: true, force: true }).catch(() => {});
+    }
+    if (transferMode(body) === 'move') {
+      await nodesHub().proxy({ url: cfg.url, token: cfg.token }, 'DELETE', `/api/conversations/${params.id}`, { body: {} }).catch(() => {});
+    }
+    return { ok: true, conv: { id: conv.id, node: 'local' } };
+  });
+
+  // Export a conversation's bundle as a streaming tar (consumed by pull).
+  add('GET', '/api/conversations/:id/export', ({ params }) => {
+    const exp = app.chat.exportConv(params.id);
+    if (!exp) throw new HttpError(404, 'conversation not found');
+    const { packBundle } = require('./tarball');
+    return { __stream: packBundle(exp.conv, exp.workspaceDir), contentType: 'application/x-shmakk-bundle' };
+  });
+
+  // Continue a paused conversation (after a mid-conversation move).
+  add('POST', '/api/conversations/:id/resume', async ({ params }) => {
+    const r = await app.chat.resume(params.id);
+    if (!r || r.ok === false) throw new HttpError(409, (r && r.error) || 'cannot resume');
+    return { ok: true };
+  });
+
+  // Expose a local conversation to the cloud node over the SSH reverse tunnel.
+  // The cloud keeps a registry entry and proxies traffic back through the tunnel.
+  add('POST', '/api/conversations/:id/expose', async ({ params }) => {
+    if (!nodesHub()) throw new HttpError(500, 'node hub unavailable');
+    const meta = app.chat.list().find((c) => c.id === params.id);
+    if (!meta) throw new HttpError(404, 'conversation not found');
+    const r = await nodesHub().expose(params.id, meta);
+    if (r && r.ok === false) throw new HttpError(400, r.error || 'expose failed');
+    return { ok: true, exposed: true };
+  });
+
+  add('POST', '/api/conversations/:id/unexpose', async ({ params }) => {
+    if (nodesHub()) await nodesHub().unexpose(params.id);
+    return { ok: true, exposed: false };
+  });
 
   // ── artefacts ──────────────────────────────────────────────────────────
   // Files the AI made outside the project, listed across every workspace.

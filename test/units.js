@@ -3287,6 +3287,64 @@ test('endpoints: DeepSeek Flash is vision-capable; the Settings switch overrides
   }
 });
 
+// ── session bundle tar (pack/unpack) ───────────────────────────────────────
+{
+  const { packDir, packBundle, unpackStream, headerFor } = require('../src/webui/tarball');
+  const os = require('os');
+  const path = require('path');
+  const zlib = require('zlib');
+  const { Readable } = require('stream');
+  const tmp = (name) => fs.mkdtempSync(path.join(os.tmpdir(), name));
+
+  test('tarball: packDir round-trips files, dirs and symlinks, and skips exclusions', async () => {
+    const dir = tmp('shmakk-tar-rt-');
+    try {
+      const src = path.join(dir, 'src');
+      fs.mkdirSync(path.join(src, 'sub', '.shmakk'), { recursive: true });
+      fs.writeFileSync(path.join(src, 'a.txt'), 'hello');
+      fs.writeFileSync(path.join(src, 'sub', 'b.txt'), 'nested');
+      fs.writeFileSync(path.join(src, 'sub', '.shmakk', 'memory.json'), '{}');
+      fs.mkdirSync(path.join(src, 'node_modules'));
+      fs.writeFileSync(path.join(src, 'node_modules', 'x.js'), 'skip me');
+      try { fs.symlinkSync('a.txt', path.join(src, 'link')); } catch {}
+      const out = path.join(dir, 'out');
+      fs.mkdirSync(out);
+      await unpackStream(packDir(src), out);
+      assert.strictEqual(fs.readFileSync(path.join(out, 'a.txt'), 'utf8'), 'hello');
+      assert.strictEqual(fs.readFileSync(path.join(out, 'sub', 'b.txt'), 'utf8'), 'nested');
+      assert.strictEqual(fs.readFileSync(path.join(out, 'sub', '.shmakk', 'memory.json'), 'utf8'), '{}');
+      assert.ok(!fs.existsSync(path.join(out, 'node_modules')), 'node_modules should be excluded');
+      try { assert.strictEqual(fs.readlinkSync(path.join(out, 'link')), 'a.txt'); } catch {}
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test('tarball: unpack rejects entries that escape the destination', async () => {
+    const dir = tmp('shmakk-tar-esc-');
+    try {
+      const evil = Buffer.from('pwned');
+      const rec = headerFor('../evil.txt', evil.length, '0', '');
+      const raw = Buffer.concat([rec, evil, Buffer.alloc(512), Buffer.alloc(512)]);
+      const stream = Readable.from(zlib.gzipSync(raw));
+      await assert.rejects(() => unpackStream(stream, dir), /escapes destination/);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test('tarball: packBundle round-trips conversation.json plus the workspace tree', async () => {
+    const dir = tmp('shmakk-tar-bdl-');
+    try {
+      const ws = path.join(dir, 'ws');
+      fs.mkdirSync(path.join(ws, 'src'), { recursive: true });
+      fs.writeFileSync(path.join(ws, 'src', 'main.js'), 'console.log(1)');
+      const conv = { id: 'c_test', title: 't', items: [] };
+      const out = path.join(dir, 'out');
+      fs.mkdirSync(out);
+      const data = await unpackStream(packBundle(conv, ws), out);
+      assert.strictEqual(data.id, 'c_test');
+      assert.strictEqual(fs.readFileSync(path.join(out, 'workspace', 'src', 'main.js'), 'utf8'), 'console.log(1)');
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+}
+
 (async () => {
   let pass = 0, fail = 0;
   for (const { name, fn } of tests) {

@@ -62,6 +62,10 @@ const DEFAULT_SETTINGS = {
   workspacesRoot: null,
   github: null, // { token, login } when connected from the UI
   token: null, // access token, kept so signed-in devices survive restarts
+  // node federation
+  nodeId: null, // stable identity of this shmakk instance
+  cloud: null, // { enabled, url, token, label, sshHost, remotePort, remoteBind }
+  transfer: 'copy', // 'copy' (default) or 'move'
 };
 
 function loadSettings() {
@@ -100,6 +104,9 @@ function metaOf(conv) {
     mode: MODES.includes(conv.mode) ? conv.mode : 'code',
     projectId: conv.projectId || null,
     automationId: conv.automationId || null,
+    node: conv.node || 'local',
+    remote: !!conv.remote,
+    paused: !!conv.paused,
   };
 }
 
@@ -133,10 +140,10 @@ function loadConversation(id) {
 
 function saveConversation(conv) {
   try {
-    const { id, title, createdAt, updatedAt, pinned, workspace, cwd, preview, sessionId, repo, mode, projectId, automationId, items, history } = conv;
+    const { id, title, createdAt, updatedAt, pinned, workspace, cwd, preview, sessionId, repo, mode, projectId, automationId, items, history, node, remote, paused, resumePrompt } = conv;
     writeFileAtomic(
       path.join(conversationsDir(), `${id}.json`),
-      JSON.stringify({ id, title, createdAt, updatedAt, pinned, workspace, cwd, preview, sessionId, repo, mode, projectId, automationId, items, history }),
+      JSON.stringify({ id, title, createdAt, updatedAt, pinned, workspace, cwd, preview, sessionId, repo, mode, projectId, automationId, items, history, node, remote, paused, resumePrompt }),
     );
   } catch {}
 }

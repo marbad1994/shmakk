@@ -29,6 +29,7 @@ const { injectInspector } = require('./inspector');
 const { createPreviewServer } = require('./preview');
 const endpoints = require('../endpoints');
 const sessionSearch = require('../session-search');
+const { NodeHub } = require('./nodes');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const COOKIE = 'shmakk_token';
@@ -138,6 +139,7 @@ async function startWebServer(opts = {}) {
   const version = require('../../package.json').version;
   const built = fs.existsSync(path.join(PUBLIC_DIR, 'index.html'));
   const log = opts.quiet ? () => {} : (s) => process.stderr.write(`${s}\n`);
+  let boundPort = 0; // set after listen; used for the reverse tunnel
 
   // ── state ──
   const settings = store.loadSettings();
@@ -228,6 +230,15 @@ async function startWebServer(opts = {}) {
     get mcpManager() { return app.mcp; },
     getWorkspace: () => workspace,
     onProviderChanged: () => app.broadcastProvider(),
+  });
+
+  app.nodes = new NodeHub({
+    settings,
+    saveSettings: app.saveSettings,
+    log,
+    getToken: () => token,
+    getPort: () => boundPort,
+    broadcast,
   });
 
   const { createShow2PlanManager } = require('../services/show2plan');
@@ -406,6 +417,48 @@ async function startWebServer(opts = {}) {
     // ── API ──
     if (pathname.startsWith('/api/')) {
       if (!originOk(req)) return send(res, 403, { error: 'cross-origin request refused' });
+
+      // Node proxy: forward /api/node/:node/<rest> to another shmakk node,
+      // authenticated with that node's token. The browser stays single-origin.
+      if (pathname.startsWith('/api/node/')) {
+        const m = pathname.match(/^\/api\/node\/([^/]+)\/(.+)$/);
+        const node = m && m[1];
+        const rest = m && m[2];
+        if (!node || !rest) return send(res, 404, { error: 'bad node path' });
+        const cfg = app.nodes.proxyTarget(node);
+        if (!cfg) return send(res, 404, { error: 'node not configured' });
+        try {
+          let body = {};
+          let raw = null;
+          if (req.method !== 'GET' && req.method !== 'HEAD') {
+            const isJson = String(req.headers['content-type'] || '').includes('application/json');
+            raw = await readBody(req, isJson ? 8 * 1024 * 1024 : 40 * 1024 * 1024);
+            if (isJson && raw.length) {
+              try { body = JSON.parse(raw.toString('utf8')); } catch { throw new HttpError(400, 'invalid JSON body'); }
+            }
+          }
+          const query = Object.fromEntries(url.searchParams.entries());
+          const out = await app.nodes.proxy({ url: cfg.url, token: cfg.token }, req.method, `/api/${rest}`, { body, raw, query });
+          res.writeHead(out.status, { 'content-type': out.contentType || 'application/json', 'content-length': out.body.length, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+          return res.end(out.body);
+        } catch (e) {
+          const status = e instanceof HttpError ? e.status : 500;
+          return send(res, status, { error: String(e.message || e) });
+        }
+      }
+
+      // Session import: a streaming tar body (never buffered). The target node
+      // (cloud or local) unpacks and re-roots the workspace itself.
+      if (pathname === '/api/import/session' && req.method === 'POST') {
+        try {
+          const out = await app.importSession(req);
+          return send(res, 200, out);
+        } catch (e) {
+          const status = e instanceof HttpError ? e.status : 500;
+          return send(res, status, { error: String(e.message || e) });
+        }
+      }
+
       try {
         let body = {};
         let raw = null;
@@ -420,6 +473,11 @@ async function startWebServer(opts = {}) {
         const out = await api.handle(req.method, pathname, { body: body || {}, raw, query });
         if (!out.found) return send(res, 404, { error: 'not found' });
         if (out.result && out.result.__binary) return send(res, 200, out.result.__binary, { 'content-type': out.result.contentType });
+        if (out.result && out.result.__stream) {
+          res.writeHead(200, { 'content-type': out.result.contentType || 'application/octet-stream', 'cache-control': 'no-store' });
+          out.result.__stream.on('error', () => { try { res.destroy(); } catch {} });
+          return out.result.__stream.pipe(res);
+        }
         return send(res, 200, out.result ?? { ok: true });
       } catch (e) {
         const status = e instanceof HttpError ? e.status : 500;
@@ -471,12 +529,19 @@ async function startWebServer(opts = {}) {
       try {
         switch (msg.t) {
           case 'chat.send': {
+            if (app.nodes.routeMsg(msg)) break;
             const r = await app.chat.send(msg.convId, msg.text, { mode: msg.mode, attachments: msg.attachments });
             if (!r.ok) reply({ t: 'toast', level: 'error', text: r.error });
             break;
           }
-          case 'chat.stop': app.chat.stop(msg.convId); break;
-          case 'chat.answer': app.chat.answer(msg.convId, msg.askId, msg.value); break;
+          case 'chat.stop':
+            if (app.nodes.routeMsg(msg)) break;
+            app.chat.stop(msg.convId);
+            break;
+          case 'chat.answer':
+            if (app.nodes.routeMsg(msg)) break;
+            app.chat.answer(msg.convId, msg.askId, msg.value);
+            break;
           case 'term.open':
             terminals.open({
               id: String(msg.id), kind: msg.kind === 'shell' ? 'shell' : 'shmakk',
@@ -526,6 +591,11 @@ async function startWebServer(opts = {}) {
     else throw e;
   }
   const port = server.address().port;
+  boundPort = port;
+
+  // Relay cloud events into this server's WebSocket when a cloud node is set.
+  app.nodes.startCloudRelay();
+  broadcast({ t: 'nodes.changed' });
 
   // ── preview proxy for the browser pane ──
   const envPreview = process.env.SHMAKK_PREVIEW_PORT;
@@ -555,6 +625,7 @@ async function startWebServer(opts = {}) {
     closed = true;
     clearInterval(heartbeat);
     app.automations.stop();
+    try { app.nodes.shutdown(); } catch {}
     try { app.capture.shutdown(); } catch {}
     try { app.plans.shutdown(); } catch {}
     try { app.show2plan.shutdown(); } catch {}

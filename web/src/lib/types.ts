@@ -50,7 +50,14 @@ export interface ConvMeta {
   id: string; title: string; createdAt: number; updatedAt: number; pinned: boolean;
   workspace: string | null; preview: string; running?: boolean; repo?: RepoRef | null;
   mode: Mode; projectId: string | null; automationId: string | null;
+  node?: string;    // owning node id ('local' = this node)
+  remote?: boolean; // a session exposed to the cloud, running elsewhere
+  paused?: boolean; // paused mid-run and awaiting resume
 }
+export interface NodeInfo {
+  id: string; label: string; kind: 'local' | 'cloud'; url: string; online: boolean;
+}
+export interface TunnelStatus { up: boolean; exposed: string[] }
 export interface Project {
   id: string; name: string; description: string; instructions: string; shareContext: boolean; color: string;
   workspace: string | null; createdAt: number; updatedAt: number; conversations?: number; modes?: Mode[];
@@ -83,6 +90,15 @@ export interface Artefact {
   content?: string; // only present on the single-artefact endpoint
 }
 
+export interface CloudNode {
+  enabled?: boolean;
+  url?: string | null;
+  label?: string | null;
+  sshHost?: string | null;
+  remotePort?: number | null;
+  remoteBind?: string | null;
+  token?: string; // never sent back by the server; only accepted on save
+}
 export interface Settings {
   review: boolean; yesFiles: boolean; noCorrection: boolean; noAi: boolean; debug: boolean;
   profile: string | null; ttsAuto: boolean; ttsVoice: string | null; voiceLanguage: string | null;
@@ -90,6 +106,8 @@ export interface Settings {
   workspacesRoot: string | null; // directory new workspaces are created under
   modelByMode: Record<Mode, string | null>; // per-space model override (null = default)
   systemPrompt: string;                    // global instruction for every conversation
+  cloud?: CloudNode | null;                // cloud node this computer proxies to (absent when unset)
+  transfer?: 'copy' | 'move';              // default for moving sessions between nodes
 }
 export interface RegistryModel {
   name: string; // preset name in ~/.config/shmakk/endpoints.json
@@ -125,12 +143,13 @@ export interface Bootstrap {
 
 export type ServerMsg =
   | { t: 'hello'; version: string; workspace: string }
-  | { t: 'item'; convId: string; item: Item }
-  | { t: 'delta'; convId: string; id: string; field: string; text: string }
-  | { t: 'remove'; convId: string; id: string }
-  | { t: 'run'; convId: string; running: boolean; activity?: string }
-  | { t: 'conv'; conv: ConvMeta }
-  | { t: 'conv.deleted'; id: string }
+  | { t: 'item'; convId: string; item: Item; node?: string }
+  | { t: 'delta'; convId: string; id: string; field: string; text: string; node?: string }
+  | { t: 'remove'; convId: string; id: string; node?: string }
+  | { t: 'run'; convId: string; running: boolean; activity?: string; node?: string }
+  | { t: 'conv'; conv: ConvMeta; node?: string }
+  | { t: 'conv.deleted'; id: string; node?: string }
+  | { t: 'nodes.changed' }
   | { t: 'settings'; settings: Settings }
   | { t: 'provider'; provider: Provider }
   | { t: 'workspace'; workspace: string }

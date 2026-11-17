@@ -3,7 +3,7 @@ import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { socket } from '@/lib/ws';
 import { queryClient } from '@/lib/query';
-import type { AttachmentRef, Bootstrap, ConvMeta, ConvSnapshot, DocPane, Features, Item, Mode, Project, Provider, ServerMsg, Settings, Status, ViewId } from '@/lib/types';
+import type { AttachmentRef, Bootstrap, ConvMeta, ConvSnapshot, DocPane, Features, Item, Mode, NodeInfo, Project, Provider, ServerMsg, Settings, Status, TunnelStatus, ViewId } from '@/lib/types';
 
 const VIEWS: ViewId[] = ['chat', 'automations', 'github', 'skills', 'memory', 'plan', 'changes', 'recall', 'team', 'mcp', 'activity', 'artefacts', 'settings'];
 
@@ -78,6 +78,10 @@ interface AppState {
   view: ViewId;
   activeId: string | null;
   convs: ConvMeta[];
+  cloudConvs: ConvMeta[];          // conversations owned by the configured cloud node
+  nodes: NodeInfo[];               // local node + configured cloud node
+  tunnel: TunnelStatus;            // reverse-tunnel state (remote sessions)
+  activeNode: string;              // node whose conversations the sidebar lists
   items: Record<string, Item[]>;
   runs: Record<string, string>; // convId → activity label (present while running)
   loading: boolean;
@@ -103,6 +107,12 @@ interface AppState {
   setMode(m: Mode): void;
   openProject(id: string): void;
   refreshProjects(): Promise<void>;
+  refreshNodes(): Promise<void>;
+  refreshConvs(): Promise<void>;
+  setNode(node: string): Promise<void>;
+  nodeOf(id: string): string;
+  transferConv(id: string, transfer: 'copy' | 'move'): Promise<void>;
+  setExposed(id: string, exposed: boolean): Promise<void>;
   moveConv(id: string, projectId: string | null): Promise<void>;
   openConv(id: string): Promise<void>;
   newChat(opts?: { mode?: Mode; projectId?: string | null }): void;
@@ -138,6 +148,12 @@ function upsertMeta(list: ConvMeta[], conv: ConvMeta) {
   return next.sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
+// Conversations owned by the cloud node go through the `/api/node/cloud` proxy;
+// everything else is served by this node directly. `/api/x` becomes
+// `/api/node/cloud/x`, which the server forwards to the cloud's `/api/x`.
+const convApi = (node: string, path: string) =>
+  node === 'cloud' ? path.replace(/^\/api\//, '/api/node/cloud/') : path;
+
 export const useApp = create<AppState>((set, get) => {
   function onMessage(msg: ServerMsg) {
     switch (msg.t) {
@@ -171,13 +187,14 @@ export const useApp = create<AppState>((set, get) => {
         if (!msg.running) {
           void get().refreshStatus();
           if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
-            const conv = get().convs.find((c) => c.id === msg.convId);
+            const conv = get().convs.find((c) => c.id === msg.convId) || get().cloudConvs.find((c) => c.id === msg.convId);
             new Notification('shmakk finished', { body: conv?.title || 'Your task is done.', silent: true });
           }
         }
         break;
       case 'conv':
-        set((s) => ({ convs: upsertMeta(s.convs, msg.conv) }));
+        if (msg.node === 'cloud') set((s) => ({ cloudConvs: upsertMeta(s.cloudConvs, msg.conv) }));
+        else set((s) => ({ convs: upsertMeta(s.convs, msg.conv) }));
         break;
       case 'conv.deleted':
         set((s) => {
@@ -187,9 +204,12 @@ export const useApp = create<AppState>((set, get) => {
           const rightMap = { ...s.rightMap };
           delete rightMap[msg.id];
           persistRight(rightMap);
-          return { convs: s.convs.filter((c) => c.id !== msg.id), items, rightMap, activeId: s.activeId === msg.id ? null : s.activeId };
+          const drop = { items, rightMap, activeId: s.activeId === msg.id ? null : s.activeId };
+          if (msg.node === 'cloud') return { ...drop, cloudConvs: s.cloudConvs.filter((c) => c.id !== msg.id) };
+          return { ...drop, convs: s.convs.filter((c) => c.id !== msg.id) };
         });
         break;
+      case 'nodes.changed': void get().refreshNodes(); break;
       case 'settings': set({ settings: msg.settings }); break;
       case 'provider': set({ provider: msg.provider }); break;
       case 'workspace': set({ workspace: msg.workspace }); void get().refreshStatus(); break;
@@ -222,6 +242,16 @@ export const useApp = create<AppState>((set, get) => {
     if (location.hash !== target) history.replaceState(null, '', target);
   }
 
+  async function loadConvs(node: string) {
+    try {
+      const r = await api.get<{ conversations: ConvMeta[] }>(node === 'local' ? '/api/conversations' : `/api/node/${node}/conversations`);
+      // Remote sessions are this node's own sessions listed on the cloud; they
+      // already live in the local list, so don't duplicate them under the cloud.
+      const list = (r.conversations || []).filter((c) => !c.remote);
+      set(node === 'local' ? { convs: list } : { cloudConvs: list });
+    } catch { /* offline */ }
+  }
+
   const rightMap = loadRight();
   const rightDefault = legacyRight();
   const draftRight = rightMap[rightScope(null)] ?? rightDefault;
@@ -247,6 +277,10 @@ export const useApp = create<AppState>((set, get) => {
     view: 'chat',
     activeId: null,
     convs: [],
+    cloudConvs: [],
+    nodes: [],
+    tunnel: { up: false, exposed: [] },
+    activeNode: 'local',
     items: {},
     runs: {},
     loading: false,
@@ -282,6 +316,7 @@ export const useApp = create<AppState>((set, get) => {
         if (online && id) void get().openConv(id);
       });
       socket.connect();
+      void get().refreshNodes();
       const { view, conv, project } = readHash();
       // Settings is a modal, not a screen: remember the intention, stay on the chat.
       const openingSettings = view === 'settings';
@@ -332,6 +367,63 @@ export const useApp = create<AppState>((set, get) => {
       try { set({ projects: (await api.get<{ projects: Project[] }>('/api/projects')).projects }); } catch { /* offline */ }
     },
 
+    async refreshNodes() {
+      try {
+        const r = await api.get<{ nodes: NodeInfo[]; tunnel: TunnelStatus }>('/api/nodes');
+        set({ nodes: r.nodes || [], tunnel: r.tunnel || { up: false, exposed: [] } });
+      } catch { /* offline */ }
+    },
+
+    // Reload both conversation lists so the sidebar reflects moves/copies and
+    // node changes without a full page reload.
+    async refreshConvs() {
+      await Promise.all([loadConvs('local'), loadConvs('cloud')]);
+    },
+
+    // Switch which node's conversations the sidebar lists, loading them on demand.
+    async setNode(node) {
+      set({ activeNode: node });
+      await loadConvs(node);
+    },
+
+    // Which node owns a conversation id (remote sessions stay local).
+    nodeOf(id) {
+      if (get().cloudConvs.some((c) => c.id === id)) return 'cloud';
+      return 'local';
+    },
+
+    // Move or copy a session to the other node. "push" sends local → cloud,
+    // "pull" downloads cloud → local; the server honors the transfer setting.
+    async transferConv(id, transfer) {
+      const node = get().nodeOf(id);
+      const action = node === 'cloud' ? 'pull' : 'push';
+      try {
+        const r = await api.post<{ ok: boolean; conv?: { id: string; node: string } }>(`/api/conversations/${id}/${action}`, { transfer });
+        if (transfer === 'move' && get().activeId === id) {
+          set({ activeId: null, loading: false });
+          syncHash();
+        }
+        await get().refreshConvs();
+        const dest = r.conv?.node ?? (node === 'cloud' ? 'local' : 'cloud');
+        toast.success(transfer === 'move' ? `Moved to ${dest === 'cloud' ? 'the cloud' : 'this computer'}` : `Copied to ${dest === 'cloud' ? 'the cloud' : 'this computer'}`);
+      } catch (e) {
+        toast.error((e as Error).message);
+      }
+    },
+
+    // Expose/unexpose a local conversation to the cloud node over the reverse
+    // tunnel. After the toggle, refresh node state so `tunnel.exposed` reflects
+    // which sessions the cloud can reach.
+    async setExposed(id, exposed) {
+      try {
+        await api.post(`/api/conversations/${id}/${exposed ? 'expose' : 'unexpose'}`);
+        await get().refreshNodes();
+        toast.success(exposed ? 'Exposed to cloud' : 'Stopped exposing');
+      } catch (e) {
+        toast.error((e as Error).message);
+      }
+    },
+
     async moveConv(id, projectId) {
       await api.patch(`/api/conversations/${id}`, { projectId });
       // The sidebar history hides project chats, so reflect the move at once
@@ -342,21 +434,26 @@ export const useApp = create<AppState>((set, get) => {
     },
 
     async openConv(id) {
-      const meta = get().convs.find((c) => c.id === id);
+      const node = get().nodeOf(id);
+      const meta = (node === 'cloud' ? get().cloudConvs : get().convs).find((c) => c.id === id);
       if (meta && meta.mode !== get().mode) { localStorage.setItem('shmakk.mode', meta.mode); set({ mode: meta.mode }); }
       set({ view: 'chat', activeId: id, pendingProjectId: null, loading: !get().items[id] });
       if (window.innerWidth < 1024) set({ sidebarOpen: false });
       syncHash();
       try {
-        const snap = await api.get<ConvSnapshot>(`/api/conversations/${id}`);
+        const snap = await api.get<ConvSnapshot>(convApi(node, `/api/conversations/${id}`));
         set((s) => {
           const runs = { ...s.runs };
           if (snap.running) runs[id] = snap.activity || 'working'; else delete runs[id];
-          return { items: { ...s.items, [id]: snap.items }, runs, loading: false, convs: upsertMeta(s.convs, { ...snap, items: undefined, cwd: undefined } as unknown as ConvMeta) };
+          const meta = { ...snap, items: undefined, cwd: undefined, node } as unknown as ConvMeta;
+          return {
+            items: { ...s.items, [id]: snap.items }, runs, loading: false,
+            ...(node === 'cloud' ? { cloudConvs: upsertMeta(s.cloudConvs, meta) } : { convs: upsertMeta(s.convs, meta) }),
+          };
         });
-        // Each conversation belongs to a workspace (cloud sessions have their own
-        // clone). Follow it, so the terminal, changes and skills pages match.
-        if (snap.workspace && snap.workspace !== get().workspace) {
+        // Follow the workspace only for local conversations. A cloud session's
+        // workspace lives on the cloud node and is not a path we can switch to.
+        if (node === 'local' && snap.workspace && snap.workspace !== get().workspace) {
           api.post<{ workspace: string }>('/api/workspace', { path: snap.workspace })
             .then((r) => { set({ workspace: r.workspace }); void get().refreshStatus(); })
             .catch(() => { /* folder no longer exists */ });
@@ -381,9 +478,11 @@ export const useApp = create<AppState>((set, get) => {
 
     async send(text, mode, attachments) {
       let id = get().activeId;
+      let node = id ? get().nodeOf(id) : 'local';
       if (!id) {
         const snap = await api.post<ConvSnapshot>('/api/conversations', { mode: get().mode, projectId: get().pendingProjectId });
         id = snap.id;
+        node = 'local';
         set((s) => {
           // The draft became a real session: its inspector setup comes along.
           const draft = s.rightMap[rightScope(null)];
@@ -395,26 +494,26 @@ export const useApp = create<AppState>((set, get) => {
         syncHash();
       }
       if ('Notification' in window && Notification.permission === 'default') void Notification.requestPermission();
-      socket.send({ t: 'chat.send', convId: id, text, mode, attachments });
+      socket.send({ t: 'chat.send', convId: id, text, mode, attachments, node });
     },
 
     stop() {
       const id = get().activeId;
-      if (id) socket.send({ t: 'chat.stop', convId: id });
+      if (id) socket.send({ t: 'chat.stop', convId: id, node: get().nodeOf(id) });
     },
 
     answer(askId, value) {
       const id = get().activeId;
-      if (id) socket.send({ t: 'chat.answer', convId: id, askId, value });
+      if (id) socket.send({ t: 'chat.answer', convId: id, askId, value, node: get().nodeOf(id) });
     },
 
-    async renameConv(id, title) { await api.patch(`/api/conversations/${id}`, { title }); },
-    async pinConv(id, pinned) { await api.patch(`/api/conversations/${id}`, { pinned }); },
-    async deleteConv(id) { await api.del(`/api/conversations/${id}`); syncHash(); },
+    async renameConv(id, title) { await api.patch(convApi(get().nodeOf(id), `/api/conversations/${id}`), { title }); },
+    async pinConv(id, pinned) { await api.patch(convApi(get().nodeOf(id), `/api/conversations/${id}`), { pinned }); },
+    async deleteConv(id) { await api.del(convApi(get().nodeOf(id), `/api/conversations/${id}`)); syncHash(); },
     async resetConv() {
       const id = get().activeId;
       if (!id) return;
-      try { await api.post(`/api/conversations/${id}/reset`); } catch (e) { toast.error((e as Error).message); }
+      try { await api.post(convApi(get().nodeOf(id), `/api/conversations/${id}/reset`)); } catch (e) { toast.error((e as Error).message); }
     },
 
     async patchSettings(patch) {

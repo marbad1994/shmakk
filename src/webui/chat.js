@@ -461,6 +461,96 @@ class ChatManager {
     return r.done;
   }
 
+  // ── pause / resume / move ────────────────────────────────────────────────
+
+  // Stop a running conversation at the next safe point and persist it so it can
+  // be transferred mid-conversation. Unlike stop(), the state is labelled
+  // "paused" and a resume prompt is remembered.
+  pause(convId) {
+    const conv = this.get(convId);
+    if (!conv) return false;
+    if (conv.run) {
+      conv.run.paused = true;
+      conv.run.ctrl.abort(new Error('paused'));
+    }
+    for (const resolve of Array.from(conv.asks.values())) resolve('aborted');
+    conv.paused = true;
+    const lastUser = [...conv.items].reverse().find((i) => i.type === 'user');
+    if (lastUser) conv.resumePrompt = lastUser.text;
+    store.saveConversation(conv);
+    this.ctx.broadcast({ t: 'conv', conv: { ...store.metaOf(conv), running: !!conv.run } });
+    return true;
+  }
+
+  // Continue a conversation that was paused (or moved in while paused).
+  async resume(convId) {
+    const conv = this.get(convId);
+    if (!conv) return { ok: false, error: 'conversation not found' };
+    if (conv.run) return { ok: false, error: 'a run is already in progress' };
+    conv.paused = false;
+    const prompt = conv.resumePrompt || 'Continue';
+    conv.resumePrompt = null;
+    store.saveConversation(conv);
+    this.ctx.broadcast({ t: 'conv', conv: store.metaOf(conv) });
+    return this.send(convId, prompt, { mode: 'ask' });
+  }
+
+  // A clean, serialisable snapshot with live-run state settled, ready to send
+  // to another node.
+  _cleanCopy(conv) {
+    const items = (conv.items || []).map((it) => {
+      const c = { ...it };
+      if (c.streaming) c.streaming = false;
+      if (c.type === 'ask' && c.status === 'pending') c.status = 'expired';
+      if (c.type === 'tool' && c.status === 'running') c.status = 'interrupted';
+      if (c.type === 'shell' && c.running) { c.running = false; c.interrupted = true; }
+      if (c.type === 'team' && Array.isArray(c.agents)) for (const a of c.agents) if (a.status === 'running') a.status = 'interrupted';
+      return c;
+    });
+    return {
+      id: conv.id, title: conv.title, createdAt: conv.createdAt, updatedAt: conv.updatedAt,
+      pinned: !!conv.pinned, workspace: conv.workspace || null, cwd: conv.cwd || null,
+      preview: conv.preview || '', sessionId: null, repo: conv.repo || null,
+      mode: store.MODES.includes(conv.mode) ? conv.mode : 'code',
+      projectId: conv.projectId || null, automationId: null,
+      items, history: Array.isArray(conv.history) ? conv.history : [],
+      node: conv.node || 'local', remote: !!conv.remote, paused: false, resumePrompt: conv.resumePrompt || null,
+    };
+  }
+
+  // Serialise a conversation for transfer. Includes the workspace directory
+  // only for real (non-chat) sessions that own one.
+  exportConv(id) {
+    const conv = this.get(id);
+    if (!conv) return null;
+    if (conv.run) this.pause(id);
+    const data = this._cleanCopy(conv);
+    const includeWorkspace = conv.mode !== 'chat' && conv.workspace && fs.existsSync(conv.workspace);
+    return { conv: data, workspaceDir: includeWorkspace ? path.resolve(conv.workspace) : null };
+  }
+
+  // Import a conversation that arrived from another node. `workspaceDir` is the
+  // already-extracted workspace (or null). Move keeps the id, copy mints a new
+  // one; a move that collides falls back to a fresh id.
+  importConv(data, { workspaceDir = null, newId = false } = {}) {
+    let id = newId ? store.newId('c') : (store.safeId(data.id) || store.newId('c'));
+    if (!newId && store.loadConversation(id)) id = store.newId('c');
+    const conv = {
+      id, title: data.title || 'Imported chat', createdAt: data.createdAt || Date.now(), updatedAt: Date.now(),
+      pinned: !!data.pinned, workspace: workspaceDir || data.workspace || null, cwd: workspaceDir || data.cwd || data.workspace || null,
+      preview: data.preview || '', sessionId: null, repo: data.repo || null,
+      mode: store.MODES.includes(data.mode) ? data.mode : 'code',
+      projectId: data.projectId || null, automationId: null,
+      items: Array.isArray(data.items) ? data.items : [],
+      history: Array.isArray(data.history) ? data.history : [],
+      node: 'local', remote: false, paused: false, resumePrompt: data.resumePrompt || null,
+    };
+    this._adopt(conv);
+    store.saveConversation(conv);
+    this.ctx.broadcast({ t: 'conv', conv: store.metaOf(conv) });
+    return conv;
+  }
+
   async _run(conv, text, mode, ctrl) {
     let outcome = 'ok';
     try {
@@ -479,7 +569,7 @@ class ChatManager {
     } catch (e) {
       if (isAbortError(e) || ctrl.signal.aborted) {
         outcome = 'stopped';
-        this._notice(conv, 'Stopped.', 'warn');
+        this._notice(conv, conv.run && conv.run.paused ? 'Paused for transfer.' : 'Stopped.', 'warn');
       } else {
         outcome = 'error';
         conv.run.error = String(e && e.message ? e.message : e);
