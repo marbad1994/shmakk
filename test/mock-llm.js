@@ -56,7 +56,29 @@ function classify(messages) {
   return 'chat';
 }
 
+// Every accepted completion payload is kept so tests can assert on what the
+// client actually sent (reasoning_effort, thinking, tools, ...).
+const CAPTURED_MAX = 50;
+const captured = [];
+
 const server = http.createServer(async (req, res) => {
+  // Test hook: GET /captured returns the payloads seen so far, newest last.
+  // DELETE /captured clears them.
+  if (req.url.split('?')[0].endsWith('/captured')) {
+    if (req.method === 'GET') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(captured));
+      return;
+    }
+    if (req.method === 'DELETE') {
+      captured.length = 0;
+      res.writeHead(204).end();
+      return;
+    }
+    res.writeHead(405).end('method not allowed');
+    return;
+  }
+
   if (req.method !== 'POST' || !req.url.endsWith('/chat/completions')) {
     res.writeHead(404).end('not found');
     return;
@@ -64,6 +86,8 @@ const server = http.createServer(async (req, res) => {
   const body = await readBody(req);
   let payload;
   try { payload = JSON.parse(body); } catch { res.writeHead(400).end('bad json'); return; }
+  captured.push(payload);
+  if (captured.length > CAPTURED_MAX) captured.shift();
   const messages = payload.messages || [];
   const role = classify(messages);
 

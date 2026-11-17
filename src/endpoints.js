@@ -194,6 +194,8 @@ function _supportsVisionForConfig(cfg) {
     'codex',      // Codex / OpenAI
     'openai',
     'nvidia',     // NIM
+    'xai',        // Grok 2+ vision
+    'grok',
   ]);
 
   if (visionProviders.has(provider)) return true;

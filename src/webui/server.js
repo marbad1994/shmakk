@@ -530,7 +530,7 @@ async function startWebServer(opts = {}) {
         switch (msg.t) {
           case 'chat.send': {
             if (app.nodes.routeMsg(msg)) break;
-            const r = await app.chat.send(msg.convId, msg.text, { mode: msg.mode, attachments: msg.attachments });
+            const r = await app.chat.send(msg.convId, msg.text, { mode: msg.mode, attachments: msg.attachments, effort: msg.effort || null });
             if (!r.ok) reply({ t: 'toast', level: 'error', text: r.error });
             break;
           }

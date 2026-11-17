@@ -126,12 +126,14 @@ function isConfigured() {
   if (cfg.provider === 'anthropic') return true;  // claude-proxy handles auth via OAuth
   if (cfg.provider === 'codex') return true;  // codex-proxy handles auth via OAuth
   if (cfg.provider === 'nvidia') return !!cfg.apiKey && !!OpenAI;
+  if (cfg.provider === 'xai' || cfg.provider === 'grok') return !!cfg.apiKey && !!OpenAI;
   return (!!cfg.baseURL || cfg.provider === 'openai') && !!OpenAI;
 }
 
 function getDefaultBaseURL(provider) {
   if (provider === 'openai') return 'https://local:8095/v1';
   if (provider === 'nvidia') return 'https://integrate.api.nvidia.com/v1';
+  if (provider === 'xai' || provider === 'grok') return 'https://api.x.ai/v1';
   return undefined;
 }
 
@@ -870,42 +872,59 @@ function isDeepSeekProvider() {
   return base.includes('deepseek');
 }
 
-function getDeepSeekOptions(taskType) {
-  if (!isDeepSeekProvider()) return {};
+const REASONING_EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh']);
 
-  // Respect runtime override (set after a DSML leak).
-  const forceNoThinking = process.env._SHMAKK_FORCE_NO_THINKING === '1';
+function normalizeEffort(effort) {
+  const v = String(effort || '').trim().toLowerCase();
+  return REASONING_EFFORTS.has(v) ? v : null;
+}
 
-  if (forceNoThinking) {
+// Reasoning / thinking options for a request.
+//
+// DeepSeek manages reasoning via its own `thinking` flag, so it keeps the
+// existing behavior and ignores the `effort` argument. Other OpenAI-compatible
+// providers (xAI/Grok, OpenAI, OpenRouter, ...) take an explicit
+// `reasoning_effort` when the caller asked for one.
+function getReasoningOptions(taskType, effort = null) {
+  if (isDeepSeekProvider()) {
+    // Respect runtime override (set after a DSML leak).
+    const forceNoThinking = process.env._SHMAKK_FORCE_NO_THINKING === '1';
+
+    if (forceNoThinking) {
+      return {
+        extra_body: {
+          thinking: { type: 'disabled' },
+        },
+      };
+    }
+
+    const toolOrMutationTurn =
+      taskType === 'edit_file' ||
+      taskType === 'run_command' ||
+      taskType === 'apply_patch' ||
+      taskType === 'tool_loop';
+
+    if (toolOrMutationTurn) {
+      return {
+        extra_body: {
+          thinking: { type: 'disabled' },
+        },
+        // Do NOT send reasoning_effort here.
+      };
+    }
+
+    // Non-mutation / planning turns: reasoning is fine.
     return {
+      reasoning_effort: 'high',
       extra_body: {
-        thinking: { type: 'disabled' },
+        thinking: { type: 'enabled' },
       },
     };
   }
 
-  const toolOrMutationTurn =
-    taskType === 'edit_file' ||
-    taskType === 'run_command' ||
-    taskType === 'apply_patch' ||
-    taskType === 'tool_loop';
-
-  if (toolOrMutationTurn) {
-    return {
-      extra_body: {
-        thinking: { type: 'disabled' },
-      },
-      // Do NOT send reasoning_effort here.
-    };
-  }
-
-  // Non-mutation / planning turns: reasoning is fine.
-  return {
-    reasoning_effort: 'high',
-    extra_body: {
-      thinking: { type: 'enabled' },
-    },
-  };
+  const level = normalizeEffort(effort);
+  if (level) return { reasoning_effort: level };
+  return {};
 }
 
 // ── Vision fallback: describe images via a vision-capable endpoint ────────
@@ -1030,7 +1049,8 @@ module.exports = {
   modelFor,
   isConfigured,
   ensureModelRuntime,
-  getDeepSeekOptions,
+  getReasoningOptions,
+  normalizeEffort,
   isDeepSeekProvider,
   supportsVision,
   describeImages,

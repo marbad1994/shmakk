@@ -12,7 +12,7 @@ tmp/
 .codex/
 .claude/
 .playwright/
-.playwright-mpc/
+.playwright-mcp/
 # editor / misc
 .vscode/
 .codemakk/

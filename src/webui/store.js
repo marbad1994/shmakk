@@ -48,6 +48,7 @@ const DEFAULT_SETTINGS = {
   colors: true,
   profile: null, // null = let the coordinator pick per task
   modelByMode: { chat: null, code: null, design: null, cowork: null }, // per-space model override (null = default)
+  reasoningEffort: null, // null = provider default; else minimal|low|medium|high|xhigh
   systemPrompt: '', // global instruction prepended to every conversation, in every mode
   // voice
   ttsAuto: false,

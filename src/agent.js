@@ -7,7 +7,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { makeClientForModel, modelFor, isConfigured, getDeepSeekOptions, supportsVision, describeImages, userContentWithImages, stripImageBlocks, imageBlocks, normalizeImages, skippedNote } = require('./llm');
+const { makeClientForModel, modelFor, isConfigured, getReasoningOptions, supportsVision, describeImages, userContentWithImages, stripImageBlocks, imageBlocks, normalizeImages, skippedNote } = require('./llm');
 const {
   sanitizeAssistantContent,
   isLeakedToolMarkup,
@@ -113,7 +113,10 @@ function dim(s, enabled = true) { return enabled ? `\x1b[2m${s}\x1b[0m` : s; }
 
 // ── Main agent entry point ──────────────────────────────────────────────────
 
-async function runAgent({ input, roots, glossary, confirmTool, write, signal, history = [], profile = 'balanced', colors = true, markdown = true, voiceMode = false, specialistHint = null, mcpManager = null, requireToolUse = false, onEvent = null, model = null, images = null }) {
+async function runAgent({ input, roots, glossary, confirmTool, write, signal, history = [], profile = 'balanced', colors = true, markdown = true, voiceMode = false, specialistHint = null, mcpManager = null, requireToolUse = false, onEvent = null, model = null, images = null, effort = null }) {
+  // Reasoning effort for reasoning-capable OpenAI-compatible endpoints.
+  // Per-request value wins; otherwise fall back to SHMAKK_EFFORT from the CLI.
+  const effortLevel = effort || process.env.SHMAKK_EFFORT || null;
   // onEvent: optional structured-event sink used by GUI front-ends (web UI).
   // When present, streaming text, tool calls and results are reported as
   // objects instead of being rendered to `write` as terminal text.
@@ -354,7 +357,7 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
         model: modelName,
         messages, tools: allTools, tool_choice: toolChoiceForThisIter,
         temperature: 0, stream: true,
-        ...getDeepSeekOptions('tool_loop'),
+        ...getReasoningOptions('tool_loop', effortLevel),
       }, { signal });
     } catch (e) {
       stopTaskSpinner();
@@ -652,7 +655,7 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
       temperature: 0,
       tool_choice: 'none',
       stream: false,
-      ...getDeepSeekOptions('tool_loop'),
+      ...getReasoningOptions('tool_loop', effortLevel),
     }, { signal });
     const finalText = final.choices?.[0]?.message?.content || '';
     if (finalText) {

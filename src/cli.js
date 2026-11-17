@@ -29,6 +29,7 @@ function parseArgs(argv) {
     restart: false,
     profile: null,
     profileSet: null,
+    effort: null,
     colors: null,
     markdown: null,
     endpoint: null,
@@ -126,6 +127,7 @@ function parseArgs(argv) {
       case '--reset': opts.reset = true; break;
       case '--profile': opts.profile = argv[++i] || null; break;
       case '--profile-set': opts.profileSet = argv[++i] || null; break;
+      case '--effort': opts.effort = argv[++i] || null; break;
       case '--build-history':
         opts.buildHistory = [];
         // Collect remaining args as file paths until next flag
@@ -267,6 +269,7 @@ Control (run from inside an shmakk session):
   shmakk --restart                Restart the inner shell (preserves window)
   shmakk --reset                  Clear the AI conversation history (keep session)
   shmakk --profile-set <name>     Switch profile and restart (tiny|balanced|deep|builder|large-app)
+  shmakk --effort <level>         Reasoning effort (minimal|low|medium|high|xhigh; SHMAKK_EFFORT)
   shmakk --colors <true|false>    Enable or disable ANSI colors + code highlighting
 
   Type "help" inside a session to see this same text.
@@ -352,6 +355,8 @@ HELP_SECTIONS.launch = `══════════════════�
   --profile <name>                 Startup profile: tiny|balanced|deep|builder|large-app
   --colors <true|false>            Enable or disable ANSI colors
   --markdown <true|false>          Enable or disable markdown rendering
+  --effort <level>                 Reasoning effort: minimal|low|medium|high|xhigh
+                                   (default: provider decides; env SHMAKK_EFFORT)
   --vim <vi|vim|disable>           Intercept vi/vim inside shmakk (default: vi)
   --notify                         Desktop notifications for Y/n prompts
 `;

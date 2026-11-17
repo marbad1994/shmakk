@@ -3,7 +3,7 @@ import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { socket } from '@/lib/ws';
 import { queryClient } from '@/lib/query';
-import type { AttachmentRef, Bootstrap, ConvMeta, ConvSnapshot, DocPane, Features, Item, Mode, NodeInfo, Project, Provider, ServerMsg, Settings, Status, TunnelStatus, ViewId } from '@/lib/types';
+import type { AttachmentRef, Bootstrap, ConvMeta, ConvSnapshot, DocPane, EffortLevel, Features, Item, Mode, NodeInfo, Project, Provider, ServerMsg, Settings, Status, TunnelStatus, ViewId } from '@/lib/types';
 
 const VIEWS: ViewId[] = ['chat', 'automations', 'github', 'skills', 'memory', 'plan', 'changes', 'recall', 'team', 'mcp', 'activity', 'artefacts', 'settings'];
 
@@ -116,7 +116,7 @@ interface AppState {
   moveConv(id: string, projectId: string | null): Promise<void>;
   openConv(id: string): Promise<void>;
   newChat(opts?: { mode?: Mode; projectId?: string | null }): void;
-  send(text: string, mode: 'ask' | 'shell', attachments?: AttachmentRef[]): Promise<void>;
+  send(text: string, mode: 'ask' | 'shell', attachments?: AttachmentRef[], effort?: EffortLevel | null): Promise<void>;
   stop(): void;
   answer(askId: string, value: boolean): void;
   renameConv(id: string, title: string): Promise<void>;
@@ -486,7 +486,7 @@ export const useApp = create<AppState>((set, get) => {
       syncHash();
     },
 
-    async send(text, mode, attachments) {
+    async send(text, mode, attachments, effort) {
       let id = get().activeId;
       let node = id ? get().nodeOf(id) : 'local';
       if (!id) {
@@ -504,7 +504,7 @@ export const useApp = create<AppState>((set, get) => {
         syncHash();
       }
       if ('Notification' in window && Notification.permission === 'default') void Notification.requestPermission();
-      socket.send({ t: 'chat.send', convId: id, text, mode, attachments, node });
+      socket.send({ t: 'chat.send', convId: id, text, mode, attachments, node, effort: effort || null });
     },
 
     stop() {

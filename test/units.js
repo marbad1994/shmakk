@@ -1837,6 +1837,42 @@ test('webui chat: attachments are inlined into the prompt and kept off the store
     assert.match(out, /could not be shown/);
   }));
 
+  test('llm: reasoning effort is normalised and only sent when asked for', () => {
+    const llm = require('../src/llm');
+    for (const k of ['SHMAKK_BASE_URL', 'SHMAKK_ENDPOINTS_FILE', '_SHMAKK_FORCE_NO_THINKING']) delete process.env[k];
+
+    assert.strictEqual(llm.normalizeEffort(' HIGH '), 'high');
+    assert.strictEqual(llm.normalizeEffort('xhigh'), 'xhigh');
+    assert.strictEqual(llm.normalizeEffort(''), null);
+    assert.strictEqual(llm.normalizeEffort('maximum'), null);
+
+    // Non-DeepSeek endpoints pass the level straight through as reasoning_effort.
+    process.env.SHMAKK_BASE_URL = 'http://127.0.0.1:8787/v1';
+    assert.deepStrictEqual(llm.getReasoningOptions('chat', 'low'), { reasoning_effort: 'low' });
+    assert.deepStrictEqual(llm.getReasoningOptions('chat', 'bogus'), {}, 'an unknown level is not forwarded');
+    assert.deepStrictEqual(llm.getReasoningOptions('chat', null), {}, 'no effort means the provider default');
+
+    // DeepSeek keeps its thinking switch and never mixes in reasoning_effort.
+    process.env.SHMAKK_BASE_URL = 'https://api.deepseek.com/v1';
+    const loop = llm.getReasoningOptions('tool_loop', 'high');
+    assert.strictEqual(loop.reasoning_effort, undefined);
+    assert.deepStrictEqual(loop.extra_body, { thinking: { type: 'disabled' } });
+    assert.strictEqual(llm.getReasoningOptions('chat', 'high').reasoning_effort, 'high');
+    delete process.env.SHMAKK_BASE_URL;
+  });
+
+  test('cli: --effort accepts the known levels and rejects everything else', () => {
+    const { parseArgs } = require('../src/cli');
+    assert.strictEqual(parseArgs(['--effort', 'high']).effort, 'high');
+    assert.strictEqual(parseArgs([]).effort, null);
+    const { spawnSync } = require('child_process');
+    const bad = spawnSync('node', ['bin/shmakk.js', '--effort', 'maximum', '--web', '--no-open'], {
+      encoding: 'utf8', timeout: 20000, env: { ...process.env, SHMAKK_WEB_TOKEN: 'x' },
+    });
+    assert.strictEqual(bad.status, 2, `expected exit 2, got ${bad.status}: ${bad.stderr}`);
+    assert.match(bad.stderr, /invalid --effort/);
+  });
+
   test('read_file: converts image formats the provider cannot read', async () => {
     const os = require('os'); const path = require('path');
     const { dispatchTool } = require('../src/tools');

@@ -1,6 +1,7 @@
 // Wire types shared with the server (src/webui/*.js).
 
 export type Mode = 'chat' | 'code' | 'design' | 'cowork';
+export type EffortLevel = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 export type Safety = 'safe' | 'uncertain' | 'unsafe';
 export type AskStatus = 'pending' | 'yes' | 'no' | 'expired';
 
@@ -105,6 +106,7 @@ export interface Settings {
   voiceHandsFree: boolean; recentWorkspaces: string[];
   workspacesRoot: string | null; // directory new workspaces are created under
   modelByMode: Record<Mode, string | null>; // per-space model override (null = default)
+  reasoningEffort?: EffortLevel | null;    // reasoning effort for reasoning-capable models (null = provider default)
   systemPrompt: string;                    // global instruction for every conversation
   cloud?: CloudNode | null;                // cloud node this computer proxies to (absent when unset)
   transfer?: 'copy' | 'move';              // default for moving sessions between nodes

@@ -17,7 +17,7 @@ const { setMaxListeners } = require('events');
 const { correct } = require('../correction');
 const { runAgent, clearTaskJournal, summarizeToolResult } = require('../agent');
 const { TOOLS, dispatchTool } = require('../tools');
-const { makeClientForModel, modelFor, userContentWithImages, stripImageBlocks } = require('../llm');
+const { makeClientForModel, modelFor, userContentWithImages, stripImageBlocks, getReasoningOptions } = require('../llm');
 const { renderMemoryForPrompt } = require('../memory');
 const design = require('./design');
 const { buildContext } = require('./projects');
@@ -415,7 +415,7 @@ class ChatManager {
 
   // mode: 'ask' (default) or 'shell'. A leading "$ " also means shell.
   // unattended: 'auto' | 'ask' | 'full' — set for automation runs (see _confirmTool).
-  async send(convId, rawText, { mode = 'ask', unattended = null, askTimeoutMs = null, attachments = null, hint = null, direct = false } = {}) {
+  async send(convId, rawText, { mode = 'ask', unattended = null, askTimeoutMs = null, attachments = null, hint = null, direct = false, effort = null } = {}) {
     const conv = this.get(convId);
     if (!conv) return { ok: false, error: 'conversation not found' };
     if (conv.run) return { ok: false, error: 'a run is already in progress' };
@@ -431,7 +431,7 @@ class ChatManager {
     let finish;
     const done = new Promise((r) => { finish = r; });
     const images = imageAttachments(refs);
-    conv.run = { ctrl, activity: 'starting', unattended, askTimeoutMs, error: null, finish, images, hint, direct: !!direct, artefactRequested: artefactRequested(text) };
+    conv.run = { ctrl, activity: 'starting', unattended, askTimeoutMs, error: null, finish, images, hint, direct: !!direct, artefactRequested: artefactRequested(text), effort: effort || null };
     this.ctx.broadcast({ t: 'run', convId: conv.id, running: true, activity: 'starting' });
 
     this._add(conv, { type: 'user', text, mode, attachments: refs.map((a) => ({ name: a.name || 'file', size: typeof a.size === 'number' ? a.size : 0 })) });
@@ -1010,6 +1010,7 @@ class ChatManager {
       mcpManager: tools,
       onEvent: sink,
       model: this._modelFor(conv),
+      effort: (conv.run && conv.run.effort) || null,
     };
 
     // ── Team mode ──
@@ -1120,7 +1121,7 @@ class ChatManager {
 
     for (let round = 0; round < 6; round++) {
       sink({ type: 'status', label: round === 0 ? 'thinking' : 'reading' });
-      const stream = await client.chat.completions.create({ model: resolvedModel, messages, tools, stream: true }, { signal: ctrl.signal });
+      const stream = await client.chat.completions.create({ model: resolvedModel, messages, tools, stream: true, ...getReasoningOptions('chat', conv.run && conv.run.effort) }, { signal: ctrl.signal });
       let content = '';
       const calls = [];
       for await (const chunk of stream) {

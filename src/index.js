@@ -76,6 +76,15 @@ async function main() {
     opts.markdown = v === 'true';
   }
 
+  if (opts.effort !== null) {
+    const v = String(opts.effort).toLowerCase();
+    if (!['minimal', 'low', 'medium', 'high', 'xhigh'].includes(v)) {
+      process.stderr.write('[shmakk] invalid --effort. Use: minimal|low|medium|high|xhigh\n');
+      process.exit(2);
+    }
+    process.env.SHMAKK_EFFORT = v;
+  }
+
   if (opts.browserDaemon) {
     const { main: runBrowserDaemon } = require('./cli/browserDaemon');
     process.exit(await runBrowserDaemon([

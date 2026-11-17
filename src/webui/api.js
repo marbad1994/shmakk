@@ -322,6 +322,10 @@ function createApi(app) {
       }
       app.settings.modelByMode = next;
     }
+    if (body.reasoningEffort !== undefined) {
+      const v = String(body.reasoningEffort || '').trim().toLowerCase();
+      app.settings.reasoningEffort = ['minimal', 'low', 'medium', 'high', 'xhigh'].includes(v) ? v : null;
+    }
     app.saveSettings();
     return publicSettings(app.settings);
   });
@@ -498,7 +502,7 @@ function createApi(app) {
     return { ok: true };
   });
   add('POST', '/api/conversations/:id/messages', async ({ params, body }) => {
-    const r = await app.chat.send(params.id, body.text, { mode: body.mode });
+    const r = await app.chat.send(params.id, body.text, { mode: body.mode, effort: body.effort || null });
     if (!r.ok) throw new HttpError(409, r.error);
     return r;
   });

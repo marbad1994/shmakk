@@ -1,11 +1,11 @@
 import type { ClipboardEvent } from 'react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUp, ChevronDown, Cpu, FileText, Mic, Paperclip, Square, Volume2, VolumeX, X } from 'lucide-react';
+import { ArrowUp, ChevronDown, Cpu, FileText, Gauge, Mic, Paperclip, Square, Volume2, VolumeX, X } from 'lucide-react';
 import { COMMANDS, filterCommands, matchSlash, type Command } from '@/lib/commands';
 import { bytes, cn } from '@/lib/utils';
 import { browserStorage, draftScope, enterDraft, loadDrafts, saveDrafts } from '@/lib/composerDraft';
 import { modeInfo } from '@/lib/modes';
-import type { Mode } from '@/lib/types';
+import type { EffortLevel, Mode } from '@/lib/types';
 import { useApp } from '@/store/app';
 import type { MicState } from '@/hooks/useVoice';
 import { haptic, isTouch } from '@/hooks/useMobile';
@@ -277,8 +277,8 @@ export function Composer({ mode: space, running, activity, mic, speaking, onMic,
     clearBlobUrls();
     setMenuDismissed(false);
     haptic();
-    void send(value, shell ? 'shell' : 'ask', files.map(({ name, size, content, mimeType, data }) => ({ name, size, content, mimeType, data })));
-  }, [text, files, running, mode, shell, matches, runCommand, send, clearBlobUrls]);
+    void send(value, shell ? 'shell' : 'ask', files.map(({ name, size, content, mimeType, data }) => ({ name, size, content, mimeType, data })), settings.reasoningEffort || null);
+  }, [text, files, running, mode, shell, matches, runCommand, send, clearBlobUrls, settings.reasoningEffort]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.nativeEvent.isComposing) return;
@@ -382,6 +382,32 @@ export function Composer({ mode: space, running, activity, mic, speaking, onMic,
     </DropdownMenu>
   );
 
+  // Reasoning effort for reasoning-capable models (xAI/Grok, OpenAI o-series,
+  // OpenRouter, ...). "auto" clears the override and lets the provider decide.
+  const DEFAULT_EFFORT = '__default';
+  const EFFORT_LEVELS: EffortLevel[] = ['minimal', 'low', 'medium', 'high', 'xhigh'];
+  const effort = settings.reasoningEffort || DEFAULT_EFFORT;
+  const setEffort = (v: string) => patchSettings({ reasoningEffort: v === DEFAULT_EFFORT ? null : (v as EffortLevel) });
+
+  const effortMenu = (
+    <DropdownMenu>
+      <Tip label="Reasoning effort" side="top">
+        <DropdownMenuTrigger asChild>
+          <button type="button" className="inline-flex items-center gap-1.5 rounded-full border border-line px-2.5 py-0.5 font-mono text-xs text-dim touch:px-3 touch:py-1.5 touch:text-[13px] hover:border-line-strong hover:bg-hover hover:text-fg">
+            <Gauge className="size-3.5" />{effort === DEFAULT_EFFORT ? 'auto' : effort}<ChevronDown className="size-3" />
+          </button>
+        </DropdownMenuTrigger>
+      </Tip>
+      <DropdownMenuContent align="start">
+        <DropdownMenuLabel>Reasoning effort</DropdownMenuLabel>
+        <DropdownMenuRadioGroup value={effort} onValueChange={setEffort}>
+          <DropdownMenuRadioItem value={DEFAULT_EFFORT}>auto <span className="text-faint">· provider default</span></DropdownMenuRadioItem>
+          {EFFORT_LEVELS.map((e) => <DropdownMenuRadioItem key={e} value={e}>{e}</DropdownMenuRadioItem>)}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+
   return (
     <div className="relative shrink-0 px-5.5 pb-3 max-md:px-2 max-md:pb-2">
       <div className="relative mx-auto max-w-[780px]">
@@ -473,6 +499,7 @@ export function Composer({ mode: space, running, activity, mic, speaking, onMic,
               <Segmented label="Input mode" value={mode} onChange={(m) => { setMode(m); ref.current?.focus(); }} options={[{ value: 'ask', label: 'ask' }, { value: 'shell', label: 'shell' }]} />
             ) : null}
             {modelMenu}
+            {effortMenu}
 
             <span className="w-3" />
             </div>
