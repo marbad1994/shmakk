@@ -33,6 +33,12 @@ function ProviderSection() {
     onSuccess: () => { toast.success('Provider saved'); setForm((f) => ({ ...f, apiKey: '' })); setTest(null); },
     onError: (e: Error) => toast.error(e.message),
   });
+  // Saved on its own: flipping it should not also submit half-edited fields.
+  const saveVision = useMutation({
+    mutationFn: (vision: boolean) => api.put<Provider>('/api/provider', { vision }),
+    onSuccess: (_r, v) => toast.success(v ? 'Images will be sent to this model' : 'Images will not be sent to this model'),
+    onError: (e: Error) => toast.error(e.message),
+  });
   const useEndpoint = useMutation({
     mutationFn: (name: string) => api.post('/api/endpoints/use', { name: name === '__none' ? '' : name }),
     onSuccess: () => toast.success('Endpoint switched'),
@@ -114,6 +120,13 @@ function ProviderSection() {
             <Input id="p-models" value={form.modelList} onChange={(e) => setForm({ ...form, modelList: e.target.value })} className="font-mono text-[13px]" spellCheck={false} />
           </Field>
         )}
+        <label className="col-span-full flex items-start gap-2.5 text-[13px]">
+          <Switch checked={!!provider.vision} disabled={!!provider.visionFromEndpoint || save.isPending} onCheckedChange={(v) => saveVision.mutate(v)} aria-label="This model can read images" className="mt-0.5" />
+          <span className="grid gap-0.5">
+            <span className="font-medium text-fg">This model can read images</span>
+            <span className="text-xs text-faint">{provider.visionFromEndpoint ? 'Set by "vision" on the active endpoint in endpoints.json.' : 'Screenshots (Show & tell, image attachments) are sent to it directly. Turn on for multimodal models shmakk cannot detect by name. (SHMAKK_VISION)'}</span>
+          </span>
+        </label>
         <div className="col-span-full flex flex-wrap items-center gap-2.5">
           <Button type="submit" variant="primary" disabled={!dirty || save.isPending}>Save</Button>
           <Button onClick={() => runTest.mutate()} disabled={!provider.configured || runTest.isPending}>{runTest.isPending ? <Spinner /> : null}Test connection</Button>

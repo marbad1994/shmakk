@@ -183,6 +183,7 @@ async function startWebServer(opts = {}) {
     set('SHMAKK_MODEL', p.model);
     set('SHMAKK_HEADERS', p.headers);
     set('SHMAKK_MODELS', p.modelList !== undefined ? p.modelList : p.registry);
+    if (p.vision !== undefined) set('SHMAKK_VISION', p.vision === null ? null : (p.vision ? '1' : '0'));
     if (p.apiKey !== undefined) set('SHMAKK_API_KEY', p.apiKey);
     if (persist) {
       settings.provider = {
@@ -191,6 +192,7 @@ async function startWebServer(opts = {}) {
         headers: process.env.SHMAKK_HEADERS || '',
         modelList: process.env.SHMAKK_MODELS || '',
         apiKey: process.env.SHMAKK_API_KEY || '',
+        vision: process.env.SHMAKK_VISION ? /^(1|true|yes|on)$/i.test(process.env.SHMAKK_VISION) : undefined,
       };
       store.saveSettings(settings);
     }
@@ -206,6 +208,12 @@ async function startWebServer(opts = {}) {
     if (p.headers && !process.env.SHMAKK_HEADERS) process.env.SHMAKK_HEADERS = p.headers;
     const savedModels = p.modelList ?? p.registry;
     if (savedModels && !process.env.SHMAKK_MODELS) process.env.SHMAKK_MODELS = savedModels;
+  }
+
+  // The "model can read images" switch applies even when the provider itself
+  // comes from the environment (Docker .env, SHMAKK_BASE_URL at launch).
+  if (settings.provider && typeof settings.provider.vision === 'boolean' && !process.env.SHMAKK_VISION) {
+    process.env.SHMAKK_VISION = settings.provider.vision ? '1' : '0';
   }
 
   app.projects = createProjects();

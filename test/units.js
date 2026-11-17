@@ -3102,6 +3102,26 @@ function highlightDiffLines(text) {
   });
 }
 
+// ── vision detection ────────────────────────────────────────────────────────
+test('endpoints: DeepSeek Flash is vision-capable; the Settings switch overrides', () => {
+  const keys = ['SHMAKK_VISION', 'SHMAKK_MODEL'];
+  const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+  const e = require('../src/endpoints');
+  try {
+    delete process.env.SHMAKK_VISION;
+    for (const m of ['deepseek-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash-vision-exp']) { process.env.SHMAKK_MODEL = m; assert.strictEqual(e.supportsVision(), true, m); }
+    process.env.SHMAKK_MODEL = 'deepseek-chat';
+    assert.strictEqual(e.supportsVision(), false);
+    process.env.SHMAKK_VISION = '1';
+    assert.strictEqual(e.supportsVision(), true);
+    process.env.SHMAKK_MODEL = 'deepseek-flash';
+    process.env.SHMAKK_VISION = '0';
+    assert.strictEqual(e.supportsVision(), false);
+  } finally {
+    for (const k of keys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+  }
+});
+
 (async () => {
   let pass = 0, fail = 0;
   for (const { name, fn } of tests) {

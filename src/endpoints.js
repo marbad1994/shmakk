@@ -182,6 +182,11 @@ function _supportsVisionForConfig(cfg) {
   const provider = (cfg.provider || '').toLowerCase();
   const model = (cfg.model || '').toLowerCase();
 
+  // DeepSeek Flash reads images (api-docs.deepseek.com/guides/vision), with
+  // the same image_url blocks as OpenAI. Covers deepseek-flash, versioned
+  // names and the retired deepseek-v4-flash-vision-exp alias.
+  if (/deepseek[\w.-]*flash/.test(model)) return true;
+
   // Providers whose APIs always support image_url content blocks
   const visionProviders = new Set([
     'anthropic',  // Claude 3+
@@ -202,8 +207,15 @@ function _supportsVisionForConfig(cfg) {
   return false;
 }
 
+// SHMAKK_VISION (set from Settings → "This model can read images") says it
+// for a provider configured by URL rather than in endpoints.json, where
+// auto-detection by name cannot know newer models.
 function supportsVision() {
-  return _supportsVisionForConfig(currentEndpointConfig);
+  if (currentEndpointConfig) return _supportsVisionForConfig(currentEndpointConfig);
+  const env = String(process.env.SHMAKK_VISION || '').trim();
+  if (/^(1|true|yes|on)$/i.test(env)) return true;
+  if (/^(0|false|no|off)$/i.test(env)) return false;
+  return _supportsVisionForConfig({ provider: 'openai-compatible', model: process.env.SHMAKK_MODEL || '' });
 }
 
 function listEndpoints(cwd) {

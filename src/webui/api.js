@@ -148,6 +148,8 @@ function createApi(app) {
       models,
       registry,
       modelsSource: registry.length ? 'registry' : endpointList.length ? 'endpoint' : 'env',
+      vision: llm.supportsVision(),
+      visionFromEndpoint: !!endpoints.getCurrentEndpoint(),
     };
   }
   app.providerInfo = providerInfo;

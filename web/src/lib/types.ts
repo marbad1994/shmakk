@@ -101,6 +101,8 @@ export interface Provider {
   models: string[]; // selectable model ids: the registry first, env vars only as fallback
   registry: RegistryModel[]; // parsed from ~/.config/shmakk/endpoints.json
   modelsSource: 'registry' | 'endpoint' | 'env';
+  vision?: boolean; // the active model is sent images
+  visionFromEndpoint?: boolean; // decided by endpoints.json, not by the Settings switch
 }
 export interface Features {
   terminal: boolean; terminalReason: string | null; sessionSearch: boolean; stt: boolean; tts: boolean;
