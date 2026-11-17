@@ -354,13 +354,13 @@ export function usePlans() {
 export function PlanList({ plans, selected, onSelect }: { plans: PlanMeta[]; selected: string | null; onSelect: (id: string) => void }) {
   if (!plans.length) return <Empty title="No plans yet">Record a Show &amp; tell, pick elements with Edit in browser, or start a big request with <kbd>+</kbd>.</Empty>;
   return (
-    <ul className="m-0 grid list-none gap-1.5 p-0">
+    <ul className="m-0 grid min-w-0 list-none grid-cols-[minmax(0,1fr)] gap-1.5 p-0">
       {plans.map((p) => {
         const attention = (p.counts.awaiting_approval || 0) + (p.counts.blocked || 0);
         return (
-          <li key={p.id}>
-            <button type="button" onClick={() => onSelect(p.id)} aria-current={selected === p.id}
-              className={cn('grid w-full gap-1.5 rounded-xl border px-3 py-2.5 text-left transition-colors', selected === p.id ? 'border-accent/45 bg-accent/5' : 'border-line bg-raised hover:border-line-strong')}>
+          <li key={p.id} className="min-w-0">
+            <button type="button" onClick={() => onSelect(p.id)} aria-current={selected === p.id} title={p.title}
+              className={cn('grid w-full min-w-0 grid-cols-[minmax(0,1fr)] gap-1.5 overflow-hidden rounded-xl border px-3 py-2.5 text-left transition-colors', selected === p.id ? 'border-accent/45 bg-accent/5' : 'border-line bg-raised hover:border-line-strong')}>
               <div className="flex items-start gap-2">
                 <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium">{p.title}</span>
                 {attention ? <span className={cn(pill, 'border-violet/40 bg-violet/10 text-violet')}>{attention}</span> : null}
