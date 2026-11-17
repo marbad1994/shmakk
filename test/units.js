@@ -3129,6 +3129,62 @@ function highlightDiffLines(text) {
   });
 }
 
+// ── show & tell: clips (one per task) and long audio ────────────────────────
+{
+  const A = require('../src/services/show2plan-analyze');
+  const os = require('os');
+  const path = require('path');
+
+  test('show2plan: a clip the person ended is one request; questions stay separate', () => {
+    const merged = A.mergeToOne([
+      { title: 'a', kind: 'bug', summary: 'x', start: 2, end: 5, frames: ['f1'] },
+      { title: 'b', kind: 'change', summary: 'y', start: 6, end: 9, frames: ['f2', 'f1', 'f3', 'f4'] },
+      { title: 'q', kind: 'question', summary: 'z', start: 9, end: 10, frames: [] },
+    ]);
+    assert.strictEqual(merged.length, 2);
+    assert.strictEqual(merged[0].summary, 'x y');
+    assert.deepStrictEqual([merged[0].start, merged[0].end], [2, 9]);
+    assert.deepStrictEqual(merged[0].frames, ['f1', 'f2', 'f3']);
+    assert.strictEqual(merged[1].kind, 'question');
+  });
+
+  test('stt: long audio is split into chunks under the ASR limit, not skipped', () => {
+    const { WaveFile } = require('wavefile');
+    const stt = require('../src/services/stt');
+    const f = path.join(os.tmpdir(), `s2p-long-${process.pid}.wav`);
+    const w = new WaveFile();
+    w.fromScratch(1, 16000, '16', new Int16Array(16000 * 250));
+    fs.writeFileSync(f, w.toBuffer());
+    const chunks = stt._splitWav(f);
+    assert.deepStrictEqual(chunks.map((c) => c.offset), [0, 100, 200]);
+    assert.ok(chunks.every((c) => c.buf.length < 8 * 1024 * 1024 && c.durationSec <= 100));
+    fs.rmSync(f, { force: true });
+  });
+
+  test('show2plan: frames are kept per clip with recording-wide unique names', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 's2pc-'));
+    const prev = process.env.SHMAKK_SHOW2PLAN_DIR;
+    process.env.SHMAKK_SHOW2PLAN_DIR = dir;
+    try {
+      const { createShow2PlanManager } = require('../src/services/show2plan');
+      const m = createShow2PlanManager({ getWorkspace: () => dir });
+      const s = m.create();
+      const buf = Buffer.alloc(500, 1);
+      const a = m.addFrame(s.id, buf, { t: 1, clip: 0 });
+      const b = m.addFrame(s.id, buf, { t: 0.5, clip: 1 });
+      assert.notStrictEqual(a.file, b.file);
+      assert.ok(m.setAudio(s.id, Buffer.alloc(2000), 1).ok);
+      const st = m.status(s.id);
+      assert.deepStrictEqual(st.clips.map((c) => [c.n, c.hasAudio]), [[0, false], [1, true]]);
+      assert.ok(m.framePath(s.id, b.file));
+      m.remove(s.id);
+    } finally {
+      if (prev === undefined) delete process.env.SHMAKK_SHOW2PLAN_DIR; else process.env.SHMAKK_SHOW2PLAN_DIR = prev;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
 // ── vision detection ────────────────────────────────────────────────────────
 test('endpoints: DeepSeek Flash is vision-capable; the Settings switch overrides', () => {
   const keys = ['SHMAKK_VISION', 'SHMAKK_MODEL'];

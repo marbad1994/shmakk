@@ -32,6 +32,7 @@ const ArtefactsView = lazy(() => import('@/views/Artefacts').then((m) => ({ defa
 const SettingsDialog = lazy(() => import('@/views/Settings').then((m) => ({ default: m.SettingsDialog })));
 const TerminalDock = lazy(() => import('@/components/layout/TerminalDock').then((m) => ({ default: m.TerminalDock })));
 const Show2Plan = lazy(() => import('@/components/showtell/Show2Plan').then((m) => ({ default: m.Show2Plan })));
+const RecordingBar = lazy(() => import('@/components/showtell/RecordingBar').then((m) => ({ default: m.RecordingBar })));
 
 const TITLES: Record<ViewId, string> = {
   chat: 'New chat', project: 'Project', automations: 'Automations', github: 'GitHub sessions', skills: 'Skills', memory: 'Memory & rules', plan: 'Plan & resume', changes: 'Changes',
@@ -206,6 +207,7 @@ export function App() {
       <CommandPalette />
       <FolderPicker />
       <Suspense fallback={null}><Show2Plan /></Suspense>
+      <Suspense fallback={null}><RecordingBar /></Suspense>
       {settingsOpen ? (
         <Suspense fallback={null}><SettingsDialog open onOpenChange={(o) => openSettings(o)} /></Suspense>
       ) : null}

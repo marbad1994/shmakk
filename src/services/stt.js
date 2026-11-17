@@ -130,32 +130,63 @@ function _wavDurationSec(audioPath) {
   } catch { return null; }
 }
 
-async function _transcribeDeepSeek(audioPath) {
-  const cfg = _deepseekAsrConfig();
-  if (!cfg) return null;
+const ASR_CHUNK_SECONDS = 100;
 
-  const buf = fs.readFileSync(audioPath);
-  const durationSec = _wavDurationSec(audioPath);
-  if (buf.length > ASR_MAX_BYTES) return null;
-  if (durationSec != null && durationSec > ASR_MAX_SECONDS) return null;
+/**
+ * Split a WAV into mono 16-bit chunks of at most `chunkSec` seconds.
+ * Returns [{ buf, offset, durationSec }].
+ */
+function _splitWav(audioPath, chunkSec = ASR_CHUNK_SECONDS) {
+  const wav = new WaveFile(fs.readFileSync(audioPath));
+  wav.toBitDepth('16');
+  const rate = Number(wav.fmt.sampleRate) || 16000;
+  let samples = wav.getSamples(false, Int16Array);
+  if (Array.isArray(samples)) samples = samples[0]; // keep the first channel
+  const per = Math.max(1, Math.floor(chunkSec * rate));
+  const out = [];
+  for (let i = 0; i < samples.length; i += per) {
+    const part = samples.subarray(i, Math.min(samples.length, i + per));
+    const w = new WaveFile();
+    w.fromScratch(1, rate, '16', part);
+    out.push({ buf: Buffer.from(w.toBuffer()), offset: i / rate, durationSec: part.length / rate });
+  }
+  return out;
+}
 
+async function _asrRequest(cfg, buf) {
   const url = cfg.base.replace(/\/+$/, '') + ASR_PATH;
   const fd = new FormData();
   fd.append('file', new Blob([buf], { type: 'audio/wav' }), 'audio.wav');
-
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${cfg.key}` },
-    body: fd,
-  });
+  const res = await fetch(url, { method: 'POST', headers: { authorization: `Bearer ${cfg.key}` }, body: fd });
   if (!res.ok) {
     const detail = await res.text().catch(() => '');
     throw new Error(`DeepSeek ASR failed (${res.status}): ${detail.slice(0, 200)}`);
   }
   const data = await res.json();
-  const text = String((data && data.text) || '').trim();
+  return String((data && data.text) || '').trim();
+}
+
+/**
+ * DeepSeek ASR accepts 120 s / 8 MiB per request. Longer recordings used to be
+ * skipped entirely (so the narration after two minutes was lost to a weaker
+ * fallback); they are now sent in 100 s chunks, which also gives coarse timing.
+ */
+async function _transcribeDeepSeek(audioPath) {
+  const cfg = _deepseekAsrConfig();
+  if (!cfg) return null;
+  const durationSec = _wavDurationSec(audioPath);
+  const size = fs.statSync(audioPath).size;
+  const chunks = (durationSec != null && durationSec <= ASR_MAX_SECONDS && size <= ASR_MAX_BYTES)
+    ? [{ buf: fs.readFileSync(audioPath), offset: 0, durationSec: durationSec || 0 }]
+    : _splitWav(audioPath);
+  const segments = [];
+  for (const c of chunks) {
+    const text = await _asrRequest(cfg, c.buf);
+    if (text) segments.push({ start: c.offset, end: c.offset + c.durationSec, text });
+  }
+  const text = segments.map((x) => x.text).join(' ').trim();
   if (!text) throw new Error('DeepSeek ASR returned an empty transcript');
-  return { text, durationSec };
+  return { text, durationSec, segments };
 }
 
 // ── xAI speech-to-text (cloud, word timestamps) ────────────────────────────
@@ -330,7 +361,7 @@ async function transcribeTimestamped(audioPath, opts = {}) {
           const durationSec = asr.durationSec || _wavDurationSec(audioPath) || 0;
           return {
             text: asr.text,
-            segments: [{ start: 0, end: durationSec, text: asr.text }],
+            segments: asr.segments && asr.segments.length ? asr.segments : [{ start: 0, end: durationSec, text: asr.text }],
             durationSec,
             language: null,
             engine: 'deepseek-asr',
@@ -398,6 +429,7 @@ module.exports = {
   _deepseekAsrConfig,
   _wavDurationSec,
   _transcribeDeepSeek,
+  _splitWav,
   _xaiSttConfig,
   _wordsToSegments,
   _transcribeXai,

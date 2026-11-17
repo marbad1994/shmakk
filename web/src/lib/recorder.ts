@@ -18,9 +18,10 @@ export interface RecorderEvents {
   onError?: (message: string) => void;
 }
 
-export interface RecorderResult { durationSec: number; audio: Blob | null; segments: LiveSegment[]; frames: number; uploadErrors: number }
+export interface RecorderResult { clip: number; durationSec: number; audio: Blob | null; segments: LiveSegment[]; frames: number; uploadErrors: number }
 
-const SAMPLE_MS = 500;
+const TICK_MS = 250;
+const SAMPLE_EVERY = 2; // ticks per screen sample (500 ms)
 const CHANGE_THRESHOLD = 0.055;
 const MAX_GAP_SEC = 3;
 const MAX_WIDTH = 1600;
@@ -46,22 +47,45 @@ export function speechRecognitionAvailable() {
   return !!(w.SpeechRecognition || w.webkitSpeechRecognition);
 }
 
+type Grabber = { grabFrame(): Promise<ImageBitmap> };
+
+/** A ticker that survives background-tab throttling; falls back to setInterval. */
+function makeTicker(fn: () => void, ms: number): () => void {
+  try {
+    const w = new Worker(new URL('./ticker.worker.ts', import.meta.url), { type: 'module' });
+    w.onmessage = () => fn();
+    w.postMessage(ms);
+    return () => { w.postMessage(0); w.terminate(); };
+  } catch {
+    const t = window.setInterval(fn, ms);
+    return () => window.clearInterval(t);
+  }
+}
+
+/**
+ * Records the screen and microphone as a series of clips: nextClip() ends
+ * the current clip (one task) and starts the next without stopping the
+ * screen share, so each task can be analysed while recording goes on.
+ */
 export class ScreenRecorder {
   private display: MediaStream | null = null;
+  private grabber: Grabber | null = null;
+  private stopTicker: (() => void) | null = null;
+  private ticks = 0;
+  private clip = 0;
+  private clipFrames = 0;
   private mic: MediaStream | null = null;
   private video: HTMLVideoElement | null = null;
   private small = document.createElement('canvas');
   private full = document.createElement('canvas');
   private last: Uint8ClampedArray | null = null;
   private lastKeptT = -Infinity;
-  private timer: number | null = null;
   private t0 = 0;
   private pausedAt: number | null = null;
   private pausedTotal = 0;
   private media: MediaRecorder | null = null;
   private chunks: Blob[] = [];
   private audioCtx: AudioContext | null = null;
-  private raf: number | null = null;
   private speech: SpeechRec | null = null;
   private speechWanted = false;
   private segStart: number | null = null;
@@ -79,6 +103,7 @@ export class ScreenRecorder {
   /** The live screen stream, for a preview element. */
   get stream() { return this.display; }
   get paused() { return this.pausedAt !== null; }
+  get clipIndex() { return this.clip; }
 
   elapsed() {
     const now = this.pausedAt ?? performance.now();
@@ -115,19 +140,65 @@ export class ScreenRecorder {
     this.video.playsInline = true;
     this.video.srcObject = this.display;
     await this.video.play();
+    // Grab frames from the track itself where possible: a <video> on a hidden
+    // page can stop updating, the track does not.
+    const IC = (window as unknown as { ImageCapture?: new (t: MediaStreamTrack) => Grabber }).ImageCapture;
+    if (IC) { try { this.grabber = new IC(track); } catch { this.grabber = null; } }
 
     this.t0 = performance.now();
     // The first sample always keeps a frame (nothing to compare against).
-    this.timer = window.setInterval(() => this.sample(), SAMPLE_MS);
+    this.stopTicker = makeTicker(() => this.tick(), TICK_MS);
 
     if (this.mic) {
-      const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'].find((m) => MediaRecorder.isTypeSupported(m));
-      this.media = new MediaRecorder(this.mic, mime ? { mimeType: mime } : undefined);
-      this.media.ondataavailable = (e) => { if (e.data.size) this.chunks.push(e.data); };
-      this.media.start(1000);
+      this.startAudio();
       this.meter(this.mic);
       this.startSpeech();
     }
+  }
+
+  private startAudio() {
+    if (!this.mic) return;
+    const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'].find((m) => MediaRecorder.isTypeSupported(m));
+    this.chunks = [];
+    const chunks = this.chunks;
+    this.media = new MediaRecorder(this.mic, mime ? { mimeType: mime } : undefined);
+    this.media.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+    this.media.start(1000);
+    if (this.paused) this.media.pause();
+  }
+
+  private async finishAudio(): Promise<Blob | null> {
+    const m = this.media;
+    if (!m) return null;
+    const chunks = this.chunks;
+    return new Promise<Blob>((resolve) => {
+      m.onstop = () => resolve(new Blob(chunks, { type: m.mimeType || 'audio/webm' }));
+      if (m.state !== 'inactive') m.stop(); else resolve(new Blob(chunks, { type: m.mimeType || 'audio/webm' }));
+    });
+  }
+
+  private tick() {
+    this.ticks += 1;
+    if (this.level) this.ev.onLevel?.(this.paused ? 0 : this.level());
+    if (this.ticks % SAMPLE_EVERY === 0) void this.sample();
+  }
+
+  private level: (() => number) | null = null;
+
+  /** Draw the current screen into a canvas (track grab, else the video). */
+  private async draw(w: number, h: number, ctx: CanvasRenderingContext2D) {
+    if (this.grabber) {
+      try {
+        const bmp = await this.grabber.grabFrame();
+        ctx.drawImage(bmp, 0, 0, w, h);
+        const size = { w: bmp.width, h: bmp.height };
+        bmp.close();
+        return size;
+      } catch { /* fall back to the video element */ }
+    }
+    if (!this.video || this.video.readyState < 2) return null;
+    ctx.drawImage(this.video, 0, 0, w, h);
+    return { w: this.video.videoWidth, h: this.video.videoHeight };
   }
 
   private meter(stream: MediaStream) {
@@ -140,14 +211,12 @@ export class ScreenRecorder {
       an.fftSize = 512;
       src.connect(an);
       const buf = new Float32Array(an.fftSize);
-      const tick = () => {
+      this.level = () => {
         an.getFloatTimeDomainData(buf);
         let sum = 0;
         for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
-        this.ev.onLevel?.(this.paused ? 0 : Math.min(1, Math.sqrt(sum / buf.length) * 4));
-        this.raf = requestAnimationFrame(tick);
+        return Math.min(1, Math.sqrt(sum / buf.length) * 4);
       };
-      tick();
     } catch { /* meter is cosmetic */ }
   }
 
@@ -182,11 +251,15 @@ export class ScreenRecorder {
     } catch { this.speech = null; }
   }
 
-  private sample() {
-    if (this.paused || !this.video || this.video.readyState < 2) return;
+  private sampling = false;
+  private async sample() {
+    if (this.paused || this.stopped || this.sampling) return;
     const ctx = this.small.getContext('2d', { willReadFrequently: true });
     if (!ctx) return;
-    ctx.drawImage(this.video, 0, 0, 64, 36);
+    this.sampling = true;
+    let drawn;
+    try { drawn = await this.draw(64, 36, ctx); } finally { this.sampling = false; }
+    if (!drawn) return;
     const px = ctx.getImageData(0, 0, 64, 36).data;
     const gray = new Uint8ClampedArray(64 * 36);
     for (let i = 0; i < gray.length; i++) gray[i] = (px[i * 4] * 0.299 + px[i * 4 + 1] * 0.587 + px[i * 4 + 2] * 0.114) | 0;
@@ -199,29 +272,28 @@ export class ScreenRecorder {
     const t = this.elapsed();
     if (!this.last || diff > CHANGE_THRESHOLD || t - this.lastKeptT > MAX_GAP_SEC) {
       this.last = gray;
-      this.capture(Math.min(1, diff * 4));
+      await this.capture(Math.min(1, diff * 4), drawn);
     }
   }
 
-  private capture(score: number) {
-    if (!this.video || this.video.readyState < 2 || this.stopped) return;
-    const vw = this.video.videoWidth;
-    const vh = this.video.videoHeight;
-    if (!vw || !vh) return;
-    const scale = Math.min(1, MAX_WIDTH / vw);
-    this.full.width = Math.round(vw * scale);
-    this.full.height = Math.round(vh * scale);
+  private async capture(score: number, size: { w: number; h: number }) {
+    if (this.stopped || !size.w || !size.h) return;
+    const scale = Math.min(1, MAX_WIDTH / size.w);
+    this.full.width = Math.round(size.w * scale);
+    this.full.height = Math.round(size.h * scale);
     const ctx = this.full.getContext('2d');
     if (!ctx) return;
-    ctx.drawImage(this.video, 0, 0, this.full.width, this.full.height);
     const t = this.elapsed();
+    const clip = this.clip; // a frame belongs to the clip it was taken in
+    if (!(await this.draw(this.full.width, this.full.height, ctx))) return;
     this.lastKeptT = t;
     this.frames += 1;
-    this.ev.onFrame?.(this.frames);
+    this.clipFrames += 1;
+    this.ev.onFrame?.(this.clipFrames);
     this.full.toBlob((blob) => {
       if (!blob) return;
       this.queue = this.queue.then(async () => {
-        const res = await fetch(`/api/show2plan/${this.sessionId}/frame?t=${t.toFixed(2)}&score=${score.toFixed(3)}&type=image/jpeg`, {
+        const res = await fetch(`/api/show2plan/${this.sessionId}/frame?clip=${clip}&t=${t.toFixed(2)}&score=${score.toFixed(3)}&type=image/jpeg`, {
           method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'image/jpeg' }, body: blob,
         }).catch(() => null);
         if (!res || !res.ok) this.uploadErrors += 1;
@@ -244,32 +316,48 @@ export class ScreenRecorder {
     if (this.speech && this.speechWanted) { try { this.speech.start(); } catch { /* ignore */ } }
   }
 
+  /**
+   * End the current clip (one task) and start the next, keeping the screen
+   * share and microphone open. Resolves with the finished clip once its
+   * screenshots are uploaded.
+   */
+  async nextClip(): Promise<RecorderResult> {
+    const done: RecorderResult = { clip: this.clip, durationSec: this.elapsed(), audio: null, segments: [...this.segments], frames: this.clipFrames, uploadErrors: this.uploadErrors };
+    const finishing = this.finishAudio();
+    // New clip: fresh clock, transcript and first frame.
+    this.clip += 1;
+    this.clipFrames = 0;
+    this.t0 = performance.now();
+    this.pausedTotal = 0;
+    if (this.pausedAt !== null) this.pausedAt = this.t0;
+    this.segments = [];
+    this.segStart = null;
+    this.last = null;
+    this.lastKeptT = -Infinity;
+    done.audio = await finishing;
+    this.startAudio();
+    await this.queue;
+    return done;
+  }
+
   async stop(): Promise<RecorderResult> {
     if (this.paused) this.resume();
     const durationSec = this.elapsed();
     this.stopped = true;
     this.speechWanted = false;
-    if (this.timer) window.clearInterval(this.timer);
-    if (this.raf) cancelAnimationFrame(this.raf);
+    this.stopTicker?.();
     try { this.speech?.stop(); } catch { /* ignore */ }
-    let audio: Blob | null = null;
-    if (this.media) {
-      const m = this.media;
-      audio = await new Promise<Blob>((resolve) => {
-        m.onstop = () => resolve(new Blob(this.chunks, { type: m.mimeType || 'audio/webm' }));
-        if (m.state !== 'inactive') m.stop(); else resolve(new Blob(this.chunks, { type: m.mimeType || 'audio/webm' }));
-      });
-    }
+    const audio = await this.finishAudio();
     this.release();
     await this.queue;
-    return { durationSec, audio, segments: this.segments, frames: this.frames, uploadErrors: this.uploadErrors };
+    return { clip: this.clip, durationSec, audio, segments: this.segments, frames: this.clipFrames, uploadErrors: this.uploadErrors };
   }
 
   /** Stop every track and free audio resources; safe to call twice. */
   release() {
     this.stopped = true;
-    if (this.timer) window.clearInterval(this.timer);
-    if (this.raf) cancelAnimationFrame(this.raf);
+    this.stopTicker?.();
+    this.stopTicker = null;
     try { this.speech?.abort(); } catch { /* ignore */ }
     for (const s of [this.display, this.mic]) s?.getTracks().forEach((t) => t.stop());
     try { void this.audioCtx?.close(); } catch { /* ignore */ }

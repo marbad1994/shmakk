@@ -114,6 +114,24 @@ Rules:
 Respond with ONLY one JSON object, no markdown fences:
 {"title":"short name for the whole session","summary":"one or two sentences","topics":[{"title":"short imperative title","kind":"bug|change|feature|question","summary":"...","quote":"...","start":0,"end":12,"frames":[3]}]}`;
 
+const ONE_REQUEST_NOTE = `This clip covers exactly ONE request: the person pressed "Next task" to mark where each request starts and ends. Return exactly one topic for it. Add a second topic only for a separate explicit question (kind "question").`;
+
+/** A clip the person ended themselves is one request: fold extras into the first. */
+function mergeToOne(topics) {
+  const work = topics.filter((t) => t.kind !== 'question');
+  const questions = topics.filter((t) => t.kind === 'question');
+  if (work.length <= 1) return topics;
+  const [first, ...rest] = work;
+  const merged = {
+    ...first,
+    summary: [first.summary, ...rest.map((t) => t.summary)].filter(Boolean).join(' '),
+    start: Math.min(...work.map((t) => t.start)),
+    end: Math.max(...work.map((t) => t.end)),
+    frames: [...new Set(work.flatMap((t) => t.frames))].slice(0, MAX_TOPIC_FRAMES),
+  };
+  return [merged, ...questions];
+}
+
 function normalizeTopics(raw, { frameCount = 0, durationSec = 0 } = {}) {
   const r = raw && typeof raw === 'object' ? raw : {};
   const topics = (Array.isArray(r.topics) ? r.topics : []).map((t) => {
@@ -137,7 +155,7 @@ function normalizeTopics(raw, { frameCount = 0, durationSec = 0 } = {}) {
   return { title: str(r.title, 160), summary: str(r.summary, 1000), topics };
 }
 
-async function findTopics({ client, thumbs, images, transcript, instructions, durationSec, signal }) {
+async function findTopics({ client, thumbs, images, transcript, instructions, durationSec, signal, oneRequest = false }) {
   const text = [
     `Recording duration: ~${Math.round(durationSec || 0)}s`,
     instructions ? `Note from the person before recording: ${instructions}` : null,
@@ -151,7 +169,7 @@ async function findTopics({ client, thumbs, images, transcript, instructions, du
   images.forEach((img, i) => { content.push({ type: 'text', text: `#${i} @ ${fmtTime(img.t)}` }); content.push(imageBlock(img, 'low')); });
   const resp = await client.client.chat.completions.create(withThinkingOff({
     model: client.model,
-    messages: [{ role: 'system', content: TOPIC_PROMPT }, { role: 'user', content: images.length ? content : text }],
+    messages: [{ role: 'system', content: oneRequest ? `${TOPIC_PROMPT}\n\n${ONE_REQUEST_NOTE}` : TOPIC_PROMPT }, { role: 'user', content: images.length ? content : text }],
     temperature: 0.1,
     max_tokens: 4000,
     stream: false,
@@ -161,7 +179,8 @@ async function findTopics({ client, thumbs, images, transcript, instructions, du
   const { extractJson } = require('./vision');
   let parsed;
   try { parsed = extractJson(raw); } catch { throw new Error(`The topic list was not valid JSON: ${raw.slice(0, 300)}`); }
-  const out = normalizeTopics(parsed, { frameCount: images.length || thumbs.length, durationSec });
+  let out = normalizeTopics(parsed, { frameCount: images.length || thumbs.length, durationSec });
+  if (oneRequest) out = { ...out, topics: mergeToOne(out.topics) };
   // Screenshot numbers → frame files.
   for (const t of out.topics) t.frames = t.frames.map((n) => (images[n] || thumbs[n] || {}).file).filter(Boolean);
   return out;
@@ -391,7 +410,7 @@ async function analyzeShowAndTell(opts = {}) {
   progress({ step: 'topics' });
   const thumbs = selectFrames(opts.frames || []);
   const images = c.vision ? await loadImages(thumbs) : [];
-  const found = await findTopics({ client: c, thumbs, images, transcript: opts.transcript, instructions: opts.instructions, durationSec: opts.durationSec, signal: opts.signal });
+  const found = await findTopics({ client: c, thumbs, images, transcript: opts.transcript, instructions: opts.instructions, durationSec: opts.durationSec, signal: opts.signal, oneRequest: !!opts.oneRequest });
   const all = found.topics;
   // Without vision the model cannot pick screenshots; use the topic's time range.
   if (!images.length && hasTiming(opts.transcript)) {
@@ -448,6 +467,7 @@ module.exports = {
   timedTranscript,
   selectFrames,
   normalizeTopics,
+  mergeToOne,
   normalizeSubmitted,
   topicAsTask,
   repoOverview,
