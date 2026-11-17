@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { CheckCircle2, Cloud, Cpu, Database, Download, Eye, FolderOpen, Info, LogOut, Mic, Monitor, Moon, Palette, Power, ScrollText, SlidersHorizontal, Sun, Wrench, XCircle } from 'lucide-react';
+import { CheckCircle2, Cloud, Cpu, Database, Download, Eye, FolderOpen, Info, LogOut, Mic, Monitor, Moon, Palette, Pencil, Plus, Power, ScrollText, SlidersHorizontal, Sun, Trash2, Wrench, XCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { COMMANDS } from '@/lib/commands';
-import type { Provider } from '@/lib/types';
+import type { Provider, RegistryModel } from '@/lib/types';
 import { cn, tildify } from '@/lib/utils';
 import { chooseWorkspace, useApp } from '@/store/app';
 import { useTheme, type ThemePref } from '@/hooks/useTheme';
@@ -14,8 +14,195 @@ import { Field, Input, Textarea } from '@/components/ui/input';
 import { Segmented, Spinner } from '@/components/ui/misc';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { Dialog, DialogBody, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Row, Rows, Section } from './Page';
+
+// Provider kinds the runtime special-cases (src/llm.js), plus the fields each
+// one actually reads. Anthropic and Codex authenticate through their local
+// proxy with OAuth, so there is no key to type; NVIDIA pins its own base URL.
+const MODEL_PROVIDERS = [
+  { value: 'openai-compatible', label: 'OpenAI-compatible' },
+  { value: 'openai', label: 'OpenAI' },
+  { value: 'nvidia', label: 'NVIDIA NIM' },
+  { value: 'anthropic', label: 'Anthropic (OAuth proxy)' },
+  { value: 'codex', label: 'Codex (OAuth proxy)' },
+] as const;
+
+const PROVIDER_FIELDS: Record<string, { baseUrl: boolean; apiKey: boolean }> = {
+  'openai-compatible': { baseUrl: true, apiKey: true },
+  openai: { baseUrl: true, apiKey: true },
+  nvidia: { baseUrl: false, apiKey: true },
+  anthropic: { baseUrl: false, apiKey: false },
+  codex: { baseUrl: false, apiKey: false },
+};
+
+const fieldsFor = (provider: string) => PROVIDER_FIELDS[provider] || PROVIDER_FIELDS['openai-compatible'];
+
+type ModelDraft = {
+  original: string | null;
+  name: string; provider: string; model: string;
+  baseUrl: string; apiKey: string; headers: string;
+  vision: boolean; main: boolean;
+};
+
+function draftFor(entry?: RegistryModel | null): ModelDraft {
+  return {
+    original: entry?.name ?? null,
+    name: entry?.name ?? '',
+    provider: entry?.provider || 'openai-compatible',
+    model: entry?.model ?? '',
+    baseUrl: entry?.baseUrl || '',
+    apiKey: '',
+    headers: entry ? (typeof entry.headers === 'string' ? entry.headers : JSON.stringify(entry.headers)) : '',
+    vision: !!entry?.vision,
+    main: !!entry?.default,
+  };
+}
+
+// Add / edit / delete entries in the user's own endpoints.json, so the model
+// registry is editable without opening the file by hand.
+function RegistryEditor({ provider, suggestions, onPick }: { provider: Provider; suggestions: string[]; onPick(model: string): void }) {
+  const home = useApp((s) => s.home);
+  const [draft, setDraft] = useState<ModelDraft | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const editable = !!provider.registryPath;
+
+  const save = useMutation({
+    mutationFn: (d: ModelDraft) => api.put<Provider>(`/api/endpoints/${encodeURIComponent(d.original ?? d.name.trim())}`, {
+      provider: d.provider,
+      model: d.model.trim(),
+      baseUrl: d.baseUrl.trim(),
+      headers: d.headers.trim(),
+      vision: d.vision,
+      main: d.main,
+      ...(d.apiKey.trim() ? { apiKey: d.apiKey.trim() } : {}),
+    }),
+    onSuccess: (_r, d) => {
+      toast.success(d.original ? `Saved ${d.original}` : `Added ${d.name.trim()}`);
+      setDraft(null);
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+  const remove = useMutation({
+    mutationFn: (name: string) => api.del<Provider>(`/api/endpoints/${encodeURIComponent(name)}`),
+    onSuccess: (_r, name) => toast.success(`Deleted ${name}`),
+    onError: (e: Error) => toast.error(e.message),
+    onSettled: () => setDeleting(null),
+  });
+
+  const fields = draft ? fieldsFor(draft.provider) : null;
+  const trimmed = draft?.name.trim() || '';
+  const duplicate = !!draft && !draft.original && provider.registry.some((m) => m.name.toLowerCase() === trimmed.toLowerCase());
+  const invalid = !draft || !trimmed || duplicate || !draft.model.trim() || (draft.provider === 'openai-compatible' && !draft.baseUrl.trim());
+
+  return (
+    <div className="col-span-full rounded-xl border border-line bg-panel p-3">
+      <div className="mb-2 flex flex-wrap items-center gap-2 text-[13px] text-dim">
+        <Database className="size-4 shrink-0 text-faint" />
+        <span className="min-w-0 flex-1 truncate">
+          Model registry · {provider.registryPath
+            ? <code className="font-mono text-faint">{home ? tildify(provider.registryPath, home) : provider.registryPath}</code>
+            : <span className="text-faint">endpoints.js</span>}
+        </span>
+        <Button size="sm" variant="ghost" disabled={!editable} title={editable ? 'Add a model to endpoints.json' : 'Convert endpoints.js to endpoints.json to edit it here'} onClick={() => setDraft(draftFor(null))}>
+          <Plus className="size-4" />Add model
+        </Button>
+      </div>
+
+      {provider.registry.length ? (
+        <div className="grid gap-1.5">
+          {provider.registry.map((m) => {
+            const active = provider.model === m.model;
+            const summary = [m.name !== m.model ? m.name : null, m.provider, m.hasApiKey ? 'key saved' : null, m.default ? 'default' : null, m.vision ? 'vision' : null].filter(Boolean).join(' · ');
+            return (
+              <div key={m.name} className={cn('flex min-w-0 flex-wrap items-center gap-2 rounded-lg border px-2.5 py-1.5', active ? 'border-accent/40 bg-accent/10' : 'border-line')}>
+                <button type="button" onClick={() => onPick(m.model)} className="min-w-0 flex-1 text-left" title={`Use ${m.name} → ${m.model}`}>
+                  <span className="block truncate font-mono text-[12.5px] text-fg">{m.model}</span>
+                  {summary ? <span className="block truncate text-[11.5px] text-faint">{summary}</span> : null}
+                </button>
+                <Button size="icon-sm" variant="ghost" aria-label={`Edit ${m.name}`} disabled={!editable} onClick={() => setDraft(draftFor(m))}><Pencil className="size-4" /></Button>
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-label={`Delete ${m.name}`}
+                  disabled={!editable || (remove.isPending && deleting === m.name)}
+                  onClick={() => { if (confirm(`Delete the model “${m.name}” from the registry?`)) { setDeleting(m.name); remove.mutate(m.name); } }}
+                ><Trash2 className="size-4" /></Button>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="m-0 text-xs text-faint">Nothing saved yet — add a model and it shows up in every model picker.</p>
+      )}
+
+      <p className="m-0 mt-2 text-xs text-faint">
+        These are the models the composer offers per space. Environment variables (<code className="font-mono">SHMAKK_MODELS</code>, <code className="font-mono">SHMAKK_MODEL</code>) are only the fallback when there is no registry.
+      </p>
+
+      <Dialog open={!!draft} onOpenChange={(o) => { if (!o) setDraft(null); }}>
+        <DialogContent className="w-[min(640px,calc(100vw-32px))]">
+          <DialogHeader>
+            <DialogTitle>{draft?.original ? `Edit ${draft.original}` : 'Add model'}</DialogTitle>
+            <DialogDescription>Written to {provider.registryPath ? (home ? tildify(provider.registryPath, home) : provider.registryPath) : 'endpoints.js'}.</DialogDescription>
+          </DialogHeader>
+          {draft ? (
+            <DialogBody>
+              <form id="registry-form" className="grid grid-cols-2 gap-3 max-md:grid-cols-1" onSubmit={(e) => { e.preventDefault(); if (!invalid) save.mutate(draft); }}>
+                <Field label="Name" htmlFor="r-name" hint={draft.original ? 'The key in endpoints.json; rename by adding a new entry.' : duplicate ? 'That name is already in the registry.' : 'Key in endpoints.json'}>
+                  <Input id="r-name" value={draft.name} disabled={!!draft.original} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="kimi" className="font-mono text-[13px]" spellCheck={false} />
+                </Field>
+                <Field label="Provider" htmlFor="r-provider" hint="Only the fields this provider reads are shown.">
+                  <Select value={draft.provider} onValueChange={(v) => setDraft({ ...draft, provider: v })}>
+                    <SelectTrigger id="r-provider" aria-label="Provider"><SelectValue /></SelectTrigger>
+                    <SelectContent>{MODEL_PROVIDERS.map((p) => <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>)}</SelectContent>
+                  </Select>
+                </Field>
+                <Field label="Model id" htmlFor="r-model" hint="Sent to the provider and shown in the pickers." className="col-span-full">
+                  <Input id="r-model" list="registry-model-list" value={draft.model} onChange={(e) => setDraft({ ...draft, model: e.target.value })} placeholder="moonshotai/kimi-k2.6" className="font-mono text-[13px]" spellCheck={false} />
+                  <datalist id="registry-model-list">{suggestions.map((m) => <option key={m} value={m} />)}</datalist>
+                </Field>
+                {fields?.baseUrl ? (
+                  <Field label="Base URL" htmlFor="r-base" hint={draft.provider === 'openai-compatible' ? 'Required — the OpenAI-compatible endpoint' : 'Optional — the provider default is used when blank'} className="col-span-full">
+                    <Input id="r-base" value={draft.baseUrl} onChange={(e) => setDraft({ ...draft, baseUrl: e.target.value })} placeholder="https://api.example.com/v1" className="font-mono text-[13px]" spellCheck={false} />
+                  </Field>
+                ) : null}
+                {fields?.apiKey ? (
+                  <Field label="API key" htmlFor="r-key" hint="Stored in endpoints.json (owner-only). Leave blank to keep the current key." className="col-span-full">
+                    <Input id="r-key" type="password" autoComplete="off" value={draft.apiKey} onChange={(e) => setDraft({ ...draft, apiKey: e.target.value })} placeholder="sk-…" className="font-mono text-[13px]" />
+                  </Field>
+                ) : null}
+                <Field label="Extra headers" htmlFor="r-headers" hint="k=v,k=v — optional" className="col-span-full">
+                  <Input id="r-headers" value={draft.headers} onChange={(e) => setDraft({ ...draft, headers: e.target.value })} className="font-mono text-[13px]" spellCheck={false} />
+                </Field>
+                <label className="flex items-start gap-2.5 text-[13px]">
+                  <Switch checked={draft.vision} onCheckedChange={(v) => setDraft({ ...draft, vision: v })} aria-label="This model can read images" className="mt-0.5" />
+                  <span className="grid gap-0.5">
+                    <span className="font-medium text-fg">Reads images</span>
+                    <span className="text-xs text-faint">Writes “vision” on the entry, overriding name detection.</span>
+                  </span>
+                </label>
+                <label className="flex items-start gap-2.5 text-[13px]">
+                  <Switch checked={draft.main} onCheckedChange={(v) => setDraft({ ...draft, main: v })} aria-label="Default model" className="mt-0.5" />
+                  <span className="grid gap-0.5">
+                    <span className="font-medium text-fg">Default model</span>
+                    <span className="text-xs text-faint">Sets “main” in endpoints.json.</span>
+                  </span>
+                </label>
+              </form>
+            </DialogBody>
+          ) : null}
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setDraft(null)}>Cancel</Button>
+            <Button type="submit" form="registry-form" variant="primary" disabled={invalid || save.isPending}>
+              {save.isPending ? <Spinner /> : null}{draft?.original ? 'Save' : 'Add'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
 
 function ProviderSection() {
   const provider = useApp((s) => s.provider);
@@ -84,38 +271,8 @@ function ProviderSection() {
         <Field label="Extra headers" htmlFor="p-headers" hint="k=v,k=v (SHMAKK_HEADERS)">
           <Input id="p-headers" value={form.headers} onChange={(e) => setForm({ ...form, headers: e.target.value })} className="font-mono text-[13px]" spellCheck={false} />
         </Field>
-        {provider.registry.length ? (
-          <div className="col-span-full rounded-xl border border-line bg-panel p-3">
-            <div className="mb-2 flex items-center gap-2 text-[13px] text-dim">
-              <Database className="size-4 shrink-0 text-faint" />
-              <span className="min-w-0 truncate">
-                Model registry · <code className="font-mono text-faint">~/.config/shmakk/endpoints.json</code>
-              </span>
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {provider.registry.map((m) => {
-                const active = form.model === m.model;
-                return (
-                  <button
-                    key={m.name}
-                    type="button"
-                    onClick={() => setForm((f) => ({ ...f, model: m.model }))}
-                    title={`Preset ${m.name} → model ${m.model}${m.provider ? ` · ${m.provider}` : ''}${m.hasApiKey ? ' · has key' : ''}`}
-                    className={`inline-flex max-w-full flex-wrap items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12.5px] transition-colors ${active ? 'border-accent/50 bg-accent/10 text-fg' : 'border-line text-dim hover:border-line-strong hover:bg-hover hover:text-fg'}`}
-                  >
-                    <span className="font-mono">{m.model}</span>
-                    {m.name !== m.model ? <span className="text-faint">{m.name}</span> : null}
-                    {m.default ? <span className="rounded-full border border-accent/35 bg-accent/10 px-1.5 text-[11px] text-accent">default</span> : null}
-                    {m.vision ? <Eye className="size-3.5 text-faint" aria-label="vision" /> : null}
-                  </button>
-                );
-              })}
-            </div>
-            <p className="m-0 mt-2 text-xs text-faint">
-              These are the models the composer offers per space. Environment variables (<code className="font-mono">SHMAKK_MODELS</code>, <code className="font-mono">SHMAKK_MODEL</code>) are only the fallback when there is no registry.
-            </p>
-          </div>
-        ) : (
+        <RegistryEditor provider={provider} suggestions={suggestions} onPick={(model) => setForm((f) => ({ ...f, model }))} />
+        {provider.registry.length ? null : (
           <Field label="Model list" htmlFor="p-models" hint="Comma-separated fallback — there is no endpoints.json registry (SHMAKK_MODELS)" className="col-span-full">
             <Input id="p-models" value={form.modelList} onChange={(e) => setForm({ ...form, modelList: e.target.value })} className="font-mono text-[13px]" spellCheck={false} />
           </Field>

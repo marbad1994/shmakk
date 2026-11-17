@@ -240,6 +240,111 @@ function getVisionSupport(cwd) {
   return normalizeModelConfig('visionSupport', raw.visionSupport);
 }
 
+// ── Registry editing (Settings → Model provider) ─────────────────────────────
+// The registry file belongs to the user, so edits keep every key shmakk does
+// not understand (visionSupport, per-model extras) and keep the stored API key
+// when the form leaves the field blank.
+
+const MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._ -]{0,63}$/;
+
+function registryFilePath(cwd) {
+  return configPath(cwd || process.cwd());
+}
+
+function editError(message, status = 400) {
+  const err = new Error(message);
+  err.status = status;
+  return err;
+}
+
+function readEditableRegistry(cwd) {
+  const file = registryFilePath(cwd);
+  if (file.endsWith('.js')) {
+    throw editError('This registry is endpoints.js — convert it to endpoints.json to edit it here');
+  }
+  let raw = {};
+  if (fs.existsSync(file)) {
+    let parsed;
+    try { parsed = JSON.parse(fs.readFileSync(file, 'utf8')); }
+    catch { throw editError(`Cannot edit ${file}: it is not valid JSON`); }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw editError(`Cannot edit ${file}: expected a JSON object`);
+    }
+    raw = parsed;
+  }
+  if (!raw.models || typeof raw.models !== 'object' || Array.isArray(raw.models)) {
+    const legacy = Object.keys(raw).filter((k) => k !== 'main' && k !== 'fast' && k !== 'visionSupport');
+    if (legacy.length) {
+      throw editError(`Cannot edit ${file}: entries must live inside a "models" object`);
+    }
+    raw.models = {};
+  }
+  return { file, raw };
+}
+
+function writeEditableRegistry(file, raw) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify(raw, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+}
+
+function cleanModelName(name) {
+  const value = String(name || '').trim();
+  if (!MODEL_NAME_RE.test(value) || ['__proto__', 'constructor', 'prototype'].includes(value)) {
+    throw editError('Name must be 1–64 characters: letters, digits, space, dot, dash or underscore');
+  }
+  return value;
+}
+
+function saveModel(cwd, name, cfg = {}) {
+  const key = cleanModelName(name);
+  const { file, raw } = readEditableRegistry(cwd);
+  const prev = raw.models[key] && typeof raw.models[key] === 'object' ? raw.models[key] : {};
+  const next = { ...prev };
+
+  if (cfg.provider !== undefined) next.provider = String(cfg.provider || '').trim() || prev.provider || 'openai-compatible';
+  if (cfg.model !== undefined) next.model = String(cfg.model || '').trim() || key;
+  else if (!next.model) next.model = key;
+
+  if (cfg.baseUrl !== undefined) {
+    const value = String(cfg.baseUrl || '').trim();
+    if (value) next.base_url = value;
+    else delete next.base_url;
+  }
+  if (cfg.apiKey !== undefined) {
+    const value = String(cfg.apiKey || '').trim();
+    if (value) next.api_key = value;
+    else delete next.api_key;
+  }
+  if (cfg.headers !== undefined) {
+    const value = cfg.headers && typeof cfg.headers === 'object' ? cfg.headers : String(cfg.headers || '').trim();
+    if (value && (typeof value === 'object' || value)) next.headers = value;
+    else delete next.headers;
+  }
+  if (cfg.vision !== undefined) {
+    if (cfg.vision === null) delete next.vision;
+    else next.vision = !!cfg.vision;
+  }
+  raw.models[key] = next;
+
+  if (cfg.main === true) raw.main = key;
+  else if (cfg.main === false && raw.main === key) delete raw.main;
+
+  writeEditableRegistry(file, raw);
+  return { name: key, config: next, path: file };
+}
+
+function deleteModel(cwd, name) {
+  const key = cleanModelName(name);
+  const { file, raw } = readEditableRegistry(cwd);
+  if (!raw.models[key]) throw editError(`model "${key}" not found`, 404);
+  delete raw.models[key];
+  if (raw.main === key) delete raw.main;
+  if (raw.fast === key) delete raw.fast;
+  writeEditableRegistry(file, raw);
+  if (currentEndpointName === key) clearEndpoint();
+  return { name: key, path: file };
+}
+
 module.exports = {
   applyEndpoint,
   listEndpoints,
@@ -250,6 +355,9 @@ module.exports = {
   supportsVision,
   getModelRegistry,
   getVisionSupport,
+  registryFilePath,
+  saveModel,
+  deleteModel,
   _test: { normalizeRegistry, normalizeModelConfig },
   _supportsVisionForConfig,
 };

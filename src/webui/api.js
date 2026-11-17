@@ -113,7 +113,10 @@ function createApi(app) {
         name,
         model: cfg.model || name,
         provider: cfg.provider || null,
+        baseUrl: cfg.base_url || '',
+        headers: cfg.headers && typeof cfg.headers === 'object' ? cfg.headers : (cfg.headers || ''),
         vision: !!cfg.vision,
+        visionExplicit: 'vision' in cfg,
         hasApiKey: !!cfg.api_key,
         default: name === (registry.main || null),
         fast: name === (registry.fast || null),
@@ -142,6 +145,14 @@ function createApi(app) {
       configured: llm.isConfigured(),
       endpoint: endpoints.getCurrentEndpointName(),
       endpoints: endpoints.listEndpoints(ws()),
+      // The JSON file the registry editor writes to (null when the registry is
+      // a hand-written endpoints.js).
+      registryPath: (() => {
+        try {
+          const p = endpoints.registryFilePath(ws());
+          return p.endsWith('.js') ? null : p;
+        } catch { return null; }
+      })(),
       baseUrl: active?.base_url || process.env.SHMAKK_BASE_URL || '',
       model,
       apiKeyMasked: maskKey(key),
@@ -320,6 +331,22 @@ function createApi(app) {
   add('POST', '/api/endpoints/use', ({ body }) => {
     if (!body.name) { endpoints.clearEndpoint(); app.broadcastProvider(); return providerInfo(); }
     if (!endpoints.applyEndpoint(String(body.name), ws())) throw new HttpError(404, `endpoint "${body.name}" not found`);
+    app.broadcastProvider();
+    return providerInfo();
+  });
+  // Registry CRUD. Writes the user's own endpoints.json, so the editor in
+  // Settings → Model provider can add, edit and delete models without the
+  // file being hand-edited.
+  const editRegistry = (fn) => {
+    try { return fn(); } catch (e) { throw new HttpError(e.status || 400, e.message); }
+  };
+  add('PUT', '/api/endpoints/:name', ({ params, body }) => {
+    editRegistry(() => endpoints.saveModel(ws(), params.name, body || {}));
+    app.broadcastProvider();
+    return providerInfo();
+  });
+  add('DELETE', '/api/endpoints/:name', ({ params }) => {
+    editRegistry(() => endpoints.deleteModel(ws(), params.name));
     app.broadcastProvider();
     return providerInfo();
   });

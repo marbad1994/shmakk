@@ -113,12 +113,15 @@ export interface RegistryModel {
   name: string; // preset name in ~/.config/shmakk/endpoints.json
   model: string; // model id sent to the provider
   provider: string | null; vision: boolean; hasApiKey: boolean; default: boolean; fast: boolean;
+  baseUrl: string; headers: string | Record<string, string>;
+  visionExplicit: boolean; // "vision" written on the entry instead of auto-detected
 }
 export interface Provider {
   configured: boolean; endpoint: string | null; endpoints: string[]; baseUrl: string; model: string;
   apiKeyMasked: string | null; hasApiKey: boolean; headers: string; modelList: string;
   models: string[]; // selectable model ids: the registry first, env vars only as fallback
   registry: RegistryModel[]; // parsed from ~/.config/shmakk/endpoints.json
+  registryPath: string | null; // JSON file the registry editor writes to (null = endpoints.js)
   modelsSource: 'registry' | 'endpoint' | 'env';
   vision?: boolean; // the active model is sent images
   visionFromEndpoint?: boolean; // decided by endpoints.json, not by the Settings switch
