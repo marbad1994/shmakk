@@ -472,7 +472,7 @@ async function startWebServer(opts = {}) {
         const query = Object.fromEntries(url.searchParams.entries());
         const out = await api.handle(req.method, pathname, { body: body || {}, raw, query });
         if (!out.found) return send(res, 404, { error: 'not found' });
-        if (out.result && out.result.__binary) return send(res, 200, out.result.__binary, { 'content-type': out.result.contentType });
+        if (out.result && out.result.__binary) return send(res, 200, out.result.__binary, { 'content-type': out.result.contentType, ...(out.result.headers || {}) });
         if (out.result && out.result.__stream) {
           res.writeHead(200, { 'content-type': out.result.contentType || 'application/octet-stream', 'cache-control': 'no-store' });
           out.result.__stream.on('error', () => { try { res.destroy(); } catch {} });

@@ -30,6 +30,7 @@ const design = require('./design');
 const { AutomationError } = require('./automations');
 const store = require('./store');
 const artefacts = require('./artefacts');
+const deliver = require('./deliver');
 const capture = require('../services/capture');
 const { registerWorkRoutes } = require('./work-routes');
 
@@ -766,6 +767,22 @@ function createApi(app) {
     try { execFile(opener, args, { stdio: 'ignore' }, () => {}); } catch {}
     return { ok: true };
   });
+  // ── deliverables ────────────────────────────────────────────────────────
+  // Files the agent handed back as download links (`deliver_file` tool). The
+  // `?view=1` variant inlines images and text instead of forcing a download.
+  add('GET', '/api/deliver/:id', ({ params, query }) => {
+    const d = deliver.serve(params.id, { view: query.view === '1' });
+    if (!d) throw new HttpError(404, 'deliverable not found');
+    const disposition = d.inline
+      ? 'inline'
+      : `attachment; filename="${d.name.replace(/["\\]/g, '_')}"`;
+    return {
+      __binary: d.data,
+      contentType: d.mimeType,
+      headers: { 'content-disposition': disposition },
+    };
+  });
+
   add('POST', '/api/artefacts/:id/discuss', async ({ params, body }) => {
     const a = artefacts.get(params.id);
     if (!a) throw new HttpError(404, 'artefact not found');

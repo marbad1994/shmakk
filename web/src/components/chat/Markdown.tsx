@@ -2,7 +2,8 @@ import { memo, useState, type ComponentProps, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
-import { Check, Copy } from 'lucide-react';
+import { Check, Copy, Download } from 'lucide-react';
+import { api } from '@/lib/api';
 import { cn, copyText } from '@/lib/utils';
 
 function textOf(node: ReactNode): string {
@@ -36,18 +37,56 @@ function CodeBlock({ children }: ComponentProps<'pre'>) {
   );
 }
 
-const components = {
-  pre: CodeBlock,
-  a: ({ href, children }: ComponentProps<'a'>) => (
+function deliverPath(href: string) {
+  return /^\/api\/deliver\/[a-z0-9_]+(?:\?view=1)?$/i.test(href) ? href : null;
+}
+
+function DeliverLink({ href, children }: { href: string; children: ReactNode }) {
+  const [downloaded, setDownloaded] = useState(false);
+  const label = textOf(children) || 'Download';
+  const isView = /[?&]view=1$/.test(href);
+  if (isView && /\.(png|jpe?g|gif|webp|svg|bmp|ico)(\?|$)/i.test(label)) {
+    // An image deliverable: render it inline.
+    return (
+      <img
+        src={href}
+        alt={label}
+        className="my-3 max-h-[420px] rounded-[10px] border border-line"
+        loading="lazy"
+      />
+    );
+  }
+  return (
     <a
       href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      onClick={(e) => { if (window.shmakkDesktop && href) { e.preventDefault(); window.shmakkDesktop.openExternal(href); } }}
+      onClick={(e) => {
+        e.preventDefault();
+        api.download(href, label).then(() => { setDownloaded(true); setTimeout(() => setDownloaded(false), 1600); });
+      }}
+      className="my-1 inline-flex items-center gap-2 rounded-lg border border-line bg-raised px-3 py-1.5 text-[13px] font-medium text-accent no-underline hover:bg-hover"
     >
-      {children}
+      <Download className="size-4" />
+      <span>{downloaded ? 'saved' : label.replace(/^Download\s+/i, '')}</span>
     </a>
-  ),
+  );
+}
+
+const components = {
+  pre: CodeBlock,
+  a: ({ href, children }: ComponentProps<'a'>) => {
+    const d = href ? deliverPath(href) : null;
+    if (d) return <DeliverLink href={d} children={children} />;
+    return (
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(e) => { if (window.shmakkDesktop && href) { e.preventDefault(); window.shmakkDesktop.openExternal(href); } }}
+      >
+        {children}
+      </a>
+    );
+  },
   table: ({ children }: ComponentProps<'table'>) => <div className="my-3 overflow-x-auto"><table className="my-0">{children}</table></div>,
 };
 
