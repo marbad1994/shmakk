@@ -1,0 +1,129 @@
+- generic [ref=f4e2]:
+  - generic [ref=f4e3]:
+    - link "Skip to message box" [ref=f4e4] [cursor=pointer]:
+      - /url: "#composer-input"
+    - complementary "Navigation" [ref=f4e6]:
+      - generic [ref=f4e7]:
+        - button "shmakk, new chat" [ref=f4e8] [cursor=pointer]:
+          - generic [aria-hidden] [ref=f4e9]: ❯
+          - text: shmakk
+        - button "Hide sidebar" [ref=f4e11] [cursor=pointer]
+      - tablist "Mode" [ref=f4e12]:
+        - tab "Chat" [ref=f4e13] [cursor=pointer]
+        - tab "Code" [ref=f4e16] [cursor=pointer]
+        - tab "Design" [selected] [ref=f4e21] [cursor=pointer]
+        - tab "Cowork" [ref=f4e28] [cursor=pointer]
+      - button "New design" [ref=f4e34] [cursor=pointer]
+      - generic [ref=f4e37]:
+        - generic [ref=f4e38]:
+          - generic [ref=f4e39]: Projects
+          - button "New project" [ref=f4e40] [cursor=pointer]
+        - button "ShmakkGui" [ref=f4e42] [cursor=pointer]
+        - list "Design conversations" [ref=f4e47]:
+          - generic [ref=f4e48]:
+            - generic [ref=f4e49]: Today
+            - listitem [ref=f4e50]:
+              - button "Landing page redesign" [ref=f4e51] [cursor=pointer]
+              - button "Options for Landing page redesign" [ref=f4e53] [cursor=pointer]
+            - listitem [ref=f4e58]:
+              - button "Design a landing page for a saas AI mareting platf…" [ref=f4e59] [cursor=pointer]
+              - button "Options for Design a landing page for a saas AI mareting platf…" [ref=f4e61] [cursor=pointer]
+            - listitem [ref=f4e66]:
+              - button "Design a three-screen mobile onboarding for a habi…" [ref=f4e67] [cursor=pointer]
+              - button "Options for Design a three-screen mobile onboarding for a habi…" [ref=f4e69] [cursor=pointer]
+            - listitem [ref=f4e74]:
+              - button "Design an analytics dashboard for a small online s…" [ref=f4e75] [cursor=pointer]
+              - button "Options for Design an analytics dashboard for a small online s…" [ref=f4e77] [cursor=pointer]
+      - generic [ref=f4e83]:
+        - button "Account menu, marcusb" [ref=f4e84] [cursor=pointer]:
+          - generic [aria-hidden] [ref=f4e85]: m
+          - generic [ref=f4e86]:
+            - generic [ref=f4e87]: marcusb
+            - generic [ref=f4e88]: shmakk
+        - button "Settings" [ref=f4e90] [cursor=pointer]
+    - generic [ref=f4e94]:
+      - banner [ref=f4e95]:
+        - heading [level=1] [ref=f4e96]:
+          - generic "Design mode" [ref=f4e97]
+          - text: Landing page redesign
+        - generic "Design preview controls" [ref=f4e104]:
+          - generic [ref=f4e105]:
+            - button "Choose file to preview" [ref=f4e106] [cursor=pointer]:
+              - generic [ref=f4e107]: index
+              - generic [ref=f4e108]: "4"
+            - radiogroup "Preview size" [ref=f4e109]:
+              - radio "desktop" [checked] [ref=f4e110] [cursor=pointer]
+              - radio "tablet" [ref=f4e113] [cursor=pointer]
+              - radio "phone" [ref=f4e116] [cursor=pointer]
+            - group "Zoom" [ref=f4e119]:
+              - button "Zoom out" [ref=f4e120] [cursor=pointer]
+              - button "Reset zoom to 100%" [ref=f4e122] [cursor=pointer]: 100%
+              - button "Zoom in" [ref=f4e123] [cursor=pointer]
+            - button "v1" [ref=f4e125] [cursor=pointer]
+            - button "Edit on canvas" [ref=f4e126] [cursor=pointer]
+            - button "Toggle code" [ref=f4e127] [cursor=pointer]
+            - button "Save as artefact" [ref=f4e128] [cursor=pointer]
+            - button "Open in a new tab" [ref=f4e129] [cursor=pointer]
+      - generic [ref=f4e130]:
+        - main [ref=f4e131]:
+          - generic [ref=f4e132]:
+            - generic [ref=f4e133]:
+              - generic [ref=f4e135]:
+                - heading "What should we design?" [level=2] [ref=f4e143]
+                - paragraph [ref=f4e144]: Describe a screen or a flow. shmakk builds it as real, clickable HTML next to the chat and keeps every version.
+                - generic [ref=f4e145]:
+                  - 'button "landing page Design a landing page for a coffee subscription: warm, editorial, one clear call to action" [ref=f4e146] [cursor=pointer]':
+                    - generic [ref=f4e147]: landing page
+                    - generic [ref=f4e148]: "Design a landing page for a coffee subscription: warm, editorial, one clear call to action"
+                  - 'button "dashboard Design an analytics dashboard for a small online shop: revenue, orders, top products" [ref=f4e149] [cursor=pointer]':
+                    - generic [ref=f4e150]: dashboard
+                    - generic [ref=f4e151]: "Design an analytics dashboard for a small online shop: revenue, orders, top products"
+                  - button "mobile flow Design a three-screen mobile onboarding for a habit tracker" [ref=f4e152] [cursor=pointer]:
+                    - generic [ref=f4e153]: mobile flow
+                    - generic [ref=f4e154]: Design a three-screen mobile onboarding for a habit tracker
+                  - button "options Give me three different directions for a pricing page, as separate files" [ref=f4e155] [cursor=pointer]:
+                    - generic [ref=f4e156]: options
+                    - generic [ref=f4e157]: Give me three different directions for a pricing page, as separate files
+                - button "Show different examples" [ref=f4e158] [cursor=pointer]: Show me something else
+              - generic [ref=f4e162]:
+                - generic [ref=f4e163]:
+                  - generic [aria-hidden] [ref=f4e164]: ❯
+                  - textbox "Message shmakk" [active] [ref=f4e165]:
+                    - /placeholder: Describe what to design
+                - generic [ref=f4e166]:
+                  - button "deepseek-v4-flash" [ref=f4e168] [cursor=pointer]
+                  - button "Attach files" [ref=f4e174] [cursor=pointer]
+                  - button "Read replies aloud" [ref=f4e175] [cursor=pointer]
+                  - button "Voice input" [ref=f4e176] [cursor=pointer]
+                  - button "Send" [disabled] [ref=f4e177]
+            - iframe [ref=f4e184]
+        - complementary "Inspector":
+          - generic [ref=f4e185]:
+            - generic [ref=f4e186]: Browser
+            - button "Close inspector" [ref=f4e190] [cursor=pointer]
+          - generic:
+            - generic:
+              - generic [ref=f4e191]:
+                - generic:
+                  - textbox "Preview URL" [ref=f4e192]:
+                    - /placeholder: http://localhost:5173
+                    - text: http://localhost:5173
+                  - button "Open address" [ref=f4e193] [cursor=pointer]
+                - button "Reload preview" [ref=f4e194] [cursor=pointer]
+                - button "Open in a new tab" [ref=f4e195] [cursor=pointer]
+              - generic [ref=f4e196]:
+                - generic:
+                  - button ":5173" [ref=f4e197] [cursor=pointer]
+                  - button ":3000" [ref=f4e198] [cursor=pointer]
+                  - button ":8080" [ref=f4e199] [cursor=pointer]
+                - radiogroup "Preview size" [ref=f4e200]:
+                  - radio "desktop" [checked] [ref=f4e201] [cursor=pointer]
+                  - radio "tablet" [ref=f4e204] [cursor=pointer]
+                  - radio "phone" [ref=f4e207] [cursor=pointer]
+              - generic:
+                - generic:
+                  - iframe
+              - generic [ref=f4e210]:
+                - generic: Chromium — the agent can drive this page with its browser tools.
+                - button "Ask the agent to inspect this page" [ref=f4e211] [cursor=pointer]
+  - region "Notifications alt+T"

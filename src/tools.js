@@ -10,11 +10,21 @@ const { dispatchBrowser, classifyBrowserCommand } = require('./browser');
 const { dispatchMobile, classifyMobileCommand } = require('./mobile');
 const { dispatchElectron, classifyElectronCommand } = require('./electron');
 const { recordEdit } = require('./edit-tracker');
+const { isImagePath, mimeForFile, normalizeImage } = require('./images');
 const { appendMemory } = require('./memory');
 const { isMutationTool, hashArgs } = require('./guard');
 const https = require('https');
 const http = require('http');
 const os = require('os');
+
+// Lazy-load the deliver module (writes to the web UI state dir). Only needed
+// when deliver_file is called; CLI sessions still get a working file + URL.
+let _deliver = null;
+function _getDeliver() {
+  if (_deliver) return _deliver;
+  _deliver = require('./webui/deliver');
+  return _deliver;
+}
 
 // Lazy-load SSH (optional — only required when ssh_* tools are called).
 let _ssh = null;
@@ -165,18 +175,32 @@ const TOOLS = [
   }},
   { type: 'function', function: {
     name: 'browser',
-    description: 'Control a headless browser. Commands: navigate (go to URL), click (CSS selector), type (fill input), read_page (extract page content, links, forms), screenshot (save PNG), evaluate (run JS), select (dropdown), wait (for selector or seconds), scroll (up/down), close.',
+    description: 'Control a headless browser. Commands: show (open the live browser pane in the web UI and navigate to a URL), navigate (go to URL), click (CSS selector), type (fill input), read_page (extract page content, links, forms), screenshot (save PNG), evaluate (run JS), select (dropdown), wait (for selector or seconds), scroll (up/down), close.',
     parameters: {
       type: 'object',
       required: ['command'],
       properties: {
-        command: { type: 'string', enum: ['navigate', 'click', 'type', 'read_page', 'screenshot', 'evaluate', 'select', 'wait', 'scroll', 'close'] },
+        command: { type: 'string', enum: ['show', 'navigate', 'click', 'type', 'read_page', 'screenshot', 'evaluate', 'select', 'wait', 'scroll', 'close'] },
         url: { type: 'string', description: 'URL for navigate' },
         selector: { type: 'string', description: 'CSS selector for click/type/select/wait' },
         text: { type: 'string', description: 'Text to type or option to select' },
         code: { type: 'string', description: 'JavaScript for evaluate' },
         seconds: { type: 'number', description: 'Seconds to wait' },
         direction: { type: 'string', enum: ['up', 'down'], description: 'Scroll direction' },
+      },
+    },
+  }},
+  { type: 'function', function: {
+    name: 'deliver_file',
+    description: 'Give the user a file as a download in chat. Provide either `content` (text) or `data` (base64, for images/binary). Returns `url`, `viewUrl`, and a ready-to-paste `markdown` link; put that markdown link in your reply and the web UI renders it as a download button (images render inline via viewUrl).',
+    parameters: {
+      type: 'object',
+      required: ['name'],
+      properties: {
+        name: { type: 'string', description: 'File name, e.g. report.md or chart.png' },
+        content: { type: 'string', description: 'Text content of the file (for text files)' },
+        data: { type: 'string', description: 'Base64-encoded bytes (for images and binary files)' },
+        mimeType: { type: 'string', description: 'MIME type; inferred from the name when omitted' },
       },
     },
   }},
@@ -351,6 +375,7 @@ function classifyTool(name, args, mcpManager) {
   if (name === 'image_gen') return 'unsafe';       // external API call, costs money
   if (name === 'tts_generate') return 'safe';       // local-only, no network
   if (name === 'video_probe') return 'safe';        // read-only local metadata
+  if (name === 'deliver_file') return 'safe';       // writes only into the user's own state dir
   if (name === 'video_compose') return 'safe';      // local ffmpeg, reads only workspace files
   if (name === 'ssh_run' || name === 'ssh_push' || name === 'ssh_pull') return 'unsafe';
   return 'uncertain';
@@ -368,8 +393,10 @@ function describeTool(name, args, mcpManager) {
   if (name === 'web_search') return `web search: "${(args.query || '').slice(0, 100)}"`;
   if (name === 'fetch_url') return `fetch ${args.url}`;
   if (name === 'remember') return `remember [${args.scope || 'workspace'}/${args.category || 'Notes'}]: ${(args.fact || '').slice(0, 100)}`;
+  if (name === 'deliver_file') return `deliver ${args.name || 'file'}`;
   if (name === 'browser') {
     const cmd = args.command || '';
+    if (cmd === 'show') return `browser show ${args.url || ''}`;
     if (cmd === 'navigate') return `browser navigate ${args.url || ''}`;
     if (cmd === 'click') return `browser click ${args.selector || ''}`;
     if (cmd === 'type') return `browser type into ${args.selector || ''}`;
@@ -466,28 +493,28 @@ async function dispatchTool(name, args, roots, confirmTool, signal, mcpManager) 
     if (!p) return { error: 'path outside workspace' };
     try {
       const buf = fs.readFileSync(p);
-      const ext = path.extname(p).toLowerCase();
 
-      // Image files: return as base64 for vision-capable providers.
+      // Image files: return as base64 for vision-capable providers. Formats the
+      // provider cannot read (bmp, tiff, ico, avif, heic, svg) are converted to
+      // png first; if that is impossible the image is described in words only.
       // Mode-specific sub-reads don't apply to images — always return full.
-      const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg']);
-      const MIME_MAP = {
-        '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-        '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp',
-        '.svg': 'image/svg+xml',
-      };
-      if (IMAGE_EXTS.has(ext)) {
+      if (isImagePath(p)) {
         const maxImageBytes = 2 * 1024 * 1024; // 2 MB binary (~2.7 MB base64)
         const slice = buf.length > maxImageBytes ? buf.subarray(0, maxImageBytes) : buf;
         const b64 = slice.toString('base64');
+        const normalized = await normalizeImage({
+          name: path.basename(p),
+          mimeType: mimeForFile(p, slice),
+          data: b64,
+          dataLength: b64.length,
+          truncated: buf.length > maxImageBytes,
+        });
+        const notes = [];
+        if (normalized.convertedFrom) notes.push(`converted from ${normalized.convertedFrom}`);
+        if (normalized.unsupported) notes.push(`${normalized.mimeType || 'unknown format'} cannot be shown to the model${normalized.reason ? ` (${normalized.reason})` : ''}`);
         return {
-          content: `[Image: ${path.basename(p)} — ${buf.length} bytes${buf.length > maxImageBytes ? ' (truncated to 2MB for display)' : ''}]`,
-          images: [{
-            mimeType: MIME_MAP[ext],
-            data: b64,
-            dataLength: b64.length,
-            truncated: buf.length > maxImageBytes,
-          }],
+          content: `[Image: ${path.basename(p)} — ${buf.length} bytes${buf.length > maxImageBytes ? ' (truncated to 2MB for display)' : ''}${notes.length ? ` — ${notes.join('; ')}` : ''}]`,
+          images: normalized.unsupported ? [] : [normalized],
         };
       }
 
@@ -613,6 +640,28 @@ async function dispatchTool(name, args, roots, confirmTool, signal, mcpManager) 
     return r.ok
       ? { ok: true, saved_to: r.path, line: r.line }
       : { error: r.error };
+  }
+  if (name === 'deliver_file') {
+    try {
+      const d = _getDeliver().create({
+        name: args.name,
+        content: args.content,
+        data: args.data,
+        mimeType: args.mimeType,
+      });
+      return {
+        ok: true,
+        url: d.url,
+        viewUrl: d.viewUrl,
+        filename: d.name,
+        mimeType: d.mimeType,
+        size: d.size,
+        markdown: d.markdown,
+        hint: 'Paste the `markdown` link into your reply so the user gets a download button.',
+      };
+    } catch (e) {
+      return { error: `deliver_file failed: ${e.message}` };
+    }
   }
   if (name === 'image_gen') {
     const apiKey = process.env.SHMAKK_OPENAI_API_KEY;

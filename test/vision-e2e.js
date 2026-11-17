@@ -300,7 +300,81 @@ test('describeImages skips images without base64 data', async () => {
   assert.strictEqual(result, null, 'empty images should return null');
 });
 
-// ── 7. Agent vision pipeline integration check ─────────────────────────────
+// ── 7. Composer images become vision content blocks ───────────────────────
+
+test('imageBlocks builds a text part plus one data-URI per image', () => {
+  const { imageBlocks } = require('../src/llm');
+  const blocks = imageBlocks('what is this?', [
+    { mimeType: 'image/jpeg', data: 'AAA' },
+    { mimeType: 'image/png', data: 'BBB' },
+  ]);
+  assert.strictEqual(blocks.length, 3, 'one text part plus two images');
+  assert.deepStrictEqual(blocks[0], { type: 'text', text: 'what is this?' });
+  assert.strictEqual(blocks[1].type, 'image_url');
+  assert.strictEqual(blocks[1].image_url.url, 'data:image/jpeg;base64,AAA');
+  assert.strictEqual(blocks[1].image_url.detail, 'auto');
+  assert.strictEqual(blocks[2].image_url.url, 'data:image/png;base64,BBB');
+});
+
+test('imageBlocks defaults to a text placeholder and png mime', () => {
+  const { imageBlocks } = require('../src/llm');
+  const blocks = imageBlocks('', [{ data: 'AAA' }]);
+  assert.strictEqual(blocks[0].text, '[image attached]');
+  assert.strictEqual(blocks[1].image_url.url, 'data:image/png;base64,AAA');
+});
+
+test('userContentWithImages passes plain text through when there are no images', async () => {
+  const { userContentWithImages } = require('../src/llm');
+  assert.strictEqual(await userContentWithImages('hello', null), 'hello');
+  assert.strictEqual(await userContentWithImages('hello', []), 'hello');
+  assert.strictEqual(await userContentWithImages('hello', [{ mimeType: 'image/png' }]), 'hello');
+});
+
+test('userContentWithImages never inlines base64 for a non-vision model', async () => {
+  // The text fallback only applies when no vision endpoint can describe the
+  // image; with one configured this would make a real API call instead.
+  const { getModelRegistry, getVisionSupport } = require('../src/endpoints');
+  const reg = getModelRegistry();
+  const visionTarget = !!getVisionSupport() || Object.values(reg.models || {}).some((m) => m && m.vision);
+  skipUnless('a vision endpoint is configured, so the text fallback is not used', !visionTarget);
+
+  const { userContentWithImages } = require('../src/llm');
+  const out = await userContentWithImages('what is this?', [{ name: 'shot.png', mimeType: 'image/png', data: 'QUJD' }]);
+  assert.strictEqual(typeof out, 'string', 'non-vision models get text, not image blocks');
+  assert.ok(out.includes('what is this?'), 'keeps the user text');
+  assert.ok(out.includes('shot.png'), 'names the attached image');
+  assert.ok(!out.includes('QUJD'), 'never leaks raw base64 into the prompt');
+});
+
+test('stripImageBlocks keeps history text-only', () => {
+  const { stripImageBlocks } = require('../src/llm');
+  const out = stripImageBlocks([
+    { role: 'user', content: [{ type: 'text', text: 'look' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,AAA' } }] },
+    { role: 'assistant', content: 'nice' },
+    { role: 'user', content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,BBB' } }] },
+  ]);
+  assert.deepStrictEqual(out[0], { role: 'user', content: 'look' });
+  assert.deepStrictEqual(out[1], { role: 'assistant', content: 'nice' });
+  assert.deepStrictEqual(out[2], { role: 'user', content: '[image attachment]' });
+  assert.ok(!JSON.stringify(out).includes('base64'), 'no base64 survives');
+});
+
+test('stripImageBlocks tolerates junk input', () => {
+  const { stripImageBlocks } = require('../src/llm');
+  assert.strictEqual(stripImageBlocks(null), null);
+  assert.deepStrictEqual(stripImageBlocks([null, { role: 'user', content: 'plain' }]), [null, { role: 'user', content: 'plain' }]);
+});
+
+test('running a turn with images hands back text-only history', async () => {
+  // runAgent must not persist image blocks: a second turn would resend them.
+  const agentSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'agent.js'), 'utf8');
+  assert.ok(agentSrc.includes('userContentWithImages'), 'agent builds the user turn via the shared helper');
+  assert.ok(agentSrc.includes('const historyOut = () => stripImageBlocks(messages.slice(1))'),
+    'agent strips image blocks from returned history');
+  assert.ok(!/return messages\.slice\(1\)/.test(agentSrc), 'no return path bypasses historyOut()');
+});
+
+// ── 8. Agent vision pipeline integration check ─────────────────────────────
 
 test('agent imports vision functions from llm', () => {
   // Verify the agent module imports the right functions
@@ -309,8 +383,14 @@ test('agent imports vision functions from llm', () => {
     'agent.js should import supportsVision and describeImages from llm');
   assert.ok(agentSrc.includes('toolImages.length > 0'),
     'agent.js should handle toolImages extraction');
-  assert.ok(agentSrc.includes('image_url'),
-    'agent.js should send image_url blocks');
+  // Image blocks are built by the shared helpers in llm.js, never inline.
+  assert.ok(agentSrc.includes('imageBlocks('),
+    'agent.js should send tool images via the shared imageBlocks helper');
+  assert.ok(!agentSrc.includes('"image_url"') && !agentSrc.includes("'image_url'"),
+    'agent.js should not hand-roll image_url blocks');
+  const llmSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'llm.js'), 'utf8');
+  assert.ok(/function imageBlocks/.test(llmSrc), 'llm.js owns imageBlocks()');
+  assert.ok(llmSrc.includes("type: 'image_url'"), 'llm.js builds image_url content blocks');
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

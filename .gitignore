@@ -11,6 +11,8 @@ tmp/
 .shmakk-desktop/
 .codex/
 .claude/
+.playwright/
+.playwright-mcp/
 # editor / misc
 .vscode/
 .codemakk/
@@ -24,3 +26,11 @@ tmp/
 --help
 conftest.c
 create-ml-country-mapping-arch.conf
+
+# web UI build output (npm run build:web) and desktop packaging
+src/webui/public/
+desktop/dist/
+web/dist/
+
+# desktop-mcp
+desktop-mcp/*.egg-info/

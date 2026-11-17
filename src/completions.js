@@ -16,6 +16,7 @@ const FLAGS = [
   { flag: '--yes-files', arg: false, desc: 'Auto-accept AI file writes/edits' },
   { flag: '--no-ai', arg: false, desc: 'Disable AI entirely (pure passthrough)' },
   { flag: '--no-correction', arg: false, desc: 'Disable command correction' },
+  { flag: '--no-plan-signoff', arg: false, desc: 'Skip y/n sign-off on reviewed plan tasks' },
   { flag: '--help', arg: false, desc: 'Show help' },
   { flag: '--debug', arg: false, desc: 'Verbose logging' },
   { flag: '--print-config', arg: false, desc: 'Print resolved config and exit' },
@@ -33,10 +34,15 @@ const FLAGS = [
   { flag: '--tts', arg: false, desc: 'Text-to-Speech: spoken responses' },
   { flag: '--sts', arg: false, desc: 'Speech-to-Speech: always-on mic + TTS' },
   { flag: '--voice', arg: false, desc: 'Enable voice input (stt shortcut)' },
+  { flag: '--web', arg: false, desc: 'Start the web UI' },
+  { flag: '--desktop', arg: false, desc: 'Open the desktop app (Electron)' },
+  { flag: '--no-open', arg: false, desc: "Don't open the browser for --web" },
   { flag: '--model-recommendation', arg: false, desc: 'Route each model call via main model recommendation' },
 
   // flags with arguments
   { flag: '--workspace', arg: '<path>', desc: 'Override workspace root' },
+  { flag: '--port', arg: '<n>', desc: 'Port for --web (default 4317)' },
+  { flag: '--host', arg: '<addr>', desc: 'Bind address for --web' },
   { flag: '--profile', arg: '<name>', desc: 'Startup profile (tiny|balanced|deep|builder|large-app)' },
   { flag: '--profile-set', arg: '<name>', desc: 'Switch profile and restart' },
   { flag: '--endpoint', arg: '<name>', desc: 'Use model preset from ~/.config/shmakk/endpoints.json' },

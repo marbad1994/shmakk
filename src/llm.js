@@ -5,6 +5,7 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const { getCurrentEndpoint, getCurrentEndpointName, getModelRegistry, supportsVision, getVisionSupport } = require('./endpoints');
+const { normalizeImages, skippedNote } = require('./images');
 
 function parseHeaders(s) {
   const out = {};
@@ -19,12 +20,8 @@ function parseHeaders(s) {
   return out;
 }
 
-function buildHeaders(customHeaders, registry) {
-  const headers = parseHeaders(customHeaders);
-  if (registry) {
-    headers['x-registry'] = registry;
-  }
-  return headers;
+function buildHeaders(customHeaders) {
+  return parseHeaders(customHeaders);
 }
 
 // ── Retry helper ───────────────────────────────────────────────────────────
@@ -109,7 +106,6 @@ function envForProvider() {
       baseURL: activeEndpoint.base_url,
       apiKey: activeEndpoint.api_key,
       headers: activeEndpoint.headers,
-      registry: activeEndpoint.registry,
       model: activeEndpoint.model,
     };
   }
@@ -120,7 +116,6 @@ function envForProvider() {
     baseURL: process.env.SHMAKK_BASE_URL,
     apiKey: process.env.SHMAKK_API_KEY,
     headers: process.env.SHMAKK_HEADERS,
-    registry: process.env.SHMAKK_REGISTRY,
     model: process.env.SHMAKK_MODEL,
   };
 }
@@ -131,12 +126,14 @@ function isConfigured() {
   if (cfg.provider === 'anthropic') return true;  // claude-proxy handles auth via OAuth
   if (cfg.provider === 'codex') return true;  // codex-proxy handles auth via OAuth
   if (cfg.provider === 'nvidia') return !!cfg.apiKey && !!OpenAI;
+  if (cfg.provider === 'xai' || cfg.provider === 'grok') return !!cfg.apiKey && !!OpenAI;
   return (!!cfg.baseURL || cfg.provider === 'openai') && !!OpenAI;
 }
 
 function getDefaultBaseURL(provider) {
   if (provider === 'openai') return 'https://local:8095/v1';
   if (provider === 'nvidia') return 'https://integrate.api.nvidia.com/v1';
+  if (provider === 'xai' || provider === 'grok') return 'https://api.x.ai/v1';
   return undefined;
 }
 
@@ -228,6 +225,24 @@ function makeClientForEndpoint(name) {
     model: cfg.model || selected,
     client: makeProviderClient(cfg),
   };
+}
+
+// Resolve the client for a requested model id. When the id (or a registry
+// entry name) matches an entry in endpoints.json, that entry's base URL, key,
+// headers and provider are used, so picking a model from the registry also
+// switches provider instead of sending a foreign model name to the active one.
+function makeClientForModel(modelId) {
+  const requested = String(modelId || '').trim();
+  const registry = getModelRegistry();
+  if (requested) {
+    for (const [name, cfg] of Object.entries(registry.models || {})) {
+      if (name === requested || (cfg.model || name) === requested) {
+        const config = configFromModelEntry(name, cfg);
+        return { model: config.model, client: makeProviderClient(config) };
+      }
+    }
+  }
+  return { model: requested || modelFor(), client: makeClient() };
 }
 
 function modelFor() {
@@ -857,42 +872,278 @@ function isDeepSeekProvider() {
   return base.includes('deepseek');
 }
 
-function getDeepSeekOptions(taskType) {
-  if (!isDeepSeekProvider()) return {};
+// `max` is DeepSeek's top thinking effort. It is not on the OpenAI ladder
+// (ALL_EFFORT_LEVELS), but it is a real level the composer can store.
+const REASONING_EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+const ALL_EFFORT_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh'];
+const KNOWN_EFFORT_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+const DEEPSEEK_EFFORT_LEVELS = ['low', 'high', 'max'];
 
-  // Respect runtime override (set after a DSML leak).
-  const forceNoThinking = process.env._SHMAKK_FORCE_NO_THINKING === '1';
+function normalizeEffort(effort) {
+  const v = String(effort || '').trim().toLowerCase();
+  return REASONING_EFFORTS.has(v) ? v : null;
+}
 
-  if (forceNoThinking) {
+// Live catalog of reasoning_effort levels discovered from provider /models
+// responses (xAI exposes capabilities.reasoning_effort). Keyed by model id
+// and alias. Cleared when the base URL changes.
+const effortCatalog = new Map(); // modelId -> EffortLevel[]
+let effortCatalogBase = null;
+
+function clearEffortCatalog() {
+  effortCatalog.clear();
+  effortCatalogBase = null;
+}
+
+/** Normalize an endpoints.json `effort` override into a level list, or null when unset. */
+function parseEffortOverride(raw) {
+  if (raw === undefined) return null;
+  if (raw === false || raw === null) return [];
+  if (raw === true) return ALL_EFFORT_LEVELS.slice();
+  const list = Array.isArray(raw)
+    ? raw
+    : String(raw).split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
+  // Keep only levels shmakk knows; drop provider-only tokens like "none".
+  return list.map((s) => String(s).trim().toLowerCase()).filter((v) => REASONING_EFFORTS.has(v));
+}
+
+function filterEffortLevels(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const raw of list) {
+    const v = String(raw || '').trim().toLowerCase();
+    if (REASONING_EFFORTS.has(v) && !out.includes(v)) out.push(v);
+  }
+  return out;
+}
+
+/**
+ * Name/provider heuristics used when the live /models catalog has nothing for
+ * this id. Returns [] when the model is known not to take reasoning_effort
+ * (dropdown should hide). Unknown models also return [] so we never send a
+ * parameter the provider will reject.
+ */
+function heuristicEffortLevels(model, { baseUrl = '', provider = '' } = {}) {
+  const m = String(model || '').toLowerCase();
+  const base = String(baseUrl || '').toLowerCase();
+  const p = String(provider || '').toLowerCase();
+  if (!m && !base && !p) return [];
+
+  // DeepSeek thinking effort is low/high/max (api-docs thinking mode). Legacy
+  // aliases such as deepseek-v4-flash are not always listed by /models, so the
+  // name or host is enough to show the control.
+  if (base.includes('deepseek') || p.includes('deepseek') || m.includes('deepseek')) {
+    return DEEPSEEK_EFFORT_LEVELS.slice();
+  }
+
+  // Anthropic extended thinking uses budget tokens, not reasoning_effort.
+  if (p === 'anthropic' || /(^|\/)claude/.test(m)) return [];
+
+  // OpenAI o-series (o1, o3, o4-mini, ...).
+  if (/(^|\/)o[1-9]([.-]|$)/.test(m) || /(^|[^a-z])o[1-9](-mini|-pro)?\b/.test(m)) {
+    return ['low', 'medium', 'high'];
+  }
+
+  // GPT-5 family. Pro/codex variants accept xhigh; the rest stop at high.
+  if (/gpt-5/.test(m)) {
+    if (/pro|codex/.test(m)) return ['minimal', 'low', 'medium', 'high', 'xhigh'];
+    return ['minimal', 'low', 'medium', 'high'];
+  }
+
+  // xAI / Grok — mirror the public model catalog when live fetch is unavailable.
+  const xai = base.includes('x.ai') || p === 'xai' || p === 'grok' || m.startsWith('grok');
+  if (xai) {
+    if (/non-reasoning|imagine/.test(m)) return [];
+    // grok-4.3 ships "none" as the off switch; our UI uses auto for that.
+    if (/grok-4\.3\b/.test(m)) return ['low', 'medium', 'high', 'xhigh'];
+    if (/grok-4\.[5-9]\b|grok-4\.[1-9]\d/.test(m)) return ['low', 'medium', 'high', 'xhigh'];
+    if (/grok-3/.test(m)) return ['low', 'high'];
+    // grok-build / code-fast and several 4.20 variants reason but expose no effort knob.
+    return [];
+  }
+
+  return [];
+}
+
+function lookupEffortCatalog(model) {
+  const id = String(model || '').trim();
+  if (!id) return null;
+  if (effortCatalog.has(id)) return effortCatalog.get(id);
+  const lower = id.toLowerCase();
+  for (const [key, levels] of effortCatalog.entries()) {
+    if (key.toLowerCase() === lower) return levels;
+  }
+  return null;
+}
+
+/**
+ * Levels the UI may offer for a model. Order of precedence:
+ *   1. endpoints.json `effort` override on the entry
+ *   2. live /models catalog (when the provider advertises capabilities)
+ *   3. name/provider heuristics
+ * Empty array => model does not take reasoning_effort; hide the control.
+ */
+function effortLevelsForModel(model, opts = {}) {
+  const override = parseEffortOverride(opts.effort);
+  if (override) return override;
+
+  const live = lookupEffortCatalog(model);
+  // null = catalog has no entry (fall through); [] = provider said no effort.
+  if (live !== null) return live.slice();
+
+  return heuristicEffortLevels(model, opts);
+}
+
+/** Ingest a /models page (OpenAI-shaped) into the live effort catalog. */
+function ingestEffortCatalog(models, baseUrl = null) {
+  const base = baseUrl == null ? effortCatalogBase : String(baseUrl || '');
+  if (effortCatalogBase !== base) {
+    effortCatalog.clear();
+    effortCatalogBase = base;
+  }
+  const list = Array.isArray(models) ? models : [];
+  for (const entry of list) {
+    if (!entry || typeof entry !== 'object') continue;
+    const id = String(entry.id || entry.name || '').trim();
+    if (!id) continue;
+    const raw = advertisedEffortLevels(entry);
+    // Only write an entry when the provider spoke about effort. Models with no
+    // capabilities block stay absent so heuristics can still apply.
+    if (raw == null) continue;
+    const levels = filterEffortLevels(raw);
+    effortCatalog.set(id, levels);
+    const aliases = Array.isArray(entry.aliases) ? entry.aliases : [];
+    for (const alias of aliases) {
+      const a = String(alias || '').trim();
+      if (a) effortCatalog.set(a, levels);
+    }
+  }
+  return effortCatalog.size;
+}
+
+/**
+ * Pull /models from the active client and refresh the effort catalog.
+ * Failures are silent — heuristics remain the fallback.
+ */
+async function refreshEffortCatalog(client, baseUrl = null) {
+  if (!client || !client.models || typeof client.models.list !== 'function') return 0;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    let page;
+    try {
+      page = await client.models.list({ signal: ctrl.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+    const models = (page && page.data) || (Array.isArray(page) ? page : []);
+    return ingestEffortCatalog(models, baseUrl);
+  } catch {
+    return 0;
+  }
+}
+
+/** Levels a /models entry advertises, or null when it said nothing about effort. */
+function advertisedEffortLevels(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const caps = entry.capabilities || entry.features || {};
+  const effortObj = [entry.effort, caps.effort].find((v) => v && typeof v === 'object' && !Array.isArray(v));
+  return (
+    caps.reasoning_effort ||
+    caps.reasoningEffort ||
+    (caps.reasoningEffortOptions && caps.reasoningEffortOptions.supportedEfforts) ||
+    entry.reasoning_effort ||
+    (effortObj && (effortObj.supported_levels || effortObj.supportedLevels || effortObj.levels)) ||
+    (Array.isArray(entry.effort) ? entry.effort : null) ||
+    null
+  );
+}
+
+function providerBaseUrl() {
+  const cfg = envForProvider();
+  return cfg.baseURL || process.env.SHMAKK_BASE_URL || '';
+}
+
+/** Base URL of the registry entry that would actually serve this model id. */
+function baseUrlForModel(model) {
+  const id = String(model || '').trim();
+  if (id) {
+    try {
+      const registry = getModelRegistry();
+      for (const [name, cfg] of Object.entries((registry && registry.models) || {})) {
+        if (name === id || String(cfg.model || name) === id) return cfg.base_url || '';
+      }
+    } catch { /* registry missing: fall through to the active endpoint */ }
+  }
+  return providerBaseUrl();
+}
+
+function isDeepSeekTarget(model, baseUrl) {
+  const m = String(model || '').toLowerCase();
+  const base = String(baseUrl || '').toLowerCase();
+  if (m.includes('deepseek') || base.includes('deepseek')) return true;
+  // No model id: the active endpoint decides (CLI and the default chat model).
+  if (!model) return isDeepSeekProvider();
+  return false;
+}
+
+// DeepSeek maps the OpenAI ladder onto low/high, and only `max` stays max.
+function mapDeepSeekEffort(effort) {
+  const level = normalizeEffort(effort);
+  if (level === 'minimal' || level === 'low') return 'low';
+  if (level === 'max') return 'max';
+  return 'high';
+}
+
+// Reasoning / thinking options for a request.
+//
+// DeepSeek takes `reasoning_effort` (low/high/max) plus its own `thinking`
+// flag. Tool and mutation turns still disable thinking and omit effort: high
+// or max thinking makes DSML leaks more likely in streaming tool loops.
+// Other OpenAI-compatible providers take `reasoning_effort` only when the
+// caller asked for a level the model accepts.
+function getReasoningOptions(taskType, effort = null, model = null) {
+  const resolvedModel = model || modelFor();
+  const baseUrl = baseUrlForModel(resolvedModel);
+  if (isDeepSeekTarget(resolvedModel, baseUrl)) {
+    // Respect runtime override (set after a DSML leak).
+    const forceNoThinking = process.env._SHMAKK_FORCE_NO_THINKING === '1';
+
+    const toolOrMutationTurn =
+      taskType === 'edit_file' ||
+      taskType === 'run_command' ||
+      taskType === 'apply_patch' ||
+      taskType === 'tool_loop';
+
+    if (forceNoThinking || toolOrMutationTurn) {
+      return {
+        extra_body: {
+          thinking: { type: 'disabled' },
+        },
+        // Do NOT send reasoning_effort here.
+      };
+    }
+
+    // Chat / planning turns: honor the composer selection. Unset stays at
+    // the provider default, which is high.
     return {
+      reasoning_effort: mapDeepSeekEffort(effort),
       extra_body: {
-        thinking: { type: 'disabled' },
+        thinking: { type: 'enabled' },
       },
     };
   }
 
-  const toolOrMutationTurn =
-    taskType === 'edit_file' ||
-    taskType === 'run_command' ||
-    taskType === 'apply_patch' ||
-    taskType === 'tool_loop';
+  const level = normalizeEffort(effort);
+  if (!level) return {};
 
-  if (toolOrMutationTurn) {
-    return {
-      extra_body: {
-        thinking: { type: 'disabled' },
-      },
-      // Do NOT send reasoning_effort here.
-    };
-  }
-
-  // Non-mutation / planning turns: reasoning is fine.
-  return {
-    reasoning_effort: 'high',
-    extra_body: {
-      thinking: { type: 'enabled' },
-    },
-  };
+  // Drop levels the model actually being called cannot take.
+  const supported = effortLevelsForModel(resolvedModel, {
+    baseUrl: baseUrl || providerBaseUrl(),
+    provider: '',
+  });
+  if (!supported.includes(level)) return {};
+  return { reasoning_effort: level };
 }
 
 // ── Vision fallback: describe images via a vision-capable endpoint ────────
@@ -901,8 +1152,9 @@ function getDeepSeekOptions(taskType) {
 // describe them as text for the non-vision model.
 
 async function describeImages(images, signal) {
-  // Filter to images with actual base64 data
-  const valid = (images || []).filter((img) => img && img.data);
+  // Only images with base64 data, and only formats a vision model will accept
+  // (bmp/tiff/ico/avif/heic/svg get converted to png first, or dropped).
+  const { images: valid } = await normalizeImages(images);
   if (!valid.length) return null;
 
   let visionCfg = getVisionSupport();
@@ -965,15 +1217,74 @@ async function describeImages(images, signal) {
   }
 }
 
+// ── Outgoing user turns that carry images ────────────────────────────────
+// Shared by the agent (composer + design images) and Chat mode so both paths
+// produce identical message shapes.
+
+function imageBlocks(text, images) {
+  return [
+    { type: 'text', text: text || '[image attached]' },
+    ...images.map((img) => ({
+      type: 'image_url',
+      image_url: { url: `data:${img.mimeType || 'image/png'};base64,${img.data}`, detail: 'auto' },
+    })),
+  ];
+}
+
+// Returns a string when the active endpoint cannot see images (text note or a
+// description from the visionSupport endpoint), otherwise multimodal blocks.
+async function userContentWithImages(text, images, signal) {
+  const { images: valid, skipped } = await normalizeImages(images);
+  const note = skippedNote(skipped);
+  if (!valid.length) return note ? `${text}\n\n${note}`.trim() : text;
+
+  if (supportsVision()) return imageBlocks(note ? `${text}\n\n${note}` : text, valid);
+
+  const desc = await describeImages(valid, signal);
+  if (desc) return [text, desc, note].filter(Boolean).join('\n\n').trim();
+
+  const meta = valid
+    .map((img, i) => `[Image #${i + 1}: ${img.name || 'image'}, ${img.mimeType || 'image/png'}]`)
+    .join(', ');
+  const tail = `${meta} (the active model cannot view images and no vision endpoint is configured)`;
+  return [text, tail, note].filter(Boolean).join('\n\n').trim();
+}
+
+// History must stay text-only: base64 blocks are large and would be resent on
+// every later turn (and persisted into the conversation file).
+function stripImageBlocks(messages) {
+  if (!Array.isArray(messages)) return messages;
+  return messages.map((m) => {
+    if (!m || !Array.isArray(m.content)) return m;
+    const text = m.content.filter((p) => p && p.type === 'text').map((p) => p.text).join('\n').trim();
+    return { ...m, content: text || '[image attachment]' };
+  });
+}
+
 module.exports = {
   makeClient,
   makeClientForEndpoint,
+  makeClientForModel,
   modelFor,
   isConfigured,
   ensureModelRuntime,
-  getDeepSeekOptions,
+  getReasoningOptions,
+  normalizeEffort,
   isDeepSeekProvider,
+  effortLevelsForModel,
+  heuristicEffortLevels,
+  ingestEffortCatalog,
+  refreshEffortCatalog,
+  clearEffortCatalog,
+  parseEffortOverride,
+  ALL_EFFORT_LEVELS,
+  KNOWN_EFFORT_LEVELS,
   supportsVision,
   describeImages,
+  userContentWithImages,
+  stripImageBlocks,
+  imageBlocks,
+  normalizeImages,
+  skippedNote,
   _test: { downgradeVisionMessages, hasVisionContent, isImageUrlSchemaError },
 };

@@ -1,7 +1,7 @@
 {
   "name": "shmakk",
-  "version": "1.2.5",
-  "description": "AI-supervised terminal wrapper — command correction, tool-driven tasks, safety controls",
+  "version": "1.3.0",
+  "description": "AI-supervised terminal wrapper — command correction, tool-driven tasks, safety controls — with a web and desktop interface",
   "license": "MIT",
   "keywords": [
     "terminal",
@@ -11,7 +11,10 @@
     "cli",
     "voice",
     "speech-to-text",
-    "text-to-speech"
+    "text-to-speech",
+    "web-ui",
+    "electron",
+    "desktop"
   ],
   "bin": {
     "shmakk": "bin/shmakk.js"
@@ -22,6 +25,11 @@
     "skills/",
     "scripts/",
     "docs/",
+    "desktop/main.js",
+    "desktop/preload.js",
+    "desktop/package.json",
+    "desktop/icon.png",
+    "desktop/README.md",
     "README.md",
     "LICENSE",
     ".env.example"
@@ -33,8 +41,8 @@
     "start": "node bin/shmakk.js",
     "dev": "node bin/shmakk.js --debug",
     "test": "node test/units.js",
+    "check": "node -e \"require('./src/agent'); require('./src/orchestrator'); require('./src/webui/server'); console.log('check-ok')\"",
     "test-vision": "node test/vision-e2e.js",
-    "check": "node -e \"require('./src/index'); require('./src/agent'); require('./src/orchestrator'); console.log('check-ok')\"",
     "mock-llm": "node test/mock-llm.js",
     "global:setup": "node src/global-setup.js",
     "global:link": "npm link && npm run global:setup",
@@ -43,7 +51,13 @@
     "global:reinstall": "npm uninstall -g shmakk && npm install -g . && npm run global:setup",
     "setup": "npm install && npm run check && npm run test",
     "setup:voice": "npm install --include=optional && node src/setup-voice.js",
-    "global:doctor": "node src/global-doctor.js"
+    "global:doctor": "node src/global-doctor.js",
+    "web": "node bin/shmakk.js --web",
+    "desktop": "node bin/shmakk.js --desktop",
+    "build:web": "npm --prefix web install --no-audit --no-fund && npm --prefix web run build",
+    "dev:web": "npm --prefix web run dev",
+    "test:web": "npm --prefix web run test",
+    "prepack": "npm run build:web"
   },
   "engines": {
     "node": ">=18"
@@ -52,10 +66,10 @@
     "@lydell/node-pty": "^1.2.0-beta.12",
     "openai": "^4.104.0",
     "wavefile": "^11.0.0",
-    "ws": "^8.21.0"
+    "ws": "^8.23.0"
   },
   "optionalDependencies": {
-    "@huggingface/transformers": "^4.2.0",
+    "@huggingface/transformers": "^4.3.2",
     "better-sqlite3": "^11.0.0",
     "kokoro-js": "^1.2.1"
   },

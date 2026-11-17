@@ -1,0 +1,29 @@
+{
+  "name": "shmakk-desktop",
+  "productName": "shmakk",
+  "version": "1.3.0",
+  "private": true,
+  "description": "shmakk desktop app — the web interface in a native window",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "npm --prefix .. run build:web && electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^45.0.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "dev.shmakk.desktop",
+    "productName": "shmakk",
+    "directories": { "output": "dist" },
+    "files": ["main.js", "preload.js", "icon.png"],
+    "extraResources": [
+      { "from": "..", "to": "shmakk", "filter": ["bin/**", "src/**", "skills/**", "scripts/**", "package.json", "node_modules/**", "!node_modules/.cache/**"] }
+    ],
+    "asarUnpack": ["**/*.node"],
+    "mac": { "category": "public.app-category.developer-tools", "target": ["dmg", "zip"] },
+    "linux": { "category": "Development", "target": ["AppImage", "deb"] },
+    "win": { "target": ["nsis"] }
+  }
+}

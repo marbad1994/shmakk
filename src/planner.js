@@ -15,7 +15,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { makeClient, modelFor } = require('./llm');
+const { makeClientForModel } = require('./llm');
 
 // Questions and conversational inputs that should bypass planning.
 // These get direct answers from the agent without plan overhead.
@@ -82,9 +82,10 @@ function shouldPlan(input) {
 
 // generatePlan calls the LLM to decompose the user's request into a plan.
 // Returns a plan object or throws.
-async function generatePlan(input, { signal } = {}) {
-  const client = makeClient('agent');
-  const model = modelFor('agent');
+async function generatePlan(input, { signal, model: modelOverride } = {}) {
+  const resolved = makeClientForModel(modelOverride);
+  const client = resolved.client;
+  const model = resolved.model;
 
   // Estimate complexity: longer requests with more context likely need more steps
   const textLen = String(input).length;
@@ -116,7 +117,9 @@ Output format (JSON only):
     {
       "id": "1",
       "title": "Short action title (under 10 words)",
-      "description": "What this step does and why"
+      "description": "What this step does and why, specific enough to execute",
+      "layer": "database | backend | frontend | infra | tests",
+      "acceptance": ["1-4 checkable statements a reviewer can verify from the diff"]
     }
   ]
 }`;
@@ -151,7 +154,9 @@ Output format (JSON only):
     tasks: parsed.tasks.slice(0, 15).map((t, i) => ({
       id: String(t.id || i + 1),
       title: String(t.title || `Step ${i + 1}`).slice(0, 100),
-      description: String(t.description || '').slice(0, 300),
+      description: String(t.description || '').slice(0, 1200),
+      layer: typeof t.layer === 'string' ? t.layer : undefined,
+      acceptance: Array.isArray(t.acceptance) ? t.acceptance.map(String).slice(0, 6) : [],
       status: 'pending',
       completedAt: null,
     })),

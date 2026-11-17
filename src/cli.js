@@ -8,6 +8,7 @@ function parseArgs(argv) {
     workspace: null,
     noAi: false,
     noCorrection: false,
+    planSignoff: true,
     printConfig: false,
     status: false,
     buildHistory: null,
@@ -28,6 +29,7 @@ function parseArgs(argv) {
     restart: false,
     profile: null,
     profileSet: null,
+    effort: null,
     colors: null,
     markdown: null,
     endpoint: null,
@@ -49,6 +51,11 @@ function parseArgs(argv) {
     ttsVoice: null,
     notify: true,
     completion: null,
+    web: false,
+    desktop: false,
+    port: null,
+    host: null,
+    noOpen: false,
     helpCategory: null,
     shell: null,
     browserDaemon: false,
@@ -61,6 +68,10 @@ function parseArgs(argv) {
     unknown: [],
   };
   const setVoiceCliMode = (mode) => {
+    opts.sts = false;
+    opts.stt = false;
+    opts.tts = false;
+    opts.voice = false;
     if (mode === 'stt') {
       opts.stt = true;
       opts.voice = true;
@@ -69,7 +80,6 @@ function parseArgs(argv) {
     } else if (mode === 'sts') {
       opts.sts = true;
       opts.voice = true;
-      opts.tts = true;
     }
   };
 
@@ -94,6 +104,7 @@ function parseArgs(argv) {
       case '--debug': opts.debug = true; break;
       case '--no-ai': opts.noAi = true; break;
       case '--no-correction': opts.noCorrection = true; break;
+      case '--no-plan-signoff': opts.planSignoff = false; break;
       case '--print-config': opts.printConfig = true; break;
       case '--workspace': opts.workspace = argv[++i] || null; break;
       case '--status': opts.status = true; break;
@@ -116,6 +127,7 @@ function parseArgs(argv) {
       case '--reset': opts.reset = true; break;
       case '--profile': opts.profile = argv[++i] || null; break;
       case '--profile-set': opts.profileSet = argv[++i] || null; break;
+      case '--effort': opts.effort = argv[++i] || null; break;
       case '--build-history':
         opts.buildHistory = [];
         // Collect remaining args as file paths until next flag
@@ -140,6 +152,12 @@ function parseArgs(argv) {
       case '--colors': opts.colors = argv[++i] || null; break;
       case '--markdown': opts.markdown = argv[++i] || null; break;
       case '--endpoint': opts.endpoint = argv[++i] || null; break;
+      case '--web': opts.web = true; break;
+      case '--desktop': opts.desktop = true; break;
+      case '--port': { const n = parseInt(argv[++i], 10); opts.port = Number.isFinite(n) ? n : null; break; }
+      case '--host': opts.host = argv[++i] || null; break;
+      case '--no-open': opts.noOpen = true; break;
+      case '--new-token': opts.newToken = true; break;
       case '--model-recommendation': opts.modelRecommendation = true; break;
       case '--vim':
         {
@@ -224,6 +242,36 @@ const HELP_SUMMARY = `shmakk - AI-supervised terminal wrapper
   Launch shmakk, then type commands as usual. shmakk watches the shell, catches
   failures, and calls an LLM to fix them, plan tasks, and edit files.
 
+Graphical interface:
+  shmakk --web                    Start the web UI (chat, terminal, skills, plans, settings…)
+                                  on http://127.0.0.1:4317 and open it in your browser
+  shmakk --desktop                Open the same interface as a desktop app (Electron)
+  --port <n>                      Port for --web (default 4317; 0 = any free port)
+  --host <addr>                   Bind address for --web (default 127.0.0.1; use 0.0.0.0 to
+                                  open it from your phone — the UI is touch-first and installable)
+  --new-token                     Rotate the access token (signs out other devices)
+  --no-open                       Don't open the browser automatically
+
+Control (run from inside an shmakk session):
+  shmakk --status                 Show whether this terminal is inside shmakk
+  shmakk --stats                  Show session/task stats (journal, audit, active skill)
+  shmakk --compact                Compact context by clearing conversation + task journal
+  shmakk --load-skill <name>      Load a Claude/Codex-style skill into shmakk workspace state
+  shmakk --install-skill <url>    Download skill markdown from URL, validate, and load
+  shmakk -G, --global             With --load-skill or --install-skill, use global (~/.config/shmakk) instead of workspace
+  shmakk --list-skills            List all registered skills (workspace + global)
+  shmakk --skill-status           Show active skill and registry status (workspace + global)
+  shmakk --unload-skill <name>    Remove skill from whichever registry has it
+  shmakk --show-plan              Show current plan status (tasks and progress)
+  shmakk --mcp-status             Show configured MCP servers and their tools
+  shmakk --resume-status          Show task journal summary for resume continuity
+  shmakk --exit                   Cleanly exit the parent shmakk
+  shmakk --restart                Restart the inner shell (preserves window)
+  shmakk --reset                  Clear the AI conversation history (keep session)
+  shmakk --profile-set <name>     Switch profile and restart (tiny|balanced|deep|builder|large-app)
+  shmakk --effort <level>         Reasoning effort (minimal|low|medium|high|xhigh|max; SHMAKK_EFFORT)
+  shmakk --colors <true|false>    Enable or disable ANSI colors + code highlighting
+
   Type "help" inside a session to see this same text.
 
   Usage: shmakk [--flag ...]
@@ -243,6 +291,38 @@ Categories (shmakk --help <name> for details):
   vibedit      Visual editing overlay (web + Electron)
   self         Natural-language self-commands (inside a session)
 
+  Voice uses Whisper-base ONNX in-process. No Python, no server, no API key.
+  Model auto-downloads on first use.
+
+  TTS uses kokoro-js (Kokoro-82M ONNX, ~334MB fp16). Model auto-downloads on first use.
+  Requires: aplay, paplay, or afplay for audio playback.
+  All 28 Kokoro voices rotate automatically on a daily schedule.
+
+Voice environment:
+  SHMAKK_HF_CACHE                 HuggingFace cache directory override
+  SHMAKK_TTS_VOICE                Pin a specific TTS voice (default: auto-rotated)
+  SHMAKK_TTS_DTYPE                Kokoro dtype: fp32, fp16, q8, q4, q4f16 (default: fp16)
+  SHMAKK_VOICE_LANGUAGE           Language hint for STT (e.g., en, es, fr)
+  SHMAKK_VOICE_MAX_SEC            Max recording seconds (default: 30)
+  SHMAKK_VOICE_SILENCE_SEC        VAD silence threshold seconds (default: 1.0)
+  SHMAKK_VOICE_SILENCE_THRESHOLD  VAD amplitude threshold (default: 1%)
+  SHMAKK_VOICE_PAD_START_SEC      Padding added to start of recording (default: 0.3)
+
+Environment:
+  SHMAKK_BASE_URL                 OpenAI-compatible base URL
+  SHMAKK_API_KEY                  API key
+  SHMAKK_MODEL                    Default model
+  SHMAKK_HEADERS                  Comma-separated extra headers (k=v,k=v)
+  SHMAKK_MODELS                   Comma-separated list of models for the active endpoint
+
+Web interface environment (shmakk --web / Docker):
+  SHMAKK_WEB_TOKEN                Access token (generated and saved if unset)
+  SHMAKK_PUBLIC_URL               Public address(es) of the app, comma-separated
+  SHMAKK_TRUST_PROXY              1 when behind a reverse proxy (honours X-Forwarded-*)
+  SHMAKK_TLS_CERT / SHMAKK_TLS_KEY  Serve HTTPS directly
+  SHMAKK_GITHUB_TOKEN             GitHub token for cloud sessions (or connect in the UI)
+  SHMAKK_GITHUB_CLIENT_ID         OAuth app client id to enable "Sign in with GitHub"
+  SHMAKK_WORKSPACES_DIR           Where GitHub sessions are cloned
 `;
 
 const HELP_SECTIONS = {};
@@ -266,6 +346,7 @@ HELP_SECTIONS.launch = `══════════════════�
   --shell <fish|bash|zsh>          Use a specific shell (default: current $SHELL)
   --no-ai                          Disable AI entirely (pure passthrough)
   --no-correction                  Disable command correction
+  --no-plan-signoff                Mark plan tasks done once review passes (no y/n sign-off)
   --debug                          Verbose logging to stderr
   --print-config                   Print resolved configuration and exit
 
@@ -274,6 +355,8 @@ HELP_SECTIONS.launch = `══════════════════�
   --profile <name>                 Startup profile: tiny|balanced|deep|builder|large-app
   --colors <true|false>            Enable or disable ANSI colors
   --markdown <true|false>          Enable or disable markdown rendering
+  --effort <level>                 Reasoning effort: minimal|low|medium|high|xhigh|max
+                                   (default: provider decides; env SHMAKK_EFFORT)
   --vim <vi|vim|disable>           Intercept vi/vim inside shmakk (default: vi)
   --notify                         Desktop notifications for Y/n prompts
 `;

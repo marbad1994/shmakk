@@ -411,4 +411,4 @@ function openEditViewer(write) {
   write(`[shmakk] ${tmpFile}\r\n`);
 }
 
-module.exports = { openEditViewer, generateHTML };
+module.exports = { openEditViewer, generateHTML, unifiedDiff, newFileDiff };

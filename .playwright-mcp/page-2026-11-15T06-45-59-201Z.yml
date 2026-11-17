@@ -1,0 +1,161 @@
+- generic [ref=f1e2]:
+  - generic [ref=f1e3]:
+    - link "Skip to message box" [ref=f1e4] [cursor=pointer]:
+      - /url: "#composer-input"
+    - complementary "Navigation" [ref=f1e6]:
+      - generic [ref=f1e7]:
+        - button "shmakk, new chat" [ref=f1e8] [cursor=pointer]:
+          - generic [aria-hidden] [ref=f1e9]: ❯
+          - text: shmakk
+        - button "Hide sidebar" [ref=f1e11] [cursor=pointer]
+      - tablist "Mode" [ref=f1e12]:
+        - tab "Chat" [ref=f1e13] [cursor=pointer]
+        - tab "Code" [selected] [ref=f1e16] [cursor=pointer]
+        - tab "Design" [ref=f1e21] [cursor=pointer]
+        - tab "Cowork" [ref=f1e28] [cursor=pointer]
+      - button "New session" [ref=f1e34] [cursor=pointer]
+      - generic [ref=f1e37]:
+        - generic [ref=f1e38]:
+          - generic [ref=f1e39]: Projects
+          - button "New project" [ref=f1e40] [cursor=pointer]
+        - list "Code conversations" [ref=f1e42]:
+          - generic [ref=f1e43]:
+            - generic [ref=f1e44]: Today
+            - listitem [ref=f1e45]:
+              - 'button "bugs: code in design should be highlighted, there…" [ref=f1e46] [cursor=pointer]'
+              - 'button "Options for bugs: code in design should be highlighted, there…" [ref=f1e48] [cursor=pointer]'
+            - listitem [ref=f1e53]:
+              - button "in the drop down menu in the left bottom corner wi…" [ref=f1e54] [cursor=pointer]
+              - button "Options for in the drop down menu in the left bottom corner wi…" [ref=f1e56] [cursor=pointer]
+            - listitem [ref=f1e61]:
+              - button "we need to improve design mode. 1. the code in the…" [ref=f1e62] [cursor=pointer]
+              - button "Options for we need to improve design mode. 1. the code in the…" [ref=f1e64] [cursor=pointer]
+            - listitem [ref=f1e69]:
+              - button "Lets create a file vault with artefacts. the page…" [ref=f1e70] [cursor=pointer]
+              - button "Options for Lets create a file vault with artefacts. the page…" [ref=f1e72] [cursor=pointer]
+            - listitem [ref=f1e77]:
+              - button "you can see the bottom bar there. all of that is r…" [ref=f1e78] [cursor=pointer]
+              - button "Options for you can see the bottom bar there. all of that is r…" [ref=f1e80] [cursor=pointer]
+            - listitem [ref=f1e85]:
+              - button "this should be removed from all modes, the can be…" [ref=f1e86] [cursor=pointer]
+              - button "Options for this should be removed from all modes, the can be…" [ref=f1e88] [cursor=pointer]
+            - listitem [ref=f1e93]:
+              - button "📎 notes-e2e.txt" [ref=f1e94] [cursor=pointer]
+              - button "Options for 📎 notes-e2e.txt" [ref=f1e96] [cursor=pointer]
+            - listitem [ref=f1e101]:
+              - button "📎 notes-e2e.txt" [ref=f1e102] [cursor=pointer]
+              - button "Options for 📎 notes-e2e.txt" [ref=f1e104] [cursor=pointer]
+            - listitem [ref=f1e109]:
+              - button "REmove the profile and review and yes files from t…" [ref=f1e110] [cursor=pointer]
+              - button "Options for REmove the profile and review and yes files from t…" [ref=f1e112] [cursor=pointer]
+          - generic [ref=f1e117]:
+            - generic [ref=f1e118]: Yesterday
+            - listitem [ref=f1e119]:
+              - button "This is..." [ref=f1e120] [cursor=pointer]
+              - button "Options for This is..." [ref=f1e122] [cursor=pointer]
+            - listitem [ref=f1e127]:
+              - button "The web app has \"new chat\" but it doesnt actually…" [ref=f1e128] [cursor=pointer]
+              - button "Options for The web app has \"new chat\" but it doesnt actually…" [ref=f1e130] [cursor=pointer]
+            - listitem [ref=f1e135]:
+              - button "Whats the weather in new york right now?" [ref=f1e136] [cursor=pointer]
+              - button "Options for Whats the weather in new york right now?" [ref=f1e138] [cursor=pointer]
+            - listitem [ref=f1e143]:
+              - button "touch pwned" [ref=f1e144] [cursor=pointer]
+              - button "Options for touch pwned" [ref=f1e146] [cursor=pointer]
+            - listitem [ref=f1e151]:
+              - button "GitHub session on marbad1994/SocialPostAPI marbad1994/SocialPostAPI · shmakk/test" [ref=f1e152] [cursor=pointer]:
+                - img "GitHub session on marbad1994/SocialPostAPI" [ref=f1e153]
+                - generic [ref=f1e157]: marbad1994/SocialPostAPI · shmakk/test
+              - button "Options for marbad1994/SocialPostAPI · shmakk/test" [ref=f1e158] [cursor=pointer]
+            - listitem [ref=f1e163]:
+              - button "git status" [ref=f1e164] [cursor=pointer]
+              - button "Options for git status" [ref=f1e166] [cursor=pointer]
+      - generic [ref=f1e172]:
+        - button "Account menu, marcusb" [ref=f1e173] [cursor=pointer]:
+          - generic [aria-hidden] [ref=f1e174]: m
+          - generic [ref=f1e175]:
+            - generic [ref=f1e176]: marcusb
+            - generic [ref=f1e177]: shmakk
+        - button "Settings" [ref=f1e179] [cursor=pointer]
+    - generic [ref=f1e183]:
+      - banner [ref=f1e184]:
+        - heading [level=1] [ref=f1e185]:
+          - generic "Code mode" [ref=f1e186]
+          - text: New session
+        - button "Toggle terminal" [ref=f1e191] [cursor=pointer]
+        - group "Inspector panels" [ref=f1e192]:
+          - button "Browser" [ref=f1e193] [cursor=pointer]
+          - button "Changes" [ref=f1e194] [cursor=pointer]
+          - button "Plan" [ref=f1e195] [cursor=pointer]
+      - generic [ref=f1e196]:
+        - main [ref=f1e197]:
+          - generic [ref=f1e198]:
+            - generic [ref=f1e200]:
+              - heading "What are we building in shmakk?" [level=2] [ref=f1e206]
+              - paragraph [ref=f1e207]: Ask for a change, run a command, or hand over a whole task. shmakk reads, edits and runs inside your workspace — and asks before anything risky.
+              - button [ref=f1e208] [cursor=pointer]:
+                - generic [ref=f1e213]:
+                  - strong [ref=f1e214]: Start from a GitHub repository
+                  - text: Clone a repo here and work on it in its own session — push and open a PR when you’re done.
+              - generic [ref=f1e217]:
+                - button "understand Give me a tour of this codebase — entry points, structure, and how to run it" [ref=f1e218] [cursor=pointer]:
+                  - generic [ref=f1e219]: understand
+                  - generic [ref=f1e220]: Give me a tour of this codebase — entry points, structure, and how to run it
+                - button "fix Run the tests and fix whatever is failing" [ref=f1e221] [cursor=pointer]:
+                  - generic [ref=f1e222]: fix
+                  - generic [ref=f1e223]: Run the tests and fix whatever is failing
+                - button "shell $ git status" [ref=f1e224] [cursor=pointer]:
+                  - generic [ref=f1e225]: shell
+                  - generic [ref=f1e226]: $ git status
+                - button "review Review my uncommitted changes for bugs and risky edits" [ref=f1e227] [cursor=pointer]:
+                  - generic [ref=f1e228]: review
+                  - generic [ref=f1e229]: Review my uncommitted changes for bugs and risky edits
+            - generic [ref=f1e233]:
+              - generic [ref=f1e234]:
+                - generic [aria-hidden] [ref=f1e235]: ❯
+                - textbox "Message shmakk" [active] [ref=f1e236]:
+                  - /placeholder: Ask shmakk anything — / for commands
+              - generic [ref=f1e237]:
+                - generic [ref=f1e238]:
+                  - radiogroup "Input mode" [ref=f1e239]:
+                    - radio "ask" [checked] [ref=f1e240] [cursor=pointer]
+                    - radio "shell" [ref=f1e241] [cursor=pointer]
+                  - button "deepseek-v4-flash" [ref=f1e242] [cursor=pointer]
+                - button "Attach files" [ref=f1e248] [cursor=pointer]
+                - button "Read replies aloud" [ref=f1e249] [cursor=pointer]
+                - button "Voice input" [ref=f1e250] [cursor=pointer]
+                - button "Send" [disabled] [ref=f1e251]
+        - complementary "Inspector":
+          - generic [ref=f1e254]:
+            - generic [ref=f1e255]: Browser
+            - button "Close inspector" [ref=f1e259] [cursor=pointer]
+          - generic:
+            - generic:
+              - generic [ref=f1e260]:
+                - generic:
+                  - textbox "Preview URL" [ref=f1e261]:
+                    - /placeholder: http://localhost:5173
+                    - text: http://localhost:5173
+                  - button "Open address" [ref=f1e262] [cursor=pointer]
+                - button "Reload preview" [ref=f1e263] [cursor=pointer]
+                - button "Open in a new tab" [ref=f1e264] [cursor=pointer]
+              - generic [ref=f1e265]:
+                - generic:
+                  - button ":5173" [ref=f1e266] [cursor=pointer]
+                  - button ":3000" [ref=f1e267] [cursor=pointer]
+                  - button ":8080" [ref=f1e268] [cursor=pointer]
+                - radiogroup "Preview size" [ref=f1e269]:
+                  - radio "desktop" [checked] [ref=f1e270] [cursor=pointer]
+                  - radio "tablet" [ref=f1e273] [cursor=pointer]
+                  - radio "phone" [ref=f1e276] [cursor=pointer]
+              - generic:
+                - generic:
+                  - iframe
+                - generic [ref=f1e279]:
+                  - generic: Nothing answered at http://localhost:5173
+                  - paragraph: Start your dev server, or point this pane at the port it prints. Reload once it is up.
+                  - button "Try again" [ref=f1e286] [cursor=pointer]
+              - generic [ref=f1e287]:
+                - generic: Chromium — the agent can drive this page with its browser tools.
+                - button "Ask the agent to inspect this page" [ref=f1e288] [cursor=pointer]
+  - region "Notifications alt+T"

@@ -7,7 +7,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { makeClient, modelFor, isConfigured, getDeepSeekOptions, supportsVision, describeImages } = require('./llm');
+const { makeClientForModel, modelFor, isConfigured, getReasoningOptions, supportsVision, describeImages, userContentWithImages, stripImageBlocks, imageBlocks, normalizeImages, skippedNote } = require('./llm');
 const {
   sanitizeAssistantContent,
   isLeakedToolMarkup,
@@ -113,7 +113,14 @@ function dim(s, enabled = true) { return enabled ? `\x1b[2m${s}\x1b[0m` : s; }
 
 // ── Main agent entry point ──────────────────────────────────────────────────
 
-async function runAgent({ input, roots, glossary, confirmTool, write, signal, history = [], profile = 'balanced', colors = true, markdown = true, voiceMode = false, specialistHint = null, mcpManager = null, requireToolUse = false }) {
+async function runAgent({ input, roots, glossary, confirmTool, write, signal, history = [], profile = 'balanced', colors = true, markdown = true, voiceMode = false, specialistHint = null, mcpManager = null, requireToolUse = false, onEvent = null, model = null, images = null, effort = null }) {
+  // Reasoning effort for reasoning-capable OpenAI-compatible endpoints.
+  // Per-request value wins; otherwise fall back to SHMAKK_EFFORT from the CLI.
+  const effortLevel = effort || process.env.SHMAKK_EFFORT || null;
+  // onEvent: optional structured-event sink used by GUI front-ends (web UI).
+  // When present, streaming text, tool calls and results are reported as
+  // objects instead of being rendered to `write` as terminal text.
+  const emit = typeof onEvent === 'function' ? (ev) => { try { onEvent(ev); } catch {} } : null;
   // roots: array of allowed workspace roots (first is the primary cwd).
   // history: prior conversation turns (assistant/user/tool). System prompt
   // is rebuilt fresh each call so the current cwd is always accurate.
@@ -121,7 +128,9 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
     write(`[shmakk] AI not configured (set SHMAKK_BASE_URL).\n`);
     return history;
   }
-  const client = makeClient('agent');
+  const resolved = makeClientForModel(model);
+  const client = resolved.client;
+  const modelName = resolved.model;
   const rootList = roots.length === 1 ? roots[0] : roots.join(', ');
   const priorJournal = loadTaskJournal(roots[0]);
   const activeSkillText = renderActiveSkillForPrompt(roots[0], Number(process.env.SHMAKK_SKILL_PROMPT_MAX_BYTES) || 12000);
@@ -264,11 +273,19 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
     ? `\n\nResume context from previous interrupted run:\n- previous_input: ${String(priorJournal.input || '').slice(0, 300)}\n- touched_files: ${(priorJournal.touchedFiles || []).slice(-20).join(', ') || '(none)'}\n- note: continue from latest completed work, avoid redoing already-touched steps unless necessary.`
     : '';
 
+  // Attached images (from the composer) are shown to this turn only. Vision
+  // endpoints get real image blocks; otherwise a vision endpoint describes them.
+  const userContent = await userContentWithImages(input + resumeContext, images, signal);
+
   const messages = [
     { role: 'system', content: sys },
     ...boundedHistory,
-    { role: 'user', content: input + resumeContext },
+    { role: 'user', content: userContent },
   ];
+
+  // Handed-back history stays text-only so base64 never gets persisted into a
+  // conversation file or resent on later turns.
+  const historyOut = () => stripImageBlocks(messages.slice(1));
 
   // Record user input as a turn for cross-session search
   const searchSessionId = process.env.SHMAKK_SESSION_ID || null;
@@ -306,24 +323,29 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
     if (taskSpinnerStop) { taskSpinnerStop(); taskSpinnerStop = null; }
   };
   for (let i = 0; i < dynamicToolBudget; i++) {
-    if (signal && signal.aborted) { stopTaskSpinner(); return messages.slice(1); }
+    if (signal && signal.aborted) { stopTaskSpinner(); return historyOut(); }
 
     // Stream the response so the user sees text as it generates.
-    const cacheKey = promptCacheEnabled ? promptCache.makeKey({ model: modelFor('agent'), messages, toolChoice: 'auto' }) : null;
+    const cacheKey = promptCacheEnabled ? promptCache.makeKey({ model: modelName, messages, toolChoice: 'auto' }) : null;
     if (promptCacheEnabled && cacheKey) {
       const hit = promptCache.get(roots[0], cacheKey);
       if (hit && hit.content) {
         stopTaskSpinner();
-        write(dim('[shmakk] prompt cache hit', colors) + '\n');
-        write(highlightCodeBlocks(hit.content, colors));
-        if (!hit.content.endsWith('\n')) write('\n');
+        if (emit) {
+          emit({ type: 'message', content: hit.content, cached: true });
+        } else {
+          write(dim('[shmakk] prompt cache hit', colors) + '\n');
+          write(renderBlock(hit.content, { enabled: markdown, colors }));
+          if (!hit.content.endsWith('\n')) write('\n');
+        }
         messages.push({ role: 'assistant', content: hit.content });
         clearTaskJournal(roots[0]);
-        return messages.slice(1);
+        return historyOut();
       }
     }
 
-    ensureSpinner();
+    if (emit) emit({ type: 'status', label: i === 0 ? 'thinking' : 'continuing' });
+    else ensureSpinner();
     const allTools = mcpManager ? [...TOOLS, ...mcpManager.getToolDefinitions()] : TOOLS;
     let stream;
     try {
@@ -332,10 +354,10 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
       // can be either tool or text.
       const toolChoiceForThisIter = (requireToolUse && i === 0) ? 'required' : 'auto';
       stream = await client.chat.completions.create({
-        model: modelFor('agent'),
+        model: modelName,
         messages, tools: allTools, tool_choice: toolChoiceForThisIter,
         temperature: 0, stream: true,
-        ...getDeepSeekOptions('tool_loop'),
+        ...getReasoningOptions('tool_loop', effortLevel, modelName),
       }, { signal });
     } catch (e) {
       stopTaskSpinner();
@@ -362,6 +384,7 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
           // are not flushed before we can detect them.
           const token = delta.content;
           content += token;
+          if (emit) emit({ type: 'delta', text: token });
 
           // Check the trailing portion for partial DSML prefixes.
           // Only check the last ~80 chars — enough to catch any prefix.
@@ -371,16 +394,10 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
             // a benign string or reveal leaked markup.
             continue;
           }
-
-          // If we have accumulated content and there's no dangerous
-          // prefix in the tail, flush it now.
-          if (content.length > 0 && !mightBecomeInternalMarkup(content.slice(-80))) {
-            // Nothing to flush separately here — the spinner handles
-            // the "thinking" display.  We just keep accumulating.
-          }
         }
         if (typeof delta.reasoning_content === 'string' && delta.reasoning_content.length) {
           reasoningContent += delta.reasoning_content;
+          if (emit) emit({ type: 'reasoning', text: delta.reasoning_content });
         }
         if (delta.tool_calls) {
           for (const tc of delta.tool_calls) {
@@ -443,7 +460,7 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
         stopTaskSpinner();
         write(dim('[shmakk] response contained only leaked tool markup — blocked.', colors) + '\n');
         clearTaskJournal(roots[0]);
-        return messages.slice(1);
+        return historyOut();
       }
     }
 
@@ -460,6 +477,8 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
         });
       }
       content = '';
+      // The streamed text was really a tool call in disguise — take it back.
+      if (emit) emit({ type: 'retract' });
     }
 
     const normalizedToolCalls = applyRoundToolBudget(normalizeToolCalls(toolCalls, i), maxDiscoveryCallsPerRound);
@@ -493,8 +512,12 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
     if (!normalizedToolCalls.length) {
       stopTaskSpinner();
       if (content) {
-        write(renderBlock(content, { enabled: markdown, colors }));
-        if (!content.endsWith('\n')) write('\n');
+        if (emit) {
+          emit({ type: 'message', content });
+        } else {
+          write(renderBlock(content, { enabled: markdown, colors }));
+          if (!content.endsWith('\n')) write('\n');
+        }
         producedAnything = true;
         if (promptCacheEnabled && cacheKey) {
           promptCache.put(roots[0], cacheKey, { content });
@@ -506,7 +529,7 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
         write(dim('[shmakk] model returned no response — try `shmakk --reset` or rephrase.', colors) + '\n');
       }
       clearTaskJournal(roots[0]);
-      return messages.slice(1);
+      return historyOut();
     }
 
     // Dispatch tool calls.
@@ -516,6 +539,9 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
     const SILENT_TOOLS = new Set(['read_file', 'list_dir', 'web_search', 'fetch_url']);
     let iterProgress = false;
     let silentReads = [];
+    // Text that accompanied tool calls ("I'll read the config first…") is
+    // only surfaced to structured front-ends; the terminal stays quiet.
+    if (emit && content) emit({ type: 'message', content, interim: true });
     for (const c of normalizedToolCalls) {
       let args = {};
       try { args = JSON.parse(c.function.arguments || '{}'); } catch {}
@@ -530,6 +556,7 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
       const cacheKey = `${c.function.name}:${JSON.stringify(args || {})}`;
       const canUseCache = cacheableTools.has(c.function.name);
       let result;
+      if (emit) emit({ type: 'tool_start', id: c.id, name: c.function.name, args });
       if (canUseCache && toolResultCache.has(cacheKey)) {
         result = toolResultCache.get(cacheKey);
       } else {
@@ -538,7 +565,13 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
         iterProgress = true;
       }
 
-      if (result?.error) {
+      if (emit) {
+        emit({
+          type: 'tool_end', id: c.id, name: c.function.name, args, result,
+          summary: summarizeToolResult(c.function.name, result),
+          error: result?.error || null,
+        });
+      } else if (result?.error) {
         // Always show errors regardless of tool type
         write(dim(`→ ${c.function.name}(${shortArgs(args)}) — error: ${result.error}`, colors) + '\n');
       } else if (isSilent) {
@@ -554,12 +587,18 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
       // base64 data AND the current endpoint has `vision: true`, send them as
       // vision content blocks in a follow-up user message. Otherwise just
       // include image metadata in the text. Keep the tool message text-only.
-      const toolImages = Array.isArray(result.images) ? result.images.filter((img) => img.data) : [];
+      // Only formats the provider accepts survive normalisation; anything else
+      // is converted to png up front or reported as text instead of sent.
+      const rawToolImages = Array.isArray(result.images) ? result.images.filter((img) => img.data) : [];
+      const prepared = rawToolImages.length ? await normalizeImages(rawToolImages) : { images: [], skipped: [] };
+      const toolImages = prepared.images;
+      const skippedNoteText = skippedNote(prepared.skipped);
       const toolText = result.content || '';
       const toolMeta = Object.fromEntries(
         Object.entries(result || {}).filter(([k]) => !['content', 'images', 'error', 'isRetryable'].includes(k)),
       );
       let toolContent = (toolText + (Object.keys(toolMeta).length ? ' ' + JSON.stringify(toolMeta) : '')).trim();
+      if (skippedNoteText) toolContent = toolContent ? `${toolContent} ${skippedNoteText}` : skippedNoteText;
       if (toolImages.length > 0 && !supportsVision()) {
         // Endpoint doesn't support vision — call a vision-capable endpoint
         // to describe the images as text for the non-vision model.
@@ -576,22 +615,19 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
       if (toolImages.length > 0 && supportsVision()) {
         messages.push({
           role: 'user',
-          content: [
-            { type: 'text', text: `[Images returned by ${c.function.name}${toolImages.some((img) => img.truncated) ? ' (some truncated to ~2MB base64)' : ''}]` },
-            ...toolImages.map((img) => ({
-              type: 'image_url',
-              image_url: { url: `data:${img.mimeType};base64,${img.data}`, detail: 'auto' },
-            })),
-          ],
+          content: imageBlocks(
+            `[Images returned by ${c.function.name}${toolImages.some((img) => img.truncated) ? ' (some truncated to ~2MB base64)' : ''}]`,
+            toolImages,
+          ),
         });
       }
       producedAnything = true;
       persistJournal('running');
-      if (signal && signal.aborted) return messages.slice(1);
+      if (signal && signal.aborted) return historyOut();
     }
 
     // Print batched read summary if any
-    if (silentReads.length) {
+    if (silentReads.length && !emit) {
       write(dim(`· read ${silentReads.length === 1 ? silentReads[0] : silentReads.length + ' files'}`, colors) + '\n');
     }
 
@@ -611,7 +647,7 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
   // Finalization pass: force a no-tools answer before giving up.
   try {
     const final = await client.chat.completions.create({
-      model: modelFor('agent'),
+      model: modelName,
       messages: [
         ...messages,
         { role: 'user', content: 'Finalize now without using any tools. Summarize completed work and exact next actionable step if blocked.' },
@@ -619,7 +655,7 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
       temperature: 0,
       tool_choice: 'none',
       stream: false,
-      ...getDeepSeekOptions('tool_loop'),
+      ...getReasoningOptions('tool_loop', effortLevel, modelName),
     }, { signal });
     const finalText = final.choices?.[0]?.message?.content || '';
     if (finalText) {
@@ -628,22 +664,24 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
       const displayText = finalSanitized.hadInternalLeak
         ? finalSanitized.visibleText
         : finalText;
-      if (displayText) {
-        write(renderBlock(displayText, { enabled: markdown, colors }));
-        if (!displayText.endsWith('\n')) write('\n');
-      }
       if (finalSanitized.hadInternalLeak) {
         audit.append({ kind: 'dsml-leak-finalize', model: modelFor('agent'), leakedMarkupDetected: true });
       }
+      if (emit) {
+        emit({ type: 'message', content: displayText });
+      } else if (displayText) {
+        write(renderBlock(displayText, { enabled: markdown, colors }));
+        if (!displayText.endsWith('\n')) write('\n');
+      }
       clearTaskJournal(roots[0]);
-      return messages.slice(1);
+      return historyOut();
     }
   } catch {}
 
   stopTaskSpinner();
   write(dim('[shmakk] paused after several tool rounds. Resume later continues from task journal; try `shmakk --reset` to clear.', colors) + '\n');
   persistJournal('paused');
-  return messages.slice(1);
+  return historyOut();
 }
 
 function runtimeSafeNumber(v, fallback) {
@@ -694,4 +732,5 @@ module.exports = {
   loadTaskJournal,
   clearTaskJournal,
   shouldUseAutoSubagents,
+  summarizeToolResult,
 };

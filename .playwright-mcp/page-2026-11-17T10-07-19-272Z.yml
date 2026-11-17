@@ -1,0 +1,5 @@
+- generic [ref=e2]:
+  - generic [ref=e4]:
+    - img "Loading" [ref=e5]
+    - text: starting shmakk…
+  - region "Notifications alt+T"
