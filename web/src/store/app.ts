@@ -116,6 +116,7 @@ interface AppState {
   patchSettings(patch: Partial<Settings>): Promise<void>;
   refreshStatus(): Promise<void>;
   setWorkspace(path: string): Promise<void>;
+  createWorkspace(name: string): Promise<string>;
   setDraft(text: string, mode?: 'ask' | 'shell'): void;
   clearDraft(): void;
   toggleSidebar(open?: boolean): void;
@@ -433,6 +434,17 @@ export const useApp = create<AppState>((set, get) => {
       if (r.warning) toast.warning(r.warning);
       else toast.success(`Workspace: ${r.workspace}`);
       void get().refreshStatus();
+    },
+
+    // Create a new workspace under the configured root (location handled server-side).
+    async createWorkspace(name) {
+      const r = await api.post<{ workspace: string; warning: string | null }>('/api/workspaces', { name });
+      set({ workspace: r.workspace, activeId: null, view: 'chat', pendingProjectId: null });
+      syncHash();
+      if (r.warning) toast.warning(r.warning);
+      else toast.success(`Workspace: ${r.workspace}`);
+      void get().refreshStatus();
+      return r.workspace;
     },
 
     setDraft(text, mode = 'ask') { set({ draft: { text, mode, nonce: Date.now() }, view: 'chat' }); syncHash(); },

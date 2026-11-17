@@ -11,7 +11,8 @@ tmp/
 .shmakk-desktop/
 .codex/
 .claude/
-.playwright
+.playwright/
+.playwright-mpc/
 # editor / misc
 .vscode/
 .codemakk/

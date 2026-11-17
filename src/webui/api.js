@@ -11,6 +11,7 @@ const memory = require('../memory');
 const rules = require('../rules');
 const planner = require('../planner');
 const workflows = require('../workflows');
+const ssh = require('../ssh');
 const sessionSearch = require('../session-search');
 const audit = require('../audit');
 const endpoints = require('../endpoints');
@@ -269,6 +270,7 @@ function createApi(app) {
     if ('ttsVoice' in body) app.settings.ttsVoice = body.ttsVoice ? String(body.ttsVoice).slice(0, 60) : null;
     if ('voiceLanguage' in body) app.settings.voiceLanguage = body.voiceLanguage ? String(body.voiceLanguage).slice(0, 20) : null;
     if ('systemPrompt' in body) app.settings.systemPrompt = typeof body.systemPrompt === 'string' ? body.systemPrompt.slice(0, 20000) : '';
+    if ('workspacesRoot' in body) app.settings.workspacesRoot = body.workspacesRoot ? String(body.workspacesRoot).trim() || null : null;
     if (body.modelByMode && typeof body.modelByMode === 'object') {
       const cur = app.settings.modelByMode || {};
       const next = { ...cur };
@@ -335,6 +337,47 @@ function createApi(app) {
     if (!fs.existsSync(target) || !fs.statSync(target).isDirectory()) throw new HttpError(400, 'not a directory');
     app.setWorkspace(target);
     return { workspace: ws(), warning: workspaceWarning(ws()) };
+  });
+
+  // ── managed workspaces: created as direct children of the configured root ──
+  // New workspaces can only be created in the root set in Settings, never in a
+  // sub-folder of it, and never elsewhere. The location is chosen in the
+  // background: the caller supplies just a name.
+  function workspacesRoot() {
+    const raw = app.settings.workspacesRoot || process.env.SHMAKK_WORKSPACES_DIR || '';
+    return raw ? path.resolve(String(raw).replace(/^~(?=$|\/)/, os.homedir())) : null;
+  }
+  function listWorkspaces(root) {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(root, { withFileTypes: true })
+        .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+        .map((e) => ({ name: e.name, path: path.join(root, e.name) }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    } catch { /* root missing or unreadable */ }
+    return entries;
+  }
+  add('GET', '/api/workspaces', () => {
+    const root = workspacesRoot();
+    return { root, workspaces: root ? listWorkspaces(root) : [] };
+  });
+  add('POST', '/api/workspaces', ({ body }) => {
+    const root = workspacesRoot();
+    if (!root) throw new HttpError(400, 'Set a workspaces root in Settings first');
+    const name = String(body.name || '').trim();
+    if (!name) throw new HttpError(400, 'A name is required');
+    if (name.length > 80) throw new HttpError(400, 'Name is too long (80 characters max)');
+    if (name !== path.basename(name) || name === '.' || name === '..' || /[\\/]/.test(name) || name.includes('\0')) {
+      throw new HttpError(400, 'Name must be a single folder name');
+    }
+    const target = path.join(root, name);
+    const rel = path.relative(root, target);
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) throw new HttpError(400, 'Invalid workspace name');
+    try { fs.mkdirSync(root, { recursive: true }); } catch (e) { throw new HttpError(500, `Cannot create workspaces root: ${e.message}`); }
+    if (fs.existsSync(target)) throw new HttpError(409, `"${name}" already exists`);
+    try { fs.mkdirSync(target); } catch (e) { throw new HttpError(500, String(e.message)); }
+    app.setWorkspace(target);
+    return { workspace: ws(), warning: workspaceWarning(ws()), name };
   });
   // Directory listing for the folder picker (directories only, anywhere the
   // user can read) and for @-mentions (files too, inside the workspace).
@@ -612,6 +655,65 @@ function createApi(app) {
     return { ok: true, path: p, results: await app.restartMcp() };
   });
   add('POST', '/api/mcp/restart', async () => ({ ok: true, results: await app.restartMcp() }));
+
+  // ── remote hosts (SSH) ────────────────────────────────────────────────
+  // The same files the agent reads: .shmakk/hosts.json (this workspace) and
+  // ~/.config/shmakk/hosts.json (everywhere). Aliases imported from
+  // ~/.ssh/config are listed read-only.
+
+  add('GET', '/api/ssh', () => {
+    const paths = ssh.configFiles(ws());
+    const local = {
+      workspace: paths.workspace ? ssh.readHostFile(paths.workspace) : { hosts: {} },
+      global: ssh.readHostFile(paths.global),
+    };
+    const cfg = ssh.loadHostConfig(ws());
+    const hosts = Object.entries(cfg.hosts)
+      .map(([name, entry]) => {
+        const source = local.workspace.hosts[name] ? 'workspace' : local.global.hosts[name] ? 'global' : 'config';
+        return {
+          name,
+          host: entry.host || name,
+          port: entry.port || 22,
+          auto_approve: !!entry.auto_approve,
+          timeout_sec: entry.timeout_sec || cfg.default_timeout_sec,
+          source,
+          editable: source !== 'config',
+        };
+      })
+      .sort((a, b) => Number(a.source === 'config') - Number(b.source === 'config') || a.name.localeCompare(b.name));
+    return {
+      hosts,
+      paths,
+      allowSshConfig: cfg.allow_ssh_config,
+      defaultTimeoutSec: cfg.default_timeout_sec,
+      sshConfigPath: path.join(os.homedir(), '.ssh', 'config'),
+    };
+  });
+
+  add('PUT', '/api/ssh', ({ body }) => {
+    try {
+      return { ok: true, allowSshConfig: ssh.setAllowSshConfig(ws(), !!body.allowSshConfig) };
+    } catch (e) { throw new HttpError(400, e.message); }
+  });
+
+  add('PUT', '/api/ssh/:name', ({ params, body }) => {
+    const scope = body.scope === 'workspace' ? 'workspace' : 'global';
+    try {
+      ssh.saveHost(scope, ws(), params.name, body);
+    } catch (e) { throw new HttpError(400, e.message); }
+    return { ok: true, scope };
+  });
+
+  add('DELETE', '/api/ssh/:name', ({ params, query }) => {
+    const scope = query.scope === 'workspace' ? 'workspace' : 'global';
+    let removed = false;
+    try { removed = ssh.deleteHost(scope, ws(), params.name); } catch (e) { throw new HttpError(400, e.message); }
+    if (!removed) throw new HttpError(404, `no host named "${params.name}" in the ${scope} config`);
+    return { ok: true };
+  });
+
+  add('POST', '/api/ssh/test', async ({ body }) => ssh.testHost(body || {}));
 
   // ── workflows & agents ────────────────────────────────────────────────
 

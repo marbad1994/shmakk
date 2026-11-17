@@ -87,6 +87,7 @@ export interface Settings {
   review: boolean; yesFiles: boolean; noCorrection: boolean; noAi: boolean; debug: boolean;
   profile: string | null; ttsAuto: boolean; ttsVoice: string | null; voiceLanguage: string | null;
   voiceHandsFree: boolean; recentWorkspaces: string[];
+  workspacesRoot: string | null; // directory new workspaces are created under
   modelByMode: Record<Mode, string | null>; // per-space model override (null = default)
   systemPrompt: string;                    // global instruction for every conversation
 }

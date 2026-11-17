@@ -1933,6 +1933,50 @@ test('webui skills: catalog loads by frontmatter name; create/upload imports val
   } finally { await h.close(); }
 }));
 
+// ── SSH hosts (GUI editor) ──────────────────────────────────────────────────
+
+test('ssh hosts: save/delete edits one host and leaves the rest of the file alone', () => withTempHome(async (dir) => {
+  const fs = require('fs'); const path = require('path');
+  const ssh = require('../src/ssh');
+  const ws = path.join(dir, 'ws'); fs.mkdirSync(ws);
+  const file = path.join(ws, '.shmakk', 'hosts.json');
+
+  ssh.saveHost('workspace', ws, 'devbox', { host: 'marcus@example.com', port: 2222, auto_approve: true, timeout_sec: 15 });
+  ssh.saveHost('workspace', ws, 'build', { host: 'ci@10.0.0.9' });
+  let json = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.strictEqual(json.hosts.devbox.port, 2222);
+  assert.strictEqual(json.hosts.devbox.auto_approve, true);
+  assert.strictEqual(json.hosts.build.timeout_sec, 30);
+
+  // Hand-written keys and hosts survive a targeted edit.
+  json.keep_me = 'yes';
+  fs.writeFileSync(file, JSON.stringify(json));
+  ssh.saveHost('workspace', ws, 'build', { host: 'ci@10.0.0.10', port: 22 });
+  json = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.strictEqual(json.keep_me, 'yes');
+  assert.strictEqual(json.hosts.build.host, 'ci@10.0.0.10');
+  assert.strictEqual(json.hosts.devbox.host, 'marcus@example.com');
+
+  assert.strictEqual(ssh.deleteHost('workspace', ws, 'build'), true);
+  assert.strictEqual(ssh.deleteHost('workspace', ws, 'build'), false);
+  assert.deepStrictEqual(Object.keys(ssh.loadHostConfig(ws).hosts), ['devbox']);
+
+  // Values that would be read as ssh options, or break the agent, are refused.
+  assert.throws(() => ssh.saveHost('workspace', ws, 'evil', { host: '-oProxyCommand=curl x' }), /host must look like/);
+  assert.throws(() => ssh.saveHost('workspace', ws, 'bad name', { host: 'u@h' }), /name must be/);
+  assert.throws(() => ssh.saveHost('workspace', ws, 'port', { host: 'u@h', port: 70000 }), /port must be/);
+  assert.strictEqual(Object.keys(ssh.loadHostConfig(ws).hosts).length, 1);
+
+  // A file the user broke by hand is reported, never overwritten.
+  fs.writeFileSync(file, '{ oops');
+  assert.throws(() => ssh.saveHost('workspace', ws, 'x', { host: 'u@h' }), /not valid hosts.json/);
+  assert.strictEqual(fs.readFileSync(file, 'utf8'), '{ oops');
+
+  const bad = await ssh.testHost({ host: '--evil' });
+  assert.strictEqual(bad.ok, false);
+  assert.match(bad.error, /host must look like/);
+}));
+
 // ── modes, projects, design, automations ────────────────────────────────────
 
 test('webui cron: next run honours weekdays, time zones, steps and leap days', () => {

@@ -339,6 +339,12 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                   <Row title={<span className="font-mono text-[13px]">{tildify(workspace, home)}</span>} sub={status?.workspaceWarning || 'shmakk’s tools are confined to this folder (--workspace)'}>
                     <Button onClick={() => void chooseWorkspace()}><FolderOpen />Switch…</Button>
                   </Row>
+                  <Row title="Workspaces root" sub="“Create workspace…” makes a new folder directly inside this directory, never a sub-folder of it">
+                    <div className="flex items-center gap-2">
+                      <Input className="w-72 max-sm:w-full font-mono text-[13px]" defaultValue={settings.workspacesRoot || ''} placeholder="~/workspaces" aria-label="Workspaces root" onBlur={(e) => patch({ workspacesRoot: e.target.value.trim() || null })} />
+                      <Button variant="ghost" onClick={() => patch({ workspacesRoot: workspace })}>Use current</Button>
+                    </div>
+                  </Row>
                 </Rows>
               </Section>
 

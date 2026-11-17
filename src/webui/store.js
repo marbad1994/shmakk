@@ -57,6 +57,9 @@ const DEFAULT_SETTINGS = {
   // provider overrides saved from the UI (applied only when env is unset)
   provider: null,
   recentWorkspaces: [],
+  // Directory new workspaces are created under. Workspaces live directly in
+  // this folder (one level), never in nested sub-folders of it.
+  workspacesRoot: null,
   github: null, // { token, login } when connected from the UI
   token: null, // access token, kept so signed-in devices survive restarts
 };

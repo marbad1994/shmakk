@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import {
-  Activity, Boxes, Brain, ChevronRight, Folder, FolderKanban, FolderMinus, GitBranch, History, ListChecks, MoreHorizontal,
-  PanelLeftClose, Pencil, Pin, PinOff, Plug, Plus, Settings, Sparkles, Trash2, Users, Zap,
+  Activity, Boxes, Brain, ChevronRight, Folder, FolderKanban, FolderMinus, FolderPlus, GitBranch, History, ListChecks, MoreHorizontal,
+  PanelLeftClose, Pencil, Pin, PinOff, Plug, Plus, Server, Settings, Sparkles, Trash2, Users, Zap,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { historyGroups } from '@/lib/history';
@@ -10,6 +10,7 @@ import { loadOpenProjects, saveOpenProjects, sessionsByProject, toggleOpenProjec
 import type { ConvMeta, Project } from '@/lib/types';
 import { basename, cn, modKey } from '@/lib/utils';
 import { haptic } from '@/hooks/useMobile';
+import { toast } from 'sonner';
 import { chooseWorkspace, useApp } from '@/store/app';
 import { Button } from '@/components/ui/button';
 import { Tip } from '@/components/ui/tooltip';
@@ -17,6 +18,7 @@ import { Field, Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { SshHostsDialog } from './SshHostsDialog';
 
 function ConvRow({ conv, active, running, projects, onRename, showProject = true }: { conv: ConvMeta; active: boolean; running: boolean; projects: Project[]; onRename(c: ConvMeta): void; showProject?: boolean }) {
   const openConv = useApp((s) => s.openConv);
@@ -70,10 +72,13 @@ export function Sidebar() {
   const projectId = useApp((s) => s.projectId);
   const workspace = useApp((s) => s.workspace);
   const home = useApp((s) => s.home);
-  const { newChat, setView, setMode, toggleSidebar, renameConv, openProject, refreshProjects } = useApp.getState();
+  const { newChat, setView, setMode, toggleSidebar, renameConv, openProject, refreshProjects, createWorkspace } = useApp.getState();
   const [renaming, setRenaming] = useState<ConvMeta | null>(null);
   const [title, setTitle] = useState('');
   const [creating, setCreating] = useState(false);
+  const [creatingWs, setCreatingWs] = useState(false);
+  const [wsName, setWsName] = useState('');
+  const [sshOpen, setSshOpen] = useState(false);
   const [draft, setDraft] = useState({ name: '', description: '', shareContext: true });
   const info = modeInfo(mode);
   // The Linux account name, shown in the bottom-left account menu.
@@ -101,6 +106,18 @@ export function Sidebar() {
     setCreating(false);
     setDraft({ name: '', description: '', shareContext: true });
     openProject(p.id);
+  };
+
+  const submitWorkspace = async () => {
+    const name = wsName.trim();
+    if (!name) return;
+    try {
+      await createWorkspace(name);
+      setCreatingWs(false);
+      setWsName('');
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
   };
 
   const navBtn = 'flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left text-dim hover:bg-hover hover:text-fg';
@@ -200,7 +217,9 @@ export function Sidebar() {
             <DropdownMenuContent side="top" align="start" sideOffset={8} className="w-[252px]">
               <DropdownMenuLabel>Workspace</DropdownMenuLabel>
               <DropdownMenuItem onSelect={() => void chooseWorkspace()}><Folder />Change workspace…</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setCreatingWs(true)}><FolderPlus />Create workspace…</DropdownMenuItem>
               <DropdownMenuItem onSelect={() => setView('github')}><GitBranch />GitHub sessions</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setSshOpen(true)}><Server />SSH hosts</DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem onSelect={() => setView('skills')}><Sparkles />Skills</DropdownMenuItem>
               <DropdownMenuItem onSelect={() => setView('plan')}><ListChecks />Plan</DropdownMenuItem>
@@ -225,6 +244,8 @@ export function Sidebar() {
           </Tip>
         </div>
       </div>
+
+      <SshHostsDialog open={sshOpen} onOpenChange={setSshOpen} />
 
       <Dialog open={!!renaming} onOpenChange={(o) => { if (!o) setRenaming(null); }}>
         <DialogContent>
@@ -257,6 +278,28 @@ export function Sidebar() {
             <DialogFooter>
               <Button variant="ghost" onClick={() => setCreating(false)}>Cancel</Button>
               <Button variant="primary" type="submit" disabled={!draft.name.trim()}>Create project</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={creatingWs} onOpenChange={setCreatingWs}>
+        <DialogContent>
+          <form className="flex min-h-0 flex-col" onSubmit={(e) => { e.preventDefault(); void submitWorkspace(); }}>
+            <DialogHeader>
+              <DialogTitle>New workspace</DialogTitle>
+              <DialogDescription>
+                Created directly in the folder you set as the workspaces root in Settings.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogBody>
+              <Field label="Name" htmlFor="ws-name" hint="A single folder name; this becomes the new workspace directory.">
+                <Input id="ws-name" autoFocus value={wsName} onChange={(e) => setWsName(e.target.value)} placeholder="my-project" spellCheck={false} className="font-mono text-[13px]" />
+              </Field>
+            </DialogBody>
+            <DialogFooter>
+              <Button variant="ghost" onClick={() => { setCreatingWs(false); setWsName(''); }}>Cancel</Button>
+              <Button variant="primary" type="submit" disabled={!wsName.trim()}>Create workspace</Button>
             </DialogFooter>
           </form>
         </DialogContent>
