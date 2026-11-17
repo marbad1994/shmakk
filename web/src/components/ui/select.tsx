@@ -26,7 +26,7 @@ export function SelectContent({ className, children, ...props }: React.Component
       <Primitive.Content
         position="popper"
         sideOffset={6}
-        className={cn('z-[60] max-h-72 min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border border-line-strong bg-raised shadow-pop animate-pop', className)}
+        className={cn('z-[60] max-h-[min(18rem,var(--radix-select-content-available-height))] max-w-[calc(100vw-20px)] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border border-line-strong bg-raised shadow-pop animate-pop', className)}
         {...props}
       >
         <Primitive.Viewport className="p-1">{children}</Primitive.Viewport>

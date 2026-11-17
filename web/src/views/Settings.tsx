@@ -53,7 +53,7 @@ function ProviderSection() {
 
   return (
     <Section id="set-provider" title="Model provider" aside={provider.configured ? null : <Badge tone="warn">not configured</Badge>}>
-      <form className="grid grid-cols-2 gap-3 rounded-2xl border border-line bg-raised p-4 max-md:grid-cols-1" onSubmit={(e) => { e.preventDefault(); save.mutate(); }}>
+      <form className="grid min-w-0 grid-cols-2 gap-3 rounded-2xl border border-line bg-raised p-4 max-md:grid-cols-1" onSubmit={(e) => { e.preventDefault(); save.mutate(); }}>
         {provider.endpoints.length ? (
           <Field label="Endpoint preset" hint="From ~/.config/shmakk/endpoints.json" className="col-span-full">
             <Select value={provider.endpoint || '__none'} onValueChange={(v) => useEndpoint.mutate(v)}>
@@ -101,7 +101,7 @@ function ProviderSection() {
                     type="button"
                     onClick={() => setForm((f) => ({ ...f, model: m.model }))}
                     title={`Preset ${m.name} → model ${m.model}${m.provider ? ` · ${m.provider}` : ''}${m.hasApiKey ? ' · has key' : ''}`}
-                    className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12.5px] transition-colors ${active ? 'border-accent/50 bg-accent/10 text-fg' : 'border-line text-dim hover:border-line-strong hover:bg-hover hover:text-fg'}`}
+                    className={`inline-flex max-w-full flex-wrap items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12.5px] transition-colors ${active ? 'border-accent/50 bg-accent/10 text-fg' : 'border-line text-dim hover:border-line-strong hover:bg-hover hover:text-fg'}`}
                   >
                     <span className="font-mono">{m.model}</span>
                     {m.name !== m.model ? <span className="text-faint">{m.name}</span> : null}
@@ -269,14 +269,14 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="md:!top-[7vh] md:!h-[min(86vh,820px)] md:!max-h-none md:!w-[min(1000px,calc(100vw-48px))] md:!p-0">
-        <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] md:grid-cols-[248px_minmax(0,1fr)] md:grid-rows-1">
-          <div className="flex min-h-0 flex-col border-b border-line bg-panel/40 md:border-b-0 md:border-r">
+      <DialogContent className="settings-dialog max-md:h-[calc(var(--app-h)-var(--sat)-24px)] md:!top-[7vh] md:!h-[min(86vh,820px)] md:!max-h-none md:!w-[min(1000px,calc(100vw-48px))] md:!p-0">
+        <div className="grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)] md:grid-cols-[248px_minmax(0,1fr)] md:grid-rows-1">
+          <div className="flex min-h-0 min-w-0 flex-col border-b border-line bg-panel/40 md:border-b-0 md:border-r">
             <DialogHeader>
               <DialogTitle>Settings</DialogTitle>
               <DialogDescription className="sr-only">Settings</DialogDescription>
             </DialogHeader>
-            <nav aria-label="Settings sections" className="scroll-touch flex gap-1 overflow-x-auto px-2 pb-2 max-md:pt-1 md:flex-col md:overflow-y-auto md:pb-3">
+            <nav aria-label="Settings sections" className="scroll-touch flex min-w-0 gap-1 overflow-x-auto px-2 pb-2 max-md:pt-1 md:flex-col md:overflow-y-auto md:pb-3">
               {SECTIONS.map((s) => (
                 <button key={s.id} type="button" aria-current={active === s.id ? 'true' : undefined} onClick={() => goTo(s.id)}
                   className={cn('flex shrink-0 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13.5px] text-dim hover:bg-hover hover:text-fg [&_svg]:size-4 [&_svg]:shrink-0', active === s.id && 'bg-accent/10 text-accent')}>
@@ -286,8 +286,8 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
             </nav>
           </div>
 
-          <div ref={scroller} onScroll={onScroll} className="scroll-touch min-h-0 overflow-y-auto px-6 py-5 max-md:px-4">
-            <div className="grid gap-7">
+          <div ref={scroller} onScroll={onScroll} className="scroll-touch min-h-0 min-w-0 overflow-x-hidden overflow-y-auto px-6 py-5 max-md:px-4">
+            <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-7">
               <ProviderSection />
 
               <Section id="set-behaviour" title="Behaviour">
@@ -299,7 +299,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                   <Toggle title="Debug output" sub="Show stack traces and verbose errors (--debug)" checked={settings.debug} onChange={(v) => patch({ debug: v })} />
                   <Row title="Profile" sub="How much context and how many tool rounds the agent gets (--profile)">
                     <Select value={settings.profile || 'auto'} onValueChange={(v) => patch({ profile: v === 'auto' ? null : v })}>
-                      <SelectTrigger className="w-44" aria-label="Profile"><SelectValue /></SelectTrigger>
+                      <SelectTrigger className="w-44 max-sm:w-full" aria-label="Profile"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="auto">auto — per task</SelectItem>
                         {profiles.map((p) => <SelectItem key={p.name} value={p.name}>{p.name} · {p.maxToolIters} rounds</SelectItem>)}
@@ -311,7 +311,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
 
               <PromptSection />
 
-              <Section id="set-voice" title="Voice" aside={<span className="flex gap-1.5"><Badge tone={features.stt ? 'ok' : 'neutral'}>{features.stt ? 'local Whisper' : 'browser speech-to-text'}</Badge><Badge tone={features.tts ? 'ok' : 'neutral'}>{features.tts ? 'local Kokoro' : 'browser voices'}</Badge></span>}>
+              <Section id="set-voice" title="Voice" aside={<span className="flex flex-wrap gap-1.5"><Badge tone={features.stt ? 'ok' : 'neutral'}>{features.stt ? 'local Whisper' : 'browser speech-to-text'}</Badge><Badge tone={features.tts ? 'ok' : 'neutral'}>{features.tts ? 'local Kokoro' : 'browser voices'}</Badge></span>}>
                 <Rows>
                   <Toggle title="Read replies aloud" sub="Speak each finished answer (--tts)" checked={settings.ttsAuto} onChange={(v) => patch({ ttsAuto: v })} />
                   <Toggle title="Hands-free conversation" sub="After each reply the microphone listens again — speak, pause, repeat (--sts)" checked={settings.voiceHandsFree} onChange={(v) => patch({ voiceHandsFree: v, ...(v ? { ttsAuto: true } : {}) })} />
@@ -319,16 +319,16 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                     <Row title="Voice" sub="Kokoro voice used for speech (--tts-voice)">
                       {voices.data?.voices.length ? (
                         <Select value={settings.ttsVoice || 'af_heart'} onValueChange={(v) => patch({ ttsVoice: v })}>
-                          <SelectTrigger className="w-52" aria-label="Voice"><SelectValue /></SelectTrigger>
+                          <SelectTrigger className="w-52 max-sm:w-full" aria-label="Voice"><SelectValue /></SelectTrigger>
                           <SelectContent>{voices.data.voices.map((v) => <SelectItem key={v.id} value={v.id}>{v.name} · {v.language}</SelectItem>)}</SelectContent>
                         </Select>
                       ) : (
-                        <Input className="w-52 font-mono text-[13px]" defaultValue={settings.ttsVoice || ''} placeholder="af_heart" aria-label="Voice id" onBlur={(e) => patch({ ttsVoice: e.target.value.trim() || null })} />
+                        <Input className="w-52 max-sm:w-full font-mono text-[13px]" defaultValue={settings.ttsVoice || ''} placeholder="af_heart" aria-label="Voice id" onBlur={(e) => patch({ ttsVoice: e.target.value.trim() || null })} />
                       )}
                     </Row>
                   ) : null}
                   <Row title="Language" sub="Hint for transcription, e.g. english, es, fr (--voice-language)">
-                    <Input className="w-52" defaultValue={settings.voiceLanguage || ''} placeholder="english" aria-label="Voice language" onBlur={(e) => patch({ voiceLanguage: e.target.value.trim() || null })} />
+                    <Input className="w-52 max-sm:w-full" defaultValue={settings.voiceLanguage || ''} placeholder="english" aria-label="Voice language" onBlur={(e) => patch({ voiceLanguage: e.target.value.trim() || null })} />
                   </Row>
                 </Rows>
                 {!features.stt || !features.tts ? <p className="m-0 text-[13px] text-faint">For fully local speech models run <code className="font-mono">npm run setup:voice</code> in the shmakk package. The first use downloads the models.</p> : null}

@@ -110,7 +110,7 @@ export function Sidebar() {
         <button type="button" onClick={() => newChat()} aria-label="shmakk, new chat" className="inline-flex items-baseline gap-1.5 rounded-lg px-1.5 py-1 font-mono text-base font-bold tracking-tight hover:bg-hover">
           <span className="text-accent" aria-hidden>❯</span>shmakk<span className="h-[15px] w-2 animate-blink self-center rounded-[1px] bg-accent" aria-hidden />
         </button>
-        <Tip label={<>Hide sidebar <kbd>{modKey} B</kbd></>}><Button variant="ghost" size="icon" aria-label="Hide sidebar" className="max-md:hidden" onClick={() => toggleSidebar(false)}><PanelLeftClose /></Button></Tip>
+        <Tip label={<>Hide sidebar <kbd>{modKey} B</kbd></>}><Button variant="ghost" size="icon" aria-label="Hide sidebar" onClick={() => toggleSidebar(false)}><PanelLeftClose /></Button></Tip>
       </div>
 
       {/* The four spaces */}

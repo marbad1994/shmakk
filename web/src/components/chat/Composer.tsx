@@ -435,7 +435,7 @@ export function Composer({ mode: space, running, activity, mic, speaking, onMic,
               autoCorrect={shell ? 'off' : 'on'}
               aria-label={shell ? 'Shell command' : 'Message shmakk'}
               spellCheck={!shell}
-              className={cn('max-h-[40vh] min-h-6 flex-1 resize-none bg-transparent leading-[1.6] outline-none placeholder:text-faint', shell && 'font-mono text-[13.5px] leading-[1.75]')}
+              className={cn('max-h-[40vh] min-h-6 min-w-0 flex-1 resize-none bg-transparent leading-[1.6] outline-none placeholder:text-faint', shell && 'font-mono text-[13.5px] leading-[1.75]')}
             />
           </div>
           {files.length > 0 ? (
@@ -459,7 +459,7 @@ export function Composer({ mode: space, running, activity, mic, speaking, onMic,
                     <div className="pointer-events-none absolute inset-x-0 bottom-0 px-2 pb-1.5 text-[10px] text-dim opacity-0 transition-opacity group-hover:opacity-100">
                       <span className="block truncate">{f.name}</span>
                     </div>
-                    <button type="button" aria-label={`Remove ${f.name}`} onClick={() => { dropBlobUrl(files[i]?.url); setFiles((p) => p.filter((_, j) => j !== i)); }} className="absolute right-1 top-1 z-10 grid size-5 place-items-center rounded-full bg-raised/90 text-faint shadow-sm opacity-0 transition-opacity hover:text-fg focus-visible:opacity-100 group-hover:opacity-100 touch:opacity-100">
+                    <button type="button" aria-label={`Remove ${f.name}`} onClick={() => { dropBlobUrl(files[i]?.url); setFiles((p) => p.filter((_, j) => j !== i)); }} className="absolute right-1 top-1 z-10 grid size-5 place-items-center rounded-full bg-raised/90 text-faint shadow-sm touch:size-11 opacity-0 transition-opacity hover:text-fg focus-visible:opacity-100 group-hover:opacity-100 touch:opacity-100">
                       <X className="size-3" />
                     </button>
                   </div>
@@ -499,11 +499,11 @@ export function Composer({ mode: space, running, activity, mic, speaking, onMic,
             </Tip>
             {running ? (
               <Tip label="Stop (Esc)" side="top">
-                <button type="button" aria-label="Stop" onClick={stop} className="grid size-[34px] shrink-0 place-items-center rounded-full bg-fg text-bg transition-transform hover:scale-105 touch:size-10"><Square className="size-3.5 fill-current" /></button>
+                <button type="button" aria-label="Stop" onClick={stop} className="grid size-[34px] shrink-0 place-items-center rounded-full bg-fg text-bg transition-transform hover:scale-105 touch:size-11"><Square className="size-3.5 fill-current" /></button>
               </Tip>
             ) : (
               <Tip label="Send (Enter)" side="top">
-                <button type="button" aria-label="Send" disabled={!text.trim() && !files.length} onClick={submit} className="grid size-[34px] shrink-0 place-items-center rounded-full bg-accent text-accent-ink transition-transform enabled:hover:scale-105 disabled:opacity-35 touch:size-10"><ArrowUp className="size-[18px]" strokeWidth={2.4} /></button>
+                <button type="button" aria-label="Send" disabled={!text.trim() && !files.length} onClick={submit} className="grid size-[34px] shrink-0 place-items-center rounded-full bg-accent text-accent-ink transition-transform enabled:hover:scale-105 disabled:opacity-35 touch:size-11"><ArrowUp className="size-[18px]" strokeWidth={2.4} /></button>
               </Tip>
             )}
           </div>

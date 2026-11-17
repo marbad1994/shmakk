@@ -139,14 +139,14 @@ export function TerminalDock() {
               className={cn('inline-flex cursor-default items-center gap-1.5 whitespace-nowrap rounded-[7px] py-1 pl-2.5 pr-1.5 font-mono text-xs text-dim', t.id === active && 'bg-raised text-fg')}>
               <span className={cn('size-1.5 rounded-full', t.dead ? 'bg-faint' : 'bg-accent')} />
               {t.title}
-              <button type="button" aria-label={`Close ${t.title}`} onClick={(e) => { e.stopPropagation(); close(t.id); }} className="grid size-4 place-items-center rounded text-faint hover:bg-line hover:text-fg"><X className="size-3" /></button>
+              <button type="button" aria-label={`Close ${t.title}`} onClick={(e) => { e.stopPropagation(); close(t.id); }} className="grid size-4 touch:size-11 place-items-center rounded text-faint hover:bg-line hover:text-fg"><X className="size-3" /></button>
             </div>
           ))}
         </div>
         <Tip label="New shmakk terminal — the full CLI" side="top"><Button variant="ghost" size="sm" className="font-mono" onClick={() => add('shmakk')} disabled={!available}><Plus />shmakk</Button></Tip>
         <Tip label="New plain shell" side="top"><Button variant="ghost" size="sm" className="font-mono" onClick={() => add('shell')} disabled={!available}><Plus />shell</Button></Tip>
         <Tip label={max ? 'Restore' : 'Maximize'} side="top"><Button variant="ghost" size="icon-sm" className="max-md:hidden" aria-label={max ? 'Restore terminal' : 'Maximize terminal'} onClick={() => setMax((m) => !m)}>{max ? <Minimize2 /> : <Maximize2 />}</Button></Tip>
-        <Tip label="Hide terminal (Ctrl+`)" side="top"><Button variant="ghost" size="icon-sm" className="max-md:hidden" aria-label="Hide terminal" onClick={() => toggleDock(false)}><X /></Button></Tip>
+        <Tip label="Hide terminal (Ctrl+`)" side="top"><Button variant="ghost" size="icon-sm" aria-label="Hide terminal" onClick={() => toggleDock(false)}><X /></Button></Tip>
       </div>
       <div className="relative min-h-0 flex-1">
         {tabs.map((t) => <TermPane key={t.id} tab={t} visible={open && t.id === active} onExit={onExit} />)}

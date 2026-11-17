@@ -20,9 +20,9 @@ export function Page({ lead, actions, tabs, children }: { lead?: ReactNode; acti
 
 export function Section({ id, title, aside, children, className }: { id?: string; title: ReactNode; aside?: ReactNode; children: ReactNode; className?: string }) {
   return (
-    <section id={id} className={cn('grid gap-3', className)}>
-      <h2 className="m-0 flex items-center gap-2 text-[13px] font-semibold text-dim after:h-px after:flex-1 after:bg-line">
-        {title}{aside ? <span className="order-last font-normal">{aside}</span> : null}
+    <section id={id} className={cn('grid min-w-0 gap-3', className)}>
+      <h2 className="m-0 flex min-w-0 flex-wrap items-center gap-2 text-[13px] font-semibold text-dim after:h-px after:flex-1 after:bg-line">
+        {title}{aside ? <span className="order-last max-w-full font-normal">{aside}</span> : null}
       </h2>
       {children}
     </section>
@@ -38,8 +38,8 @@ export function Row({ title, sub, children, className }: { title?: ReactNode; su
     <div className={cn('flex items-center gap-3.5 border-b border-line px-4 py-3 max-sm:flex-wrap max-sm:gap-x-3 max-sm:gap-y-2', className)}>
       {title || sub ? (
         <div className="min-w-0 flex-1 max-sm:basis-[60%]">
-          {title ? <div className="font-medium">{title}</div> : null}
-          {sub ? <div className="text-[13px] text-dim">{sub}</div> : null}
+          {title ? <div className="break-words font-medium">{title}</div> : null}
+          {sub ? <div className="break-words text-[13px] text-dim">{sub}</div> : null}
         </div>
       ) : null}
       {children}

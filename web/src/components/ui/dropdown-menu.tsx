@@ -14,7 +14,7 @@ export function DropdownMenuContent({ className, sideOffset = 6, ...props }: Rea
       <Primitive.Content
         sideOffset={sideOffset}
         collisionPadding={10}
-        className={cn('z-50 min-w-44 overflow-hidden rounded-xl touch:min-w-56 touch:rounded-2xl touch:p-1.5 border border-line-strong bg-raised p-1 shadow-pop animate-pop', className)}
+        className={cn('z-50 min-w-44 max-w-[calc(100vw-20px)] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto rounded-xl touch:min-w-56 touch:rounded-2xl touch:p-1.5 border border-line-strong bg-raised p-1 shadow-pop animate-pop', className)}
         {...props}
       />
     </Primitive.Portal>

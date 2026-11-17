@@ -52,6 +52,10 @@ const waitForPort = (port) => waitFor(async () => {
       SHMAKK_API_KEY: 'x',
       SHMAKK_MODEL: 'mock',
       SHMAKK_WEB_TOKEN: TOKEN,
+      // Keep the server's state (conversations, settings) inside the temp dir
+      // so this throwaway E2E never writes into the user's real state.
+      XDG_STATE_HOME: path.join(tmp, 'state'),
+      XDG_CONFIG_HOME: path.join(tmp, 'config'),
     },
   });
   procs.push(web);

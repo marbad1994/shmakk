@@ -174,3 +174,44 @@ html.is-desktop.is-mac { --titlebar-pad: 72px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
 }
+
+/* Keep the app and portalled sheets inside the visible area above the keyboard. */
+:root { --app-top: 0px; --app-bottom: 0px; }
+.app-shell { position: absolute; inset-inline: 0; top: var(--app-top); }
+@media (max-width: 1023px) {
+  .app-shell > div:has(> aside[aria-label="Navigation"]),
+  aside[aria-label="Inspector"] {
+    top: var(--app-top);
+    bottom: auto;
+    height: var(--app-h);
+  }
+  aside[aria-label="Inspector"] { padding-bottom: var(--sab); }
+}
+@media (max-width: 767px) {
+  [role="dialog"][data-state] {
+    bottom: var(--app-bottom);
+    padding-left: var(--sal);
+    padding-right: var(--sar);
+  }
+  .prose { overflow-wrap: anywhere; }
+  #composer-input { max-height: min(28vh, 160px); }
+}
+@media (pointer: coarse) {
+  input[type="checkbox"], input[type="radio"] { min-width: 24px; min-height: 24px; }
+}
+:root[data-keyboard="open"] { --sab: 0px; }
+
+@media (max-width: 767px) {
+  aside.mobile-inspector[aria-label="Inspector"] {
+    top: auto;
+    bottom: var(--app-bottom);
+    left: 0;
+    height: calc(var(--app-h) - var(--sat) - 24px);
+    padding-top: 0 !important;
+    padding-left: var(--sal);
+    padding-right: var(--sar);
+  }
+  .settings-dialog { overflow-wrap: anywhere; }
+  .settings-dialog form > *, .settings-dialog section { min-width: 0; }
+  .settings-dialog [role="radiogroup"] { flex-wrap: wrap; }
+}

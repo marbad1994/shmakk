@@ -127,7 +127,7 @@ export function App() {
 
   return (
     <HeaderSlotContext.Provider value={headerSlot}>
-    <div className="flex overflow-hidden" style={{ height: 'var(--app-h)' }}>
+    <div className="app-shell flex overflow-hidden" style={{ height: 'var(--app-h)' }}>
       <a href="#composer-input" className="absolute -left-[999px] top-2 z-[100] rounded-lg bg-accent px-2.5 py-1.5 text-accent-ink focus:left-2">Skip to message box</a>
 
       {/* Sidebar: in-flow on wide screens, slide-over drawer on tablets and phones */}
@@ -141,7 +141,7 @@ export function App() {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header
-          className="drag flex min-h-12 shrink-0 items-center gap-2 px-3.5 pb-2 pt-[calc(8px+var(--sat))] max-md:border-b max-md:border-line max-md:bg-panel/80 max-md:px-2 max-md:backdrop-blur"
+          className="drag flex min-h-12 shrink-0 items-center gap-2 px-3.5 pb-2 pt-[calc(8px+var(--sat))] max-md:flex-wrap max-md:border-b max-md:border-line max-md:bg-panel/80 max-md:px-2 max-md:backdrop-blur"
           style={{ paddingLeft: !sidebarOpen || mobile ? 'calc(8px + var(--sal) + var(--titlebar-pad, 0px))' : undefined, paddingRight: 'calc(8px + var(--sar))' }}
         >
           {mobile ? (
@@ -172,7 +172,7 @@ export function App() {
             <div ref={setHeaderSlot} className="flex min-w-0 shrink items-center justify-end gap-1.5 overflow-hidden" aria-label="Design preview controls" />
           ) : null}
           {view === 'chat' && !design ? (
-            <div role="group" aria-label="Inspector panels" className="flex items-center gap-0.5 rounded-lg border border-line p-0.5">
+            <div role="group" aria-label="Inspector panels" className="flex items-center gap-0.5 rounded-lg border border-line p-0.5 max-md:order-last max-md:w-full max-md:justify-around max-md:border-0">
               {PANES.map((p) => {
                 const on = rightOpen && rightPane === p.id;
                 return (
@@ -180,9 +180,9 @@ export function App() {
                     <Button
                       variant="ghost" size="icon-sm" aria-label={p.label} aria-pressed={on}
                       onClick={() => (on ? toggleRight(false) : setRightPane(p.id))}
-                      className={on ? 'bg-accent/10 text-accent' : undefined}
+                      className={cn('max-md:w-auto max-md:flex-1 max-md:gap-2', on && 'bg-accent/10 text-accent')}
                     >
-                      {p.icon}
+                      {p.icon}<span className="text-xs md:hidden">{p.label}</span>
                     </Button>
                   </Tip>
                 );

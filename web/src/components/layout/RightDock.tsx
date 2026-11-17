@@ -104,15 +104,16 @@ export function RightDock() {
       <aside
         aria-label="Inspector"
         className={cn(
-          'relative flex shrink-0 flex-col border-l border-line bg-panel',
-          'max-lg:fixed max-lg:inset-y-0 max-lg:right-0 max-lg:z-40 max-lg:!w-[min(420px,92vw)] max-lg:shadow-pop',
-          !open && 'border-l-0 max-lg:translate-x-full max-lg:shadow-none',
+          'mobile-inspector relative flex shrink-0 flex-col border-l border-line bg-panel',
+          'max-lg:fixed max-lg:inset-y-0 max-lg:right-0 max-lg:z-40 max-lg:!w-[min(420px,92vw)] max-lg:shadow-pop max-md:!w-full max-md:rounded-t-3xl max-md:overflow-hidden max-md:border-l-0 max-md:border-t',
+          !open && 'border-l-0 max-lg:translate-x-full max-md:translate-x-0 max-md:translate-y-full max-lg:shadow-none',
           open && !dragging && 'transition-[width,transform] duration-200 ease-out max-lg:transition-transform',
           dragging && 'transition-none',
         )}
         inert={!open}
         style={{ width: open ? width : 0, paddingTop: 'var(--sat)' }}
       >
+        <div className="mx-auto mb-1 mt-2 h-1 w-9 shrink-0 rounded-full bg-line-strong md:hidden" aria-hidden />
         {open ? (
           <div
             role="separator"

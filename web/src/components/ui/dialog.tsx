@@ -20,7 +20,7 @@ export function DialogContent({ className, children, hideClose, ...props }: Reac
         className={cn(
           'fixed z-50 flex flex-col overflow-hidden border border-line-strong bg-raised shadow-pop outline-none',
           'md:left-1/2 md:top-[12vh] md:max-h-[76vh] md:w-[min(560px,calc(100vw-32px))] md:-translate-x-1/2 md:animate-pop md:rounded-2xl',
-          'max-md:inset-x-0 max-md:bottom-0 max-md:max-h-[calc(var(--app-h)-var(--sat)-24px)] max-md:!w-full max-md:animate-sheet max-md:rounded-t-3xl max-md:border-x-0 max-md:border-b-0 max-md:pb-[var(--sab)]',
+          'max-md:inset-x-0 max-md:bottom-[var(--app-bottom)] max-md:max-h-[calc(var(--app-h)-var(--sat)-24px)] max-md:!w-full max-md:animate-sheet max-md:rounded-t-3xl max-md:border-x-0 max-md:border-b-0 max-md:pb-[var(--sab)]',
           className,
         )}
         {...props}
@@ -28,7 +28,7 @@ export function DialogContent({ className, children, hideClose, ...props }: Reac
         <div className="mx-auto mt-2 h-1 w-9 shrink-0 rounded-full bg-line-strong md:hidden" aria-hidden />
         {children}
         {hideClose ? null : (
-          <DialogPrimitive.Close className="absolute right-3 top-3 grid size-7 place-items-center rounded-md text-dim hover:bg-hover hover:text-fg touch:size-9 touch:rounded-full touch:bg-hover" aria-label="Close">
+          <DialogPrimitive.Close className="absolute right-3 top-3 grid size-7 place-items-center rounded-md text-dim hover:bg-hover hover:text-fg touch:size-11 touch:rounded-full touch:bg-hover" aria-label="Close">
             <X className="size-4" />
           </DialogPrimitive.Close>
         )}
@@ -47,7 +47,7 @@ export function DialogDescription({ className, ...props }: React.ComponentProps<
   return <DialogPrimitive.Description className={cn('text-[13px] text-dim', className)} {...props} />;
 }
 export function DialogBody({ className, ...props }: React.ComponentProps<'div'>) {
-  return <div className={cn('scroll-touch grid gap-3 overflow-y-auto px-4 py-3.5', className)} {...props} />;
+  return <div className={cn('scroll-touch grid min-h-0 gap-3 overflow-y-auto px-4 py-3.5', className)} {...props} />;
 }
 export function DialogFooter({ className, ...props }: React.ComponentProps<'div'>) {
   return <div className={cn('flex shrink-0 justify-end gap-2 border-t border-line bg-panel px-4 py-3 max-md:flex-col-reverse max-md:[&>button]:w-full', className)} {...props} />;

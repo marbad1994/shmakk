@@ -30,17 +30,44 @@ export function useVisualViewport(onKeyboard: (open: boolean) => void) {
     const vv = window.visualViewport;
     if (!vv) return;
     let last = false;
+    let frame = 0;
+    let baseline = vv.height;
+    let orientation = window.screen.orientation?.angle ?? window.orientation;
     const update = () => {
-      document.documentElement.style.setProperty('--app-h', `${vv.height}px`);
-      // iOS scrolls the page to reveal the focused field; undo that, we handle it.
-      if (window.scrollY) window.scrollTo(0, 0);
-      const open = window.innerHeight - vv.height > 120 || (isTouch() && vv.height < screen.height * 0.6);
+      const angle = window.screen.orientation?.angle ?? window.orientation;
+      if (angle !== orientation) { baseline = vv.height; orientation = angle; }
+      const focused = document.activeElement;
+      const editing = focused instanceof HTMLElement &&
+        (focused.matches('input, textarea, [contenteditable="true"]') || !!focused.closest('.xterm'));
+      if (!editing) baseline = vv.height;
+      else baseline = Math.max(baseline, vv.height);
+      // Only a focused editor and a meaningful viewport reduction indicate a keyboard.
+      // Screen height is deliberately excluded: landscape and split-screen are smaller too.
+      const open = editing && Math.max(baseline - vv.height, window.innerHeight - vv.height) > 120;
+      const root = document.documentElement;
+      root.style.setProperty('--app-h', `${vv.height}px`);
+      root.style.setProperty('--app-top', `${vv.offsetTop}px`);
+      root.style.setProperty('--app-bottom', `${Math.max(0, window.innerHeight - vv.height - vv.offsetTop)}px`);
+      root.dataset.keyboard = open ? 'open' : 'closed';
       if (open !== last) { last = open; onKeyboard(open); }
     };
+    const schedule = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(update); };
     update();
-    vv.addEventListener('resize', update);
-    vv.addEventListener('scroll', update);
-    return () => { vv.removeEventListener('resize', update); vv.removeEventListener('scroll', update); };
+    vv.addEventListener('resize', schedule);
+    vv.addEventListener('scroll', schedule);
+    window.addEventListener('resize', schedule);
+    document.addEventListener('focusin', schedule);
+    document.addEventListener('focusout', schedule);
+    return () => {
+      cancelAnimationFrame(frame);
+      vv.removeEventListener('resize', schedule);
+      vv.removeEventListener('scroll', schedule);
+      window.removeEventListener('resize', schedule);
+      document.removeEventListener('focusin', schedule);
+      document.removeEventListener('focusout', schedule);
+      for (const key of ['--app-h', '--app-top', '--app-bottom']) document.documentElement.style.removeProperty(key);
+      delete document.documentElement.dataset.keyboard;
+    };
   }, [onKeyboard]);
 }
 
@@ -53,7 +80,9 @@ export function useDrawerSwipe(open: boolean, setOpen: (v: boolean) => void, ena
     let tracking = false;
     const onStart = (e: TouchEvent) => {
       const t = e.touches[0];
-      tracking = open ? true : t.clientX < 28;
+      tracking = e.touches.length === 1 && (open
+        ? e.target instanceof Element && !!e.target.closest('[aria-label="Navigation"]')
+        : t.clientX < 28 && !(e.target instanceof Element && e.target.closest('input, textarea, [contenteditable], .xterm')));
       startX = t.clientX;
       startY = t.clientY;
     };

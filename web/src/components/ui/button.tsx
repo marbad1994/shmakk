@@ -16,9 +16,9 @@ const buttonVariants = cva(
       },
       size: {
         default: 'h-9 rounded-[10px] px-3.5 text-[13.5px] touch:h-11 touch:rounded-xl touch:px-4 touch:text-[15px] [&_svg]:size-4',
-        sm: 'h-7 rounded-lg px-2.5 text-[12.5px] touch:h-9 touch:px-3 touch:text-[13.5px] [&_svg]:size-3.5',
-        icon: 'size-8 rounded-lg touch:size-10 touch:rounded-xl [&_svg]:size-4 touch:[&_svg]:size-5',
-        'icon-sm': 'size-7 rounded-md touch:size-9 touch:rounded-lg [&_svg]:size-3.5 touch:[&_svg]:size-[18px]',
+        sm: 'h-7 rounded-lg px-2.5 text-[12.5px] touch:h-11 touch:px-3 touch:text-[13.5px] [&_svg]:size-3.5',
+        icon: 'size-8 rounded-lg touch:size-11 touch:rounded-xl [&_svg]:size-4 touch:[&_svg]:size-5',
+        'icon-sm': 'size-7 rounded-md touch:size-11 touch:rounded-lg [&_svg]:size-3.5 touch:[&_svg]:size-[18px]',
       },
     },
     defaultVariants: { variant: 'default', size: 'default' },

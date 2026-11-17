@@ -2079,12 +2079,15 @@ test('webui modes: conversations carry mode and project; unattended runs settle 
   const projects = createProjects();
   const settings = { ...require('../src/webui/store').DEFAULT_SETTINGS };
   const chat = new ChatManager({ settings, saveSettings() {}, broadcast() {}, mcpManager: null, projects, automations: null, getWorkspace: () => dir, onProviderChanged() {} });
+  const created = [];
   try {
     const p = projects.create({ name: 'Site', shareContext: true });
     const d = chat.create({ mode: 'design', projectId: p.id });
     const c = chat.create({ mode: 'code', projectId: p.id });
+    const bogus = chat.create({ mode: 'bogus' });
+    created.push(d.id, c.id, bogus.id);
     assert.strictEqual(require('../src/webui/store').metaOf(d).mode, 'design');
-    assert.strictEqual(chat.create({ mode: 'bogus' }).mode, 'code');
+    assert.strictEqual(bogus.mode, 'code');
     fs.writeFileSync(path.join(design.ensureDir(d.id), 'index.html'), '<h1>x</h1>');
 
     // Design chats live in their own folder; shared projects expose it to code chats.
@@ -2096,7 +2099,10 @@ test('webui modes: conversations carry mode and project; unattended runs settle 
     assert.doesNotMatch(chat._projectContext(c), /\[design\]/);
 
     // Without a model every mode reports the same clear outcome instead of hanging.
-    for (const conv of [d, c, chat.create({ mode: 'chat' }), chat.create({ mode: 'cowork' })]) {
+    const chatConv = chat.create({ mode: 'chat' });
+    const coworkConv = chat.create({ mode: 'cowork' });
+    created.push(chatConv.id, coworkConv.id);
+    for (const conv of [d, c, chatConv, coworkConv]) {
       const r = await chat.sendAndWait(conv.id, 'hello there');
       assert.strictEqual(r.status, 'error', conv.mode);
       assert.match(r.error, /no AI provider/);
@@ -2104,6 +2110,7 @@ test('webui modes: conversations carry mode and project; unattended runs settle 
 
     // Unattended policy, exercised directly.
     const w = chat.create({ mode: 'cowork' });
+    created.push(w.id);
     const decide = async (unattended, tool) => { w.run = { unattended, ctrl: new AbortController() }; try { return await chat._confirmTool(w, w.run.ctrl)(tool); } finally { w.run = null; } };
     const rm = { name: 'run', args: { cmd: 'rm -rf build' }, safety: 'unsafe', description: 'run command' };
     const write = { name: 'write_file', args: { path: 'a.txt', content: 'x' }, safety: 'uncertain', description: 'write a.txt' };
@@ -2119,6 +2126,7 @@ test('webui modes: conversations carry mode and project; unattended runs settle 
     chat.remove(d.id);
     assert.ok(!fs.existsSync(design.designDir(d.id)));
   } finally {
+    for (const id of created) { try { chat.remove(id); } catch {} }
     if (savedUrl !== undefined) process.env.SHMAKK_BASE_URL = savedUrl;
   }
 }));
