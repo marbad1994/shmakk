@@ -925,6 +925,7 @@ class ChatManager {
   _eventSink(conv, { agentLabel = null } = {}) {
     let current = null;            // streaming assistant item
     const tools = new Map();       // tool_call id → item
+    const subagentItems = new Map(); // subagent index → output card
     const closeCurrent = () => {
       if (current && current.streaming) { current.streaming = false; this._touch(conv, current); }
       current = null;
@@ -997,6 +998,29 @@ class ChatManager {
           this._broadcastBrowserOpen(ev.name, ev.args, ev.result, conv.mode);
           it.endedAt = Date.now();
           this._touch(conv, it);
+          break;
+        }
+        case 'subagent': {
+          // Auto-subagent planning pass: one visible card per subagent.
+          if (ev.phase === 'start') {
+            this._activity(conv, `planning pass · ${ev.index}/${ev.total}`);
+            subagentItems.set(ev.index, this._add(conv, {
+              type: 'output',
+              title: `Planning pass · ${ev.index}/${ev.total} · ${ev.focus}`,
+              text: '',
+            }));
+          } else if (ev.phase === 'done') {
+            const it = subagentItems.get(ev.index);
+            if (it) { it.text = ev.text || it.text || ''; this._touch(conv, it); }
+            this._activity(conv, 'planning done');
+          } else if (ev.phase === 'error') {
+            const it = subagentItems.get(ev.index);
+            if (it) {
+              it.text = `${it.text ? `${it.text}\n` : ''}error: ${ev.error}`;
+              this._touch(conv, it);
+            }
+            this._notice(conv, `Planning pass failed: ${ev.error}`, 'warn');
+          }
           break;
         }
         default:

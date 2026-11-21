@@ -133,3 +133,20 @@ export const STATUS_TONE: Record<TaskStatus, string> = {
 };
 
 export const pill = 'inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 text-[11px] font-semibold leading-[18px]';
+
+/** How many tasks sit in each status. */
+export function countsOf(tasks: { status: TaskStatus }[]): Partial<Record<TaskStatus, number>> {
+  const counts: Partial<Record<TaskStatus, number>> = {};
+  for (const t of tasks) counts[t.status] = (counts[t.status] || 0) + 1;
+  return counts;
+}
+
+/** A plan record reduced to what the plan list shows. */
+export function planToMeta(plan: PlanFull): PlanMeta {
+  return {
+    id: plan.id, title: plan.title, summary: plan.summary, source: plan.source, workspace: plan.workspace,
+    requireSignoff: plan.requireSignoff, status: plan.status, started: plan.started, paused: plan.paused,
+    running: plan.running, convId: plan.convId, createdAt: plan.createdAt, updatedAt: plan.updatedAt,
+    taskCount: plan.tasks.length, counts: countsOf(plan.tasks),
+  };
+}
