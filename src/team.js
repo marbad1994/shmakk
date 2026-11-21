@@ -415,6 +415,8 @@ async function runSubAgent({
   topology = 'parallel',
   skill = null,        // optional: explicit skill name override (PM can pick any)
   model = null,
+  sessionId = null,    // for session journaling / file-touch recording
+  scope = null,
 }) {
   // Step 1: figure out which skill file to load.
   // Explicit `skill` param wins; otherwise map role → skill via ROLE_TO_SKILL;
@@ -628,7 +630,7 @@ Be specific. No fluff. No restating the task.`,
 // ── Main entry point ──────────────────────────────────────────────────────────
 
 // Run agents sequentially with handoffs — each agent sees prior outputs.
-async function runPipelineAgents({ agents, overallInput, roots, signal, mcpManager, write, emit = null, model = null }) {
+async function runPipelineAgents({ agents, overallInput, roots, signal, mcpManager, write, emit = null, model = null, sessionId = null, scope = null }) {
   const handoffs = [];
   const results = [];
   const startTime = Date.now();
@@ -651,6 +653,8 @@ async function runPipelineAgents({ agents, overallInput, roots, signal, mcpManag
       handoffs: [...handoffs],   // pass copy of prior outputs
       topology: 'pipeline',
       model,
+      sessionId,
+      scope,
     });
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
@@ -678,7 +682,7 @@ async function runPipelineAgents({ agents, overallInput, roots, signal, mcpManag
 }
 
 // Run agents simultaneously via Promise.all.
-async function runParallelAgents({ agents, overallInput, roots, signal, mcpManager, write, emit = null, model = null }) {
+async function runParallelAgents({ agents, overallInput, roots, signal, mcpManager, write, emit = null, model = null, sessionId = null, scope = null }) {
   const startTime = Date.now();
   if (emit) agents.forEach((a, index) => emit({ type: 'team_agent', index, role: a.role, status: 'running' }));
 
@@ -695,6 +699,8 @@ async function runParallelAgents({ agents, overallInput, roots, signal, mcpManag
         mcpManager,
         topology: 'parallel',
         model,
+        sessionId,
+        scope,
       });
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
       const icon = result.error ? '\x1b[31m✗\x1b[0m' : '\x1b[32m✓\x1b[0m';
@@ -763,8 +769,8 @@ async function runTeam({ input, roots, write, signal, mcpManager, onEvent = null
   if (emit) {
     emit({ type: 'team_start', topology, reason, source, agents: agents.map((a) => ({ role: a.role, task: a.task, fileScope: a.fileScope || null, skill: a.skill || null })) });
     const agentResults = topology === 'pipeline'
-      ? await runPipelineAgents({ agents, overallInput: input, roots, signal, mcpManager, write, emit, model: modelName })
-      : await runParallelAgents({ agents, overallInput: input, roots, signal, mcpManager, write, emit, model: modelName });
+      ? await runPipelineAgents({ agents, overallInput: input, roots, signal, mcpManager, write, emit, model: modelName, sessionId, scope })
+      : await runParallelAgents({ agents, overallInput: input, roots, signal, mcpManager, write, emit, model: modelName, sessionId, scope });
     emit({ type: 'status', label: 'synthesizing results' });
     const summary = await synthesizeResults({ overallInput: input, agentResults, client, signal, model: modelName });
     emit({ type: 'team_summary', content: summary });
@@ -784,8 +790,8 @@ async function runTeam({ input, roots, write, signal, mcpManager, onEvent = null
   // Phase 2: Execute based on topology
   agentOverview.startTeamRun(`team-${Date.now()}`);
   const agentResults = topology === 'pipeline'
-    ? await runPipelineAgents({ agents, overallInput: input, roots, signal, mcpManager, write, model: modelName })
-    : await runParallelAgents({ agents, overallInput: input, roots, signal, mcpManager, write, model: modelName });
+    ? await runPipelineAgents({ agents, overallInput: input, roots, signal, mcpManager, write, model: modelName, sessionId, scope })
+    : await runParallelAgents({ agents, overallInput: input, roots, signal, mcpManager, write, model: modelName, sessionId, scope });
 
   write('\r\n');
 
