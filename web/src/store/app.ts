@@ -5,7 +5,7 @@ import { socket } from '@/lib/ws';
 import { queryClient } from '@/lib/query';
 import type { AttachmentRef, Bootstrap, ConvMeta, ConvSnapshot, DocPane, EffortLevel, Features, Item, Mode, NodeInfo, Project, Provider, ServerMsg, Settings, Status, TunnelStatus, ViewId } from '@/lib/types';
 
-const VIEWS: ViewId[] = ['chat', 'automations', 'github', 'skills', 'memory', 'plan', 'changes', 'recall', 'team', 'mcp', 'activity', 'artefacts', 'settings'];
+const VIEWS: ViewId[] = ['chat', 'automations', 'macros', 'github', 'skills', 'memory', 'plan', 'changes', 'recall', 'team', 'mcp', 'activity', 'artefacts', 'settings'];
 
 function readHash(): { view: ViewId; conv: string | null; project: string | null } {
   const h = location.hash.replace(/^#\/?/, '');
@@ -217,7 +217,14 @@ export const useApp = create<AppState>((set, get) => {
       case 'status.changed': void get().refreshStatus(); break;
       case 'projects.changed': void get().refreshProjects(); void queryClient.invalidateQueries({ queryKey: ['project'] }); break;
       case 'automations.changed': void queryClient.invalidateQueries({ queryKey: ['automations'] }); break;
+      case 'macros.changed': void queryClient.invalidateQueries({ queryKey: ['macros'] }); break;
       case 'artefacts.changed': void queryClient.invalidateQueries({ queryKey: ['artefacts'] }); break;
+      case 'macro.finished': {
+        if (msg.status === 'ok') toast.success(`Macro ${msg.name} finished`);
+        else if (msg.status === 'stopped') toast.info(`Macro ${msg.name} was stopped`);
+        else toast.error(`Macro ${msg.name} failed`);
+        break;
+      }
       case 'automation.finished': {
         const open = { label: 'Open', onClick: () => void get().openConv(msg.convId) };
         if (msg.status === 'ok') toast.success(`${msg.name} finished`, { action: open });

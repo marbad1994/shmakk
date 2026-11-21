@@ -200,6 +200,7 @@ export function Sidebar() {
               <DropdownMenuItem onSelect={() => setSshOpen(true)}><Server />SSH hosts</DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem onSelect={() => setView('skills')}><Sparkles />Skills</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setView('macros')}><Zap />Macros</DropdownMenuItem>
               <DropdownMenuItem onSelect={() => setView('plan')}><ListChecks />Plan</DropdownMenuItem>
               <DropdownMenuItem onSelect={() => setView('activity')}><Activity />Activity</DropdownMenuItem>
               <DropdownMenuItem onSelect={() => setView('recall')}><History />Recall</DropdownMenuItem>

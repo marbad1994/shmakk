@@ -24,6 +24,7 @@ const { createApi, HttpError, publicSettings } = require('./api');
 const { createMCPManager } = require('../mcp-client');
 const { createProjects } = require('./projects');
 const { createAutomations } = require('./automations');
+const { createMacros } = require('./macros');
 const design = require('./design');
 const { injectInspector } = require('./inspector');
 const { createPreviewServer } = require('./preview');
@@ -223,6 +224,7 @@ async function startWebServer(opts = {}) {
   app.chat = new ChatManager({
     projects: app.projects,
     get automations() { return app.automations; },
+    get macros() { return app.macros; },
     get plans() { return app.plans; },
     settings,
     saveSettings: app.saveSettings,
@@ -249,6 +251,10 @@ async function startWebServer(opts = {}) {
   try { app.plans.recover(); } catch {}
 
   app.automations = createAutomations({ chat: app.chat, projects: app.projects, broadcast, getWorkspace: () => workspace });
+
+  // Macros are triggers ("deploy") that start an automation or run commands;
+  // they ride on the same chat plumbing, so they come after the chat manager.
+  app.macros = createMacros({ chat: app.chat, automations: app.automations, broadcast });
 
   const { createCaptureManager } = require('../services/capture');
   app.capture = createCaptureManager({ getWorkspace: () => workspace, broadcast });

@@ -584,7 +584,12 @@ class ChatManager {
     let outcome = 'ok';
     try {
       const selfCmd = matchSelfCommand(text);
-      if (conv.mode === 'chat') {
+      // A macro trigger bypasses every other dispatch: "deploy" alone, or
+      // "… then run the deploy macro".
+      const macroHit = mode !== 'shell' && this.ctx.macros ? this.ctx.macros.match(text, conv.workspace) : null;
+      if (macroHit) {
+        await this._macro(conv, macroHit, ctrl);
+      } else if (conv.mode === 'chat') {
         await this._plainChat(conv, text, ctrl);
       } else if (conv.mode === 'design') {
         await this._design(conv, text, ctrl);
@@ -620,7 +625,20 @@ class ChatManager {
       run.finish({ status: outcome, error: run.error, summary: last ? last.text : '' });
       this.ctx.broadcast({ t: 'run', convId: conv.id, running: false });
       this.ctx.broadcast({ t: 'conv', conv: { ...store.metaOf(conv), running: false } });
+      // Macros whose "when" instruction matched a command in this run ask now,
+      // with the run finished so no cleanup can swallow the question.
+      try { if (this.ctx.macros) this.ctx.macros.flush(conv); } catch {}
     }
+  }
+
+  // Run a macro inside this conversation. Command macros write their output
+  // here; automation macros start their own conversation and say so.
+  async _macro(conv, hit, ctrl) {
+    const m = hit.macro;
+    this._notice(conv, hit.via === 'exact'
+      ? `Macro “${m.name}” (trigger “${m.trigger}”).`
+      : `Macro “${m.name}”${hit.input ? ` for “${hit.input.slice(0, 120)}”` : ''}.`, 'info', { macroId: m.id });
+    return this.ctx.macros.runInConversation(m, { conv, chat: this, ctrl, input: hit.input, via: hit.via });
   }
 
   // ── self-commands ("list skills", "review on", "reset", …) ──────────────
@@ -768,6 +786,9 @@ class ChatManager {
 
   async _shell(conv, cmd, ctrl) {
     const { settings } = this.ctx;
+
+    // Macros with a "when to ask" rule watch every command in the transcript.
+    try { if (this.ctx.macros) this.ctx.macros.noteCommand(conv.id, cmd); } catch {}
 
     // A GUI has no "the user typed it at their own prompt" moment, so risky
     // commands are confirmed in review mode before they run.

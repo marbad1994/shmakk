@@ -73,6 +73,22 @@ export interface Automation {
 }
 export interface ConvSnapshot extends ConvMeta { cwd: string; items: Item[]; running: boolean; activity: string | null }
 
+/** A trigger word that starts an automation or runs a short command list. */
+export interface MacroRun { id: string; at: number; via: 'exact' | 'phrase' | 'condition' | 'manual'; input: string; status: 'running' | 'ok' | 'error' | 'stopped'; summary?: string; durationMs?: number; convId: string | null }
+export interface Macro {
+  id: string; name: string; description: string; trigger: string;
+  kind: 'automation' | 'commands'; automationId: string | null; commands: string[];
+  /** Instruction for when the macro offers itself, e.g. "after git push to main or dev". */
+  askWhen: string;
+  /** Workspace folders this macro fires in. Empty = every workspace. */
+  workspaces: string[];
+  enabled: boolean; running: boolean;
+  lastStatus?: string | null; lastRunAt?: number | null; runs: MacroRun[];
+  createdAt: number; updatedAt: number;
+  /** Resolved from automationId when the macro starts an automation. */
+  automation: Automation | null;
+}
+
 export interface Artefact {
   id: string;
   name: string;
@@ -167,8 +183,10 @@ export type ServerMsg =
   | { t: 'status.changed' }
   | { t: 'projects.changed' }
   | { t: 'automations.changed' }
+  | { t: 'macros.changed' }
   | { t: 'artefacts.changed' }
   | { t: 'automation.finished'; id: string; name: string; status: string; convId: string }
+  | { t: 'macro.finished'; id: string; name: string; status: string }
   | { t: 'design.changed'; convId: string }
   | { t: 'toast'; level: 'error' | 'info' | 'ok'; text: string }
   | { t: 'term.data'; id: string; data: string }
@@ -178,7 +196,7 @@ export type ServerMsg =
   | { t: 'browser.open'; url: string }
   | { t: 'pong' };
 
-export type ViewId = 'chat' | 'project' | 'automations' | 'github' | 'skills' | 'memory' | 'plan' | 'changes' | 'recall' | 'team' | 'mcp' | 'activity' | 'artefacts' | 'settings';
+export type ViewId = 'chat' | 'project' | 'automations' | 'macros' | 'github' | 'skills' | 'memory' | 'plan' | 'changes' | 'recall' | 'team' | 'mcp' | 'activity' | 'artefacts' | 'settings';
 
 /** Panes of the right-hand inspector, in tab order. */
 export type DocPane = 'browser' | 'live' | 'changes' | 'plan';

@@ -1328,6 +1328,27 @@ function createApi(app) {
     return { path: p };
   });
 
+  // ── macros: a trigger word that runs an automation or commands ────────
+
+  add('GET', '/api/macros', () => ({ macros: app.macros.list() }));
+  add('POST', '/api/macros', ({ body }) => {
+    try { return app.macros.create(body || {}); }
+    catch (e) { throw new HttpError(400, e.message); }
+  });
+  add('PATCH', '/api/macros/:id', ({ params, body }) => {
+    let m;
+    try { m = app.macros.update(params.id, body || {}); }
+    catch (e) { throw new HttpError(400, e.message); }
+    if (!m) throw new HttpError(404, 'macro not found');
+    return m;
+  });
+  add('DELETE', '/api/macros/:id', ({ params }) => ({ ok: app.macros.remove(params.id) }));
+  add('POST', '/api/macros/:id/run', ({ params, body }) => {
+    const r = app.macros.run(params.id, { input: (body || {}).input || '', workspace: (body || {}).workspace || null });
+    if (!r) throw new HttpError(404, 'macro not found');
+    return r;
+  });
+
   // ── GitHub: account, repositories, cloud sessions ─────────────────────
 
   add('GET', '/api/github', () => github.status());

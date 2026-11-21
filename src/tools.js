@@ -436,6 +436,11 @@ function describeTool(name, args, mcpManager) {
   return `${name} ${JSON.stringify(args).slice(0, 80)}`;
 }
 
+// Optional observer for shell commands the agent runs (macros use it to
+// decide when to offer themselves). Set by src/webui/macros.js.
+let commandObserver = null;
+function setCommandObserver(fn) { commandObserver = typeof fn === 'function' ? fn : null; }
+
 function runCmd(cwd, cmd, signal) {
   return new Promise((resolve) => {
     let removeAbortListener = null;
@@ -613,7 +618,10 @@ async function dispatchTool(name, args, roots, confirmTool, signal, mcpManager, 
   }
   if (name === 'run') {
     // run from the first root as cwd
-    return await runCmd(roots[0], args.cmd, signal);
+    const out = await runCmd(roots[0], args.cmd, signal);
+    // Macros watch commands for their "when should this be offered" rule.
+    try { if (commandObserver) commandObserver({ cmd: String(args.cmd || ''), cwd: roots[0], scope }); } catch {}
+    return out;
   }
   if (name === 'web_search') {
     return await webSearch(args.query, args.max_results, signal);
@@ -1139,6 +1147,7 @@ module.exports = {
   describeTool,
   dispatchTool,
   runCmd,
+  setCommandObserver,
   normalizeToolCalls,
   applyRoundToolBudget,
   within,

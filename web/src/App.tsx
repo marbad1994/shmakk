@@ -19,6 +19,7 @@ import { HeaderSlotContext } from '@/components/layout/header-slot';
 // Secondary screens and the terminal (xterm) load on demand.
 const ProjectView = lazy(() => import('@/views/Project').then((m) => ({ default: m.ProjectView })));
 const AutomationsView = lazy(() => import('@/views/Automations').then((m) => ({ default: m.AutomationsView })));
+const MacrosView = lazy(() => import('@/views/Macros').then((m) => ({ default: m.MacrosView })));
 const GitHubView = lazy(() => import('@/views/GitHub').then((m) => ({ default: m.GitHubView })));
 const SkillsView = lazy(() => import('@/views/Skills').then((m) => ({ default: m.SkillsView })));
 const MemoryView = lazy(() => import('@/views/Memory').then((m) => ({ default: m.MemoryView })));
@@ -35,7 +36,7 @@ const Show2Plan = lazy(() => import('@/components/showtell/Show2Plan').then((m) 
 const RecordingBar = lazy(() => import('@/components/showtell/RecordingBar').then((m) => ({ default: m.RecordingBar })));
 
 const TITLES: Record<ViewId, string> = {
-  chat: 'New chat', project: 'Project', automations: 'Automations', github: 'GitHub sessions', skills: 'Skills', memory: 'Memory & rules', plan: 'Plan & resume', changes: 'Changes',
+  chat: 'New chat', project: 'Project', automations: 'Automations', macros: 'Macros', github: 'GitHub sessions', skills: 'Skills', memory: 'Memory & rules', plan: 'Plan & resume', changes: 'Changes',
   recall: 'Session recall', team: 'Agents & workflows', mcp: 'MCP servers', activity: 'Activity', artefacts: 'Artefacts', settings: 'Settings',
 };
 
@@ -43,6 +44,7 @@ function View({ view }: { view: ViewId }) {
   switch (view) {
     case 'project': return <ProjectView />;
     case 'automations': return <AutomationsView />;
+    case 'macros': return <MacrosView />;
     case 'github': return <GitHubView />;
     case 'skills': return <SkillsView />;
     case 'memory': return <MemoryView />;
