@@ -306,16 +306,29 @@ async function runAgent({ input, roots, glossary, confirmTool, write, signal, hi
   }
 
   if (shouldUseAutoSubagents(input, roots)) {
+    // Report each subagent as it runs. Web front-ends get structured
+    // `subagent` events (rendered as visible cards); the CLI gets plain text.
+    // Failures are surfaced instead of being swallowed.
+    const subReport = (ev) => {
+      if (emit) { emit({ type: 'subagent', ...ev }); return; }
+      if (ev.phase === 'start') {
+        write(dim(`[shmakk] planning pass ${ev.index}/${ev.total}: ${ev.focus}`, colors) + '\n');
+      } else if (ev.phase === 'error') {
+        write(dim(`[shmakk] planning pass failed (${ev.index}/${ev.total}): ${ev.error}`, colors) + '\n');
+      }
+    };
     try {
-      write(dim('[shmakk] auto-subagents: planning pass', colors) + '\n');
-      const subFindings = await runAutoSubagents({ client, input, roots, signal });
+      if (!emit) write(dim('[shmakk] auto-subagents: planning pass', colors) + '\n');
+      const subFindings = await runAutoSubagents({ client, input, roots, signal, onProgress: subReport });
       if (subFindings) {
         messages.splice(1, 0, {
           role: 'system',
           content: `Auto-subagent findings (read-only planning):\n${subFindings}\nUse these findings as hints only; still verify via tools before edits.`,
         });
       }
-    } catch {}
+    } catch (e) {
+      subReport({ phase: 'error', index: 0, total: 0, error: e && e.message ? e.message : String(e) });
+    }
   }
 
   // Prevent repeated expensive reads/searches within a single task run.

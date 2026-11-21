@@ -16,6 +16,7 @@
 const fs = require('fs');
 const path = require('path');
 const { makeClientForModel } = require('./llm');
+const { isForcedSubagents } = require('./subagent');
 
 // Questions and conversational inputs that should bypass planning.
 // These get direct answers from the agent without plan overhead.
@@ -68,6 +69,11 @@ function shouldPlan(input) {
 
   // Skip conversational inputs
   if (SKIP_PLAN.some((p) => p.test(text))) return false;
+
+  // An explicit planning-pass request ("team mode", "pm mode", "agent mode",
+  // "multi-agent", "subagent mode") becomes a review-gated plan instead of the
+  // silent, invisible subagent pass. Questions are already filtered above.
+  if (isForcedSubagents(text)) return true;
 
   // Only plan for enormous multi-day projects with explicit scope signals
   // Most reasonable work goes to team PM (multi-agent) or single agent

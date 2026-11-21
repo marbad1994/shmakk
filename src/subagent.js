@@ -8,10 +8,19 @@ const { modelFor } = require('./llm');
 // "agent mode", "multi-agent", or "subagent mode" always enable subagents
 // regardless of heuristics or SHMAKK_AUTO_SUBAGENTS=0.
 
+const FORCE_SUBAGENTS = /(\buse\s+agent\s+team\b|\bteam\s+mode\b|\bpm\s+mode\b|\bagent\s+mode\b|\bmulti.?agent\b|\bsub.?agent\s+mode\b)/i;
+
+// True when the user explicitly asked for the planning pass. Shared with the
+// planner so an explicit request becomes a review-gated plan instead of a
+// silent, invisible hint.
+function isForcedSubagents(input) {
+  return FORCE_SUBAGENTS.test(String(input || ''));
+}
+
 function shouldUseAutoSubagents(input, roots) {
   // Force team/PM mode when the user explicitly requests it, regardless of
   // auto-detection heuristics or SHMAKK_AUTO_SUBAGENTS env override.
-  if (/(\buse\s+agent\s+team\b|\bteam\s+mode\b|\bpm\s+mode\b|\bagent\s+mode\b|\bmulti.?agent\b|\bsub.?agent\s+mode\b)/i.test(String(input || ''))) {
+  if (isForcedSubagents(input)) {
     return true;
   }
   if (String(process.env.SHMAKK_AUTO_SUBAGENTS || '1') === '0') return false;
@@ -22,7 +31,12 @@ function shouldUseAutoSubagents(input, roots) {
   return (s.length >= minLen && broadSignals) || (Array.isArray(roots) && roots.length >= maxRoots && s.length >= Math.floor(minLen * 0.7));
 }
 
-async function runAutoSubagents({ client, input, roots, signal }) {
+// runAutoSubagents runs the read-only planning sub-calls in sequence and
+// returns their findings joined as text. `onProgress` receives structured
+// phase events (start / done / error) so callers can surface the pass
+// instead of leaving it invisible. Errors are reported, never swallowed.
+async function runAutoSubagents({ client, input, roots, signal, onProgress }) {
+  const report = typeof onProgress === 'function' ? onProgress : () => {};
   const n = Math.max(1, Math.min(3, Number(process.env.SHMAKK_AUTO_SUBAGENTS_COUNT) || 2));
   const focuses = [
     'Scope and likely target files/modules',
@@ -30,11 +44,16 @@ async function runAutoSubagents({ client, input, roots, signal }) {
     'Concrete step-by-step implementation plan with minimal reads',
   ].slice(0, n);
 
+  const total = focuses.length;
   const safeInput = String(input || '').replace(/[\r\n]+/g, ' ').trim();
   const safeRoots = (roots || []).map(r => String(r).replace(/[\r\n]+/g, ' ')).filter(Boolean);
 
   const out = [];
   for (let i = 0; i < focuses.length; i++) {
+    const index = i + 1;
+    const focus = focuses[i];
+    const startedAt = Date.now();
+    report({ phase: 'start', index, total, focus });
     try {
       const r = await client.chat.completions.create({
         model: modelFor('subagent-planning'),
@@ -42,15 +61,20 @@ async function runAutoSubagents({ client, input, roots, signal }) {
         stream: false,
         tool_choice: 'none',
         messages: [
-          { role: 'system', content: `You are subagent ${i + 1}. Read-only planning only. No tool calls. Be concise.` },
-          { role: 'user', content: `Workspace roots: ${safeRoots.join(', ')}\nTask: ${safeInput}\nFocus: ${focuses[i]}\nReturn bullet points only.` },
+          { role: 'system', content: `You are subagent ${index}. Read-only planning only. No tool calls. Be concise.` },
+          { role: 'user', content: `Workspace roots: ${safeRoots.join(', ')}\nTask: ${safeInput}\nFocus: ${focus}\nReturn bullet points only.` },
         ],
       }, { signal });
       const text = String(r.choices?.[0]?.message?.content || '').trim();
-      if (text) out.push(`Subagent ${i + 1} (${focuses[i]}):\n${text}`);
-    } catch {}
+      if (!text) throw new Error('empty response');
+      out.push(`Subagent ${index} (${focus}):\n${text}`);
+      report({ phase: 'done', index, total, focus, text, elapsedMs: Date.now() - startedAt });
+    } catch (err) {
+      if (signal && signal.aborted) throw err;
+      report({ phase: 'error', index, total, focus, error: err && err.message ? err.message : String(err) });
+    }
   }
   return out.join('\n\n');
 }
 
-module.exports = { shouldUseAutoSubagents, runAutoSubagents };
+module.exports = { shouldUseAutoSubagents, isForcedSubagents, runAutoSubagents };
