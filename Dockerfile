@@ -55,6 +55,17 @@ RUN chmod +x /usr/local/bin/shmakk-entrypoint \
  && ln -s /app/bin/shmakk.js /usr/local/bin/shmakk && chmod +x /app/bin/shmakk.js \
  && mkdir -p /data && chown -R node:node /data
 
+# Bake in the model-endpoint config from the repo root when there is one.
+# endpoints.json carries API keys, so it stays optional: the build context is
+# bind-mounted into a RUN and the file is copied only if present, because a
+# plain COPY of a missing file is a hard build error.
+RUN --mount=type=bind,source=.,target=/ctx \
+      if [ -f /ctx/endpoints.json ]; then \
+        mkdir -p /data/.config/shmakk \
+        && cp /ctx/endpoints.json /data/.config/shmakk/endpoints.json \
+        && chown -R node:node /data/.config; \
+      fi
+
 # Unprivileged: the agent runs commands, so it must not be root.
 USER node
 VOLUME /data
