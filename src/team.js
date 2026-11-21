@@ -521,6 +521,8 @@ async function runSubAgent({
       mcpManager,
       requireToolUse: requireTool,
       model,
+      sessionId,
+      scope,
     });
   };
 
@@ -711,7 +713,7 @@ async function runParallelAgents({ agents, overallInput, roots, signal, mcpManag
 // Returns false → PM declined (caller falls through to single-agent execution).
 // onEvent (optional): structured progress sink for GUI front-ends. When set,
 // progress is reported as objects instead of ANSI text through `write`.
-async function runTeam({ input, roots, write, signal, mcpManager, onEvent = null, model = null }) {
+async function runTeam({ input, roots, write, signal, mcpManager, onEvent = null, model = null, sessionId = null, scope = null }) {
   if (!isConfigured()) return false;
   const emit = typeof onEvent === 'function' ? (ev) => { try { onEvent(ev); } catch {} } : null;
 

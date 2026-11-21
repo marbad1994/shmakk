@@ -18,15 +18,17 @@ export function PlanView() {
   const qc = useQueryClient();
   const focus = useApp((s) => s.focusPlanId);
   const openPlan = useApp((s) => s.openPlan);
+  const activeId = useApp((s) => s.activeId);
+  const scope = activeId ? `?scope=${encodeURIComponent(activeId)}` : '';
   const { data, isLoading } = usePlans();
   const plans = data?.plans ?? [];
   const selected = focus && plans.some((p) => p.id === focus) ? focus : plans[0]?.id ?? null;
   useEffect(() => { if (!focus && plans[0]) openPlan(plans[0].id); }, [focus, plans, openPlan]);
 
-  const journal = useQuery({ queryKey: ['journal'], queryFn: () => api.get<{ journal: Status['journal'] }>('/api/plan') });
+  const journal = useQuery({ queryKey: ['journal', activeId], queryFn: () => api.get<{ journal: Status['journal'] }>(`/api/plan${scope}`) });
   const clearJournal = useMutation({
-    mutationFn: () => api.del('/api/journal'),
-    onSuccess: () => { toast.success('Cleared'); void qc.invalidateQueries({ queryKey: ['journal'] }); },
+    mutationFn: () => api.del(`/api/journal${scope}`),
+    onSuccess: () => { toast.success('Cleared'); void qc.invalidateQueries({ queryKey: ['journal', activeId] }); },
   });
 
   return (

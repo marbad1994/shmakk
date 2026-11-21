@@ -942,6 +942,10 @@ function createPlanManager(ctx) {
   async function runTask(plan, task, r) {
     const root = plan.workspace;
     const { getEdits } = require('../edit-tracker');
+    // Plan tasks run inside the conversation `r.convId`; the edit tracker is
+    // scoped per conversation so concurrent sessions don't leak edits into
+    // each other's review diffs.
+    const edits = () => getEdits(r.convId);
     task.attempts += 1;
     task.roundAttempts += 1;
     task.startedAt = Date.now();
@@ -955,15 +959,15 @@ function createPlanManager(ctx) {
     // later, because a later baseline starts after work already on disk.
     const now = snapshotTree(root);
     if (!now) console.error('[shmakk plan] git snapshot failed, falling back to the edit log:', snapshotFailure());
-    if (!task.baseCaptured || plan.lastTaskId !== task.id) { task.baseTree = now; task.baseEdits = getEdits().length; task.baseCaptured = true; }
+    if (!task.baseCaptured || plan.lastTaskId !== task.id) { task.baseTree = now; task.baseEdits = edits().length; task.baseCaptured = true; }
     // A rework starts with the earlier attempt's files already on disk, so the
     // baseline cannot tell them apart from the person's own edits. The edit
     // tracker can, so seed the remembered window from it when nothing is known.
-    if (task.attempts > 1 && !(task.touched || []).length) task.touched = editedFiles(root, getEdits());
+    if (task.attempts > 1 && !(task.touched || []).length) task.touched = editedFiles(root, edits());
     plan.lastTaskId = task.id;
     save(plan);
     const before = task.baseTree;
-    const editsFrom = Math.min(task.baseEdits || 0, getEdits().length);
+    const editsFrom = Math.min(task.baseEdits || 0, edits().length);
     const out = await ctx.chat.sendAndWait(r.convId, taskPrompt(plan, task), {
       direct: true,
       attachments: frameAttachments(plan, task),
@@ -984,8 +988,8 @@ function createPlanManager(ctx) {
     task.report = str(out.summary, 6000) || null;
 
     const after = snapshotTree(root);
-    const attempt = before && after ? diffTrees(root, before, after) : diffFromEdits(getEdits(), editsFrom, root);
-    const diff = reviewDiff(root, task, attempt, after, editedFiles(root, getEdits()));
+    const attempt = before && after ? diffTrees(root, before, after) : diffFromEdits(edits(), editsFrom, root);
+    const diff = reviewDiff(root, task, attempt, after, editedFiles(root, edits()));
     const diffName = `${task.id}-${task.attempts}.diff`;
     if (diff && diff.patch) {
       fs.mkdirSync(assetsDir(root, plan.id), { recursive: true });

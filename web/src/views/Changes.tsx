@@ -15,14 +15,16 @@ interface Edit { index: number; path: string; tool: string; created: boolean; ti
 export function ChangesView() {
   const qc = useQueryClient();
   const refreshStatus = useApp((s) => s.refreshStatus);
-  const { data, isLoading } = useQuery({ queryKey: ['edits'], queryFn: () => api.get<{ edits: Edit[] }>('/api/edits'), refetchInterval: 5000 });
-  const after = () => { void qc.invalidateQueries({ queryKey: ['edits'] }); void refreshStatus(); };
+  const activeId = useApp((s) => s.activeId);
+  const scope = activeId ? `?scope=${encodeURIComponent(activeId)}` : '';
+  const { data, isLoading } = useQuery({ queryKey: ['edits', activeId], queryFn: () => api.get<{ edits: Edit[] }>(`/api/edits${scope}`), refetchInterval: 5000 });
+  const after = () => { void qc.invalidateQueries({ queryKey: ['edits', activeId] }); void refreshStatus(); };
   const revert = useMutation({
-    mutationFn: (i: number) => api.post(`/api/edits/${i}/revert`),
+    mutationFn: (i: number) => api.post(`/api/edits/${i}/revert${scope}`),
     onSuccess: () => { toast.success('Reverted'); after(); },
     onError: (e: Error) => toast.error(e.message),
   });
-  const clear = useMutation({ mutationFn: () => api.del('/api/edits'), onSuccess: after });
+  const clear = useMutation({ mutationFn: () => api.del(`/api/edits${scope}`), onSuccess: after });
   const edits = [...(data?.edits || [])].reverse();
 
   return (

@@ -16,11 +16,13 @@ interface Edit { index: number; path: string; tool: string; created: boolean; ti
 export function ChangesPane() {
   const qc = useQueryClient();
   const refreshStatus = useApp((s) => s.refreshStatus);
+  const activeId = useApp((s) => s.activeId);
+  const scope = activeId ? `?scope=${encodeURIComponent(activeId)}` : '';
   const [open, setOpen] = useState<number | null>(null);
-  const { data, isLoading } = useQuery({ queryKey: ['edits'], queryFn: () => api.get<{ edits: Edit[] }>('/api/edits'), refetchInterval: 5000 });
-  const after = () => { void qc.invalidateQueries({ queryKey: ['edits'] }); void refreshStatus(); };
+  const { data, isLoading } = useQuery({ queryKey: ['edits', activeId], queryFn: () => api.get<{ edits: Edit[] }>(`/api/edits${scope}`), refetchInterval: 5000 });
+  const after = () => { void qc.invalidateQueries({ queryKey: ['edits', activeId] }); void refreshStatus(); };
   const revert = useMutation({
-    mutationFn: (index: number) => api.post(`/api/edits/${index}/revert`),
+    mutationFn: (index: number) => api.post(`/api/edits/${index}/revert${scope}`),
     onSuccess: () => toast.success('Reverted'),
     onError: (e: Error) => toast.error(e.message),
     onSettled: after,

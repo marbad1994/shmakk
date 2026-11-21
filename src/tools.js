@@ -460,7 +460,7 @@ function runCmd(cwd, cmd, signal) {
   });
 }
 
-async function dispatchTool(name, args, roots, confirmTool, signal, mcpManager) {
+async function dispatchTool(name, args, roots, confirmTool, signal, mcpManager, scope) {
   if (signal && signal.aborted) return { error: 'aborted' };
   const safety = classifyTool(name, args, mcpManager);
 
@@ -578,7 +578,7 @@ async function dispatchTool(name, args, roots, confirmTool, signal, mcpManager) 
     const oldContent = fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null;
     fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.writeFileSync(p, args.content ?? '');
-    recordEdit({ filePath: p, oldContent, newContent: args.content ?? '', tool: 'write_file' });
+    recordEdit({ filePath: p, oldContent, newContent: args.content ?? '', tool: 'write_file', scope });
     return { ok: true };
   }
   if (name === 'edit_file') {
@@ -595,7 +595,7 @@ async function dispatchTool(name, args, roots, confirmTool, signal, mcpManager) 
       if (second !== -1) return { error: 'old_string is ambiguous; appears multiple times' };
       const updated = content.slice(0, first) + newString + content.slice(first + oldString.length);
       fs.writeFileSync(p, updated);
-      recordEdit({ filePath: p, oldContent: content, newContent: updated, tool: 'edit_file' });
+      recordEdit({ filePath: p, oldContent: content, newContent: updated, tool: 'edit_file', scope });
       return { ok: true, replaced: 1 };
     } catch (e) { return { error: String(e.message) }; }
   }
@@ -720,7 +720,7 @@ async function dispatchTool(name, args, roots, confirmTool, signal, mcpManager) 
     if (!b64) return { error: 'No image data in OpenAI response' };
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     fs.writeFileSync(outputPath, Buffer.from(b64, 'base64'));
-    recordEdit({ filePath: outputPath, oldContent: null, newContent: `[binary image ${(b64.length * 0.75) | 0} bytes]`, tool: 'image_gen' });
+    recordEdit({ filePath: outputPath, oldContent: null, newContent: `[binary image ${(b64.length * 0.75) | 0} bytes]`, tool: 'image_gen', scope });
     return {
       ok: true,
       imagePath: outputPath,

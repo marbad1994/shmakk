@@ -628,9 +628,9 @@ class ChatManager {
   resetConversation(conv, { quiet = false } = {}) {
     conv.history = [];
     const root = this.roots(conv)[0];
-    try { clearTaskJournal(root); } catch {}
+    try { clearTaskJournal(root, conv.id); } catch {}
     try { clearIndex(root); } catch {}
-    clearEdits();
+    clearEdits(conv.id);
     if (!quiet) this._notice(conv, 'Conversation context, task journal and workspace index cleared.', 'ok');
     this._persistSoon(conv);
   }
@@ -663,7 +663,7 @@ class ChatManager {
         return;
       }
       case 'review-edits':
-        this._notice(conv, getEdits().length ? `${getEdits().length} edit(s) this session.` : 'No edits to review this session.', 'info', { action: 'open:changes' });
+        this._notice(conv, getEdits(conv.id).length ? `${getEdits(conv.id).length} edit(s) this session.` : 'No edits to review this session.', 'info', { action: 'open:changes' });
         return;
       default:
     }
@@ -979,7 +979,7 @@ class ChatManager {
           it.summary = ev.summary || '';
           it.result = previewResult(ev.name, ev.result);
           if (!ev.error && (ev.name === 'write_file' || ev.name === 'edit_file')) {
-            const edits = getEdits();
+            const edits = getEdits(conv.id);
             const last = edits[edits.length - 1];
             if (last) {
               try {
@@ -1053,6 +1053,8 @@ class ChatManager {
       onEvent: sink,
       model: this._modelFor(conv),
       effort: (conv.run && conv.run.effort) || null,
+      sessionId: conv.sessionId || null,
+      scope: conv.id,
     };
 
     // ── Team mode ──
@@ -1066,6 +1068,7 @@ class ChatManager {
       try {
         handled = await runTeam({
           input: cmd, roots, write, signal: ctrl.signal, mcpManager, model: this._modelFor(conv),
+          sessionId: conv.sessionId || null, scope: conv.id,
           onEvent: (ev) => {
             if (ev.type === 'status') this._activity(conv, ev.label);
             else if (ev.type === 'team_start') {
@@ -1192,7 +1195,7 @@ class ChatManager {
         try { args = JSON.parse(c.function.arguments || '{}'); } catch {}
         sink({ type: 'tool_start', id: c.id, name: c.function.name, args });
         const allowed = tools.some((t) => t.function.name === c.function.name);
-        const result = allowed ? await dispatchTool(c.function.name, args, [], null, ctrl.signal, null) : { error: 'tool not available in Chat mode' };
+        const result = allowed ? await dispatchTool(c.function.name, args, [], null, ctrl.signal, null, conv.id) : { error: 'tool not available in Chat mode' };
         this._broadcastBrowserOpen(c.function.name, args, result, conv.mode);
         sink({ type: 'tool_end', id: c.id, name: c.function.name, args, result, summary: summarizeToolResult(c.function.name, result), error: result && result.error ? result.error : null });
         messages.push({ role: 'tool', tool_call_id: c.id, content: JSON.stringify(result).slice(0, 8000) });
@@ -1230,6 +1233,8 @@ class ChatManager {
       model: this._modelFor(conv),
       specialistHint: [design.DESIGN_HINT, this._globalPrompt(), this._projectContext(conv), conv.run && conv.run.hint].filter(Boolean).join('\n\n'),
       mcpManager: null,
+      sessionId: conv.sessionId || null,
+      scope: conv.id,
       onEvent: (ev) => {
         sink(ev);
         if (ev.type === 'tool_end' && !ev.error && /^(write_file|edit_file|delete_file)$/.test(ev.name)) changed();

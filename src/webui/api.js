@@ -18,7 +18,7 @@ const endpoints = require('../endpoints');
 const llm = require('../llm');
 const { PRESETS, normalizeProfile } = require('../profiles');
 const { loadTaskJournal, clearTaskJournal } = require('../agent');
-const { getEdits, clearEdits } = require('../edit-tracker');
+const { getEdits, getEditsAll, clearEdits } = require('../edit-tracker');
 const { unifiedDiff, newFileDiff } = require('../edit-viewer');
 const { AGENT_ROSTER } = require('../team');
 const { SPECIALISTS } = require('../coordinator');
@@ -224,9 +224,9 @@ function createApi(app) {
     };
   }
 
-  function statusInfo() {
+  function statusInfo(scope) {
     const root = ws();
-    const journal = loadTaskJournal(root);
+    const journal = loadTaskJournal(root, scope);
     const active = skills.readActiveSkill(root) || skills.readActiveSkillGlobally();
     let auditEvents = 0;
     try {
@@ -248,7 +248,7 @@ function createApi(app) {
       activeSkill: active ? { name: active.name, version: active.version || '1', loadedAt: active.loadedAt || null } : null,
       auditEvents,
       auditPath: audit.logPath(),
-      edits: getEdits().length,
+      edits: scope ? getEdits(scope).length : getEditsAll().length,
       plan: planner.loadPlan(root),
       mcp: { servers: mcp.serverCount, tools: mcp.toolCount },
       glossary: glossaryStatus(),
@@ -299,7 +299,7 @@ function createApi(app) {
     status: statusInfo(),
   }));
 
-  add('GET', '/api/status', () => statusInfo());
+  add('GET', '/api/status', ({ query }) => statusInfo(query.scope));
   add('GET', '/api/help', () => ({ text: HELP }));
 
   add('GET', '/api/config', () => {
@@ -899,9 +899,9 @@ function createApi(app) {
 
   // ── plan / resume journal ─────────────────────────────────────────────
 
-  add('GET', '/api/plan', () => ({ plan: planner.loadPlan(ws()), journal: loadTaskJournal(ws()) }));
+  add('GET', '/api/plan', ({ query }) => ({ plan: planner.loadPlan(ws()), journal: loadTaskJournal(ws(), query.scope) }));
   add('DELETE', '/api/plan', () => { planner.clearPlan(ws()); return { ok: true }; });
-  add('DELETE', '/api/journal', () => { clearTaskJournal(ws()); return { ok: true }; });
+  add('DELETE', '/api/journal', ({ query }) => { clearTaskJournal(ws(), query.scope); return { ok: true }; });
 
   // ── MCP ───────────────────────────────────────────────────────────────
 
@@ -1040,8 +1040,8 @@ function createApi(app) {
 
   // ── edits (review changes) ────────────────────────────────────────────
 
-  add('GET', '/api/edits', () => ({
-    edits: getEdits().map((e, i) => {
+  add('GET', '/api/edits', ({ query }) => ({
+    edits: getEdits(query.scope).map((e, i) => {
       const rel = path.relative(ws(), e.filePath);
       const shown = rel.startsWith('..') ? e.filePath : rel;
       let diff = null;
@@ -1049,10 +1049,10 @@ function createApi(app) {
       return { index: i, path: shown, tool: e.tool, created: e.oldContent == null, timestamp: e.timestamp, diff: diff ? diff.slice(0, 200 * 1024) : null };
     }),
   }));
-  add('DELETE', '/api/edits', () => { clearEdits(); return { ok: true }; });
+  add('DELETE', '/api/edits', ({ query }) => { clearEdits(query.scope); return { ok: true }; });
   // Undo one recorded edit by restoring the content it replaced.
-  add('POST', '/api/edits/:index/revert', ({ params }) => {
-    const e = getEdits()[Number(params.index)];
+  add('POST', '/api/edits/:index/revert', ({ params, query }) => {
+    const e = getEdits(query.scope)[Number(params.index)];
     if (!e) throw new HttpError(404, 'edit not found');
     const current = fs.existsSync(e.filePath) ? fs.readFileSync(e.filePath, 'utf8') : null;
     if (current !== e.newContent) throw new HttpError(409, 'file changed since this edit — revert it by hand');
