@@ -26,6 +26,9 @@ const CHANGE_THRESHOLD = 0.055;
 const MAX_GAP_SEC = 3;
 const MAX_WIDTH = 1600;
 
+const SHARE_ENDED = 'Screen sharing stopped before the recording started. Click Start and share a screen again.';
+const PLAY_FAILED = 'The shared screen could not be used for recording.';
+
 type SpeechRec = {
   continuous: boolean; interimResults: boolean; lang: string;
   start(): void; stop(): void; abort(): void;
@@ -135,15 +138,35 @@ export class ScreenRecorder {
     const track = this.display.getVideoTracks()[0];
     track.addEventListener('ended', () => { if (!this.stopped) this.ev.onEnded?.(); });
 
+    // Keep the element in the document. A detached one is collected as soon as
+    // nothing else holds a reference, and Chrome then aborts a pending play()
+    // with "the play() request was interrupted because the media was removed
+    // from the document"; a page that is hidden stops updating it too.
     this.video = document.createElement('video');
     this.video.muted = true;
     this.video.playsInline = true;
+    this.video.setAttribute('aria-hidden', 'true');
+    Object.assign(this.video.style, { position: 'fixed', left: '0', top: '0', width: '1px', height: '1px', opacity: '0', pointerEvents: 'none' });
     this.video.srcObject = this.display;
-    await this.video.play();
-    // Grab frames from the track itself where possible: a <video> on a hidden
-    // page can stop updating, the track does not.
+    document.body.appendChild(this.video);
+    let playFailed: Error | null = null;
+    try { await this.video.play(); } catch (e) { playFailed = e as Error; }
+    // Grab frames from the track itself where possible: that keeps working when
+    // the element cannot play at all, and it reports the real frame size.
     const IC = (window as unknown as { ImageCapture?: new (t: MediaStreamTrack) => Grabber }).ImageCapture;
     if (IC) { try { this.grabber = new IC(track); } catch { this.grabber = null; } }
+
+    // The person may have stopped sharing while the picker or play() was busy.
+    if (this.stopped || track.readyState === 'ended') {
+      this.release();
+      throw new Error(SHARE_ENDED);
+    }
+    // Without ImageCapture the <video> is the only source of frames, so a
+    // failed play() is fatal there and harmless everywhere else.
+    if (playFailed && !this.grabber) {
+      this.release();
+      throw new Error(`${PLAY_FAILED} (${playFailed.message})`);
+    }
 
     this.t0 = performance.now();
     // The first sample always keeps a frame (nothing to compare against).
@@ -360,6 +383,7 @@ export class ScreenRecorder {
     this.stopTicker = null;
     try { this.speech?.abort(); } catch { /* ignore */ }
     for (const s of [this.display, this.mic]) s?.getTracks().forEach((t) => t.stop());
+    if (this.video) { this.video.pause(); this.video.srcObject = null; this.video.remove(); this.video = null; }
     try { void this.audioCtx?.close(); } catch { /* ignore */ }
     this.audioCtx = null;
   }
