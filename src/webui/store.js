@@ -108,6 +108,8 @@ function metaOf(conv) {
     node: conv.node || 'local',
     remote: !!conv.remote,
     paused: !!conv.paused,
+    sessionId: conv.sessionId || null,
+    origin: conv.origin || null, // 'cli' = mirrored from a session started outside the app
   };
 }
 
@@ -141,10 +143,10 @@ function loadConversation(id) {
 
 function saveConversation(conv) {
   try {
-    const { id, title, createdAt, updatedAt, pinned, workspace, cwd, preview, sessionId, repo, mode, projectId, automationId, items, history, node, remote, paused, resumePrompt } = conv;
+    const { id, title, createdAt, updatedAt, pinned, workspace, cwd, preview, sessionId, repo, mode, projectId, automationId, items, history, node, remote, paused, resumePrompt, origin } = conv;
     writeFileAtomic(
       path.join(conversationsDir(), `${id}.json`),
-      JSON.stringify({ id, title, createdAt, updatedAt, pinned, workspace, cwd, preview, sessionId, repo, mode, projectId, automationId, items, history, node, remote, paused, resumePrompt }),
+      JSON.stringify({ id, title, createdAt, updatedAt, pinned, workspace, cwd, preview, sessionId, repo, mode, projectId, automationId, items, history, node, remote, paused, resumePrompt, origin }),
     );
   } catch {}
 }

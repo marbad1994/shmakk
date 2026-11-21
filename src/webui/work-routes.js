@@ -58,7 +58,14 @@ function registerWorkRoutes(add, app, { HttpError, ws }) {
 
   const plans = () => app.plans;
   add('GET', '/api/plans', () => ({ plans: plans().list() }));
+  // Create a plan. The route sits behind the same session auth as every other
+  // /api route, so an unauthenticated caller is rejected with a 401 before
+  // validation. validateCreate throws a 400 naming the bad field before
+  // anything touches disk, so a rejected request never leaves a plan behind.
+  // The response is the created record; its `id` and `title` are the fields
+  // callers key off.
   add('POST', '/api/plans', wrap(({ body }) => {
+    const input = plans().validateCreate(body);
     let assets = null;
     // Screenshots from a show-and-tell session become the plan's own copies.
     if (body.show2planId && app.show2plan) {
@@ -71,7 +78,7 @@ function registerWorkRoutes(add, app, { HttpError, ws }) {
       }
       assets = { frames };
     }
-    return plans().create({ title: body.title, summary: body.summary, source: body.source, tasks: body.tasks, requireSignoff: body.requireSignoff, origin: body.origin, assets });
+    return plans().create({ ...input, assets });
   }));
   add('GET', '/api/plans/:id', wrap(({ params }) => plans().get(params.id)));
   add('PATCH', '/api/plans/:id', wrap(({ params, body }) => plans().update(params.id, body)));

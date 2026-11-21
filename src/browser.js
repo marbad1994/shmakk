@@ -302,6 +302,7 @@ async function dispatchBrowser(args) {
         try { await browser.close(); } catch {}
         browser = null; context = null; page = null;
       }
+      try { liveStream().reset(); } catch {}
       return { ok: true, message: 'browser closed' };
     default:
       return { error: `unknown browser command: ${cmd}. Use: show, navigate, click, type, read_page, screenshot, evaluate, select, wait, scroll, close` };

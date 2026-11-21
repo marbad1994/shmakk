@@ -40,23 +40,14 @@ function createCliPlan(root, draft, { request = '', requireSignoff = true } = {}
     dependsOn: t.dependsOn,
   }, i)));
   if (!tasks.length) throw new Error('a plan needs at least one task');
-  const now = Date.now();
-  return {
-    id: P.newId('p'),
+  return P.newPlan({
     title: String((draft && draft.title) || tasks[0].title).slice(0, 160),
-    summary: '',
     source: 'cli',
     origin: request ? { request: String(request).slice(0, 2000) } : null,
     workspace: ws,
     requireSignoff: requireSignoff !== false,
-    status: 'draft',
-    started: false,
-    paused: false,
-    convId: null,
-    createdAt: now,
-    updatedAt: now,
     tasks,
-  };
+  });
 }
 
 /** Persist a plan to the shared store and mirror every plan into TASKS.md. */
@@ -132,11 +123,15 @@ async function runCliPlan(plan, deps) {
     task.noChanges = false;
     P.setStatus(task, 'running', `attempt ${task.attempts}`);
     // Review the task's whole change across attempts, as long as no other
-    // task has touched the tree since this one started.
-    if (!task.baseTree || plan.lastTaskId !== task.id) {
+    // task has touched the tree since this one started. The baseline is taken
+    // once per task: a failed snapshot must not be replaced later, because a
+    // later baseline starts after work that is already on disk.
+    if (!task.baseCaptured || plan.lastTaskId !== task.id) {
       task.baseTree = P.snapshotTree(root);
       task.baseEdits = getEdits().length;
+      task.baseCaptured = true;
     }
+    if (task.attempts > 1 && !(task.touched || []).length) task.touched = P.editedFiles(root, getEdits());
     plan.lastTaskId = task.id;
     save();
 
@@ -159,8 +154,13 @@ async function runCliPlan(plan, deps) {
     }
     task.report = String(report || '').slice(0, 6000) || null;
 
-    const after = before ? P.snapshotTree(root) : null;
-    const diff = before && after ? P.diffTrees(root, before, after) : P.diffFromEdits(getEdits(), editsFrom, root);
+    const after = P.snapshotTree(root);
+    // A lost snapshot used to silently hand the reviewer an empty diff for work
+    // that was on disk. Say why it happened, then let reviewDiff fall back to
+    // the edit log and the files the task is known to have touched.
+    if (!after) write(color('33', `    warning: no git snapshot (${P.snapshotFailure() || 'unknown'}), reviewing from the edit log`) + '\r\n');
+    const attempt = before && after ? P.diffTrees(root, before, after) : P.diffFromEdits(getEdits(), editsFrom, root);
+    const diff = P.reviewDiff(root, task, attempt, after, P.editedFiles(root, getEdits()));
     const diffName = `${task.id}-${task.attempts}.diff`;
     if (diff && diff.patch) {
       try {

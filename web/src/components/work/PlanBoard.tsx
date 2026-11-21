@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle, ArrowDown, ArrowUp, Ban, Check, CheckCircle2, ChevronDown, ChevronRight, Circle, CircleDashed, CircleSlash, Eye,
-  FileCode2, Loader2, MessageSquare, MessageSquareWarning, Pause, Pencil, Play, RotateCcw, ShieldCheck, Trash2, X, XCircle,
+  FileCode2, Loader2, MessageSquare, MessageSquareWarning, Pause, Pencil, Play, Plus, RotateCcw, ShieldCheck, Trash2, X, XCircle,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
@@ -372,5 +372,75 @@ export function PlanList({ plans, selected, onSelect }: { plans: PlanMeta[]; sel
         );
       })}
     </ul>
+  );
+}
+
+// ── create ────────────────────────────────────────────────────────────────────
+
+function planToMeta(plan: PlanFull): PlanMeta {
+  return {
+    id: plan.id, title: plan.title, summary: plan.summary, source: plan.source, workspace: plan.workspace,
+    requireSignoff: plan.requireSignoff, status: plan.status, started: plan.started, paused: plan.paused,
+    running: plan.running, convId: plan.convId, createdAt: plan.createdAt, updatedAt: plan.updatedAt,
+    taskCount: plan.tasks.length, counts: countsOf(plan.tasks),
+  };
+}
+
+/**
+ * Inline create-plan form. A plan needs a title and at least one task title
+ * (the backend rejects an empty task list), so the first task is required and
+ * more can be added before submitting. On success the new plan is pushed into
+ * the list cache and the caller navigates to it; on failure the error is shown
+ * and nothing is navigated.
+ */
+export function NewPlan({ onCreated }: { onCreated: (id: string) => void }) {
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [title, setTitle] = useState('');
+  const [summary, setSummary] = useState('');
+  const [tasks, setTasks] = useState<string[]>(['']);
+
+  const m = useMutation({
+    mutationFn: (body: { title: string; summary?: string; tasks: { title: string }[] }) => api.post<PlanFull>('/api/plans', body),
+    onSuccess: (plan) => {
+      qc.setQueryData<{ plans: PlanMeta[] }>(['plans'], (old) => ({ plans: [planToMeta(plan), ...(old?.plans ?? [])] }));
+      setOpen(false); setTitle(''); setSummary(''); setTasks(['']);
+      onCreated(plan.id);
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  if (!open) {
+    return <Button variant="default" className="w-full justify-start" onClick={() => setOpen(true)}><Plus />New plan</Button>;
+  }
+
+  const setTask = (i: number, v: string) => setTasks((prev) => prev.map((t, k) => (k === i ? v : t)));
+  const removeTask = (i: number) => setTasks((prev) => (prev.length > 1 ? prev.filter((_, k) => k !== i) : prev));
+  const canSubmit = title.trim().length > 0 && tasks.some((t) => t.trim());
+  const submit = () => m.mutate({
+    title: title.trim(),
+    summary: summary.trim() || undefined,
+    tasks: tasks.map((t) => ({ title: t.trim() })).filter((t) => t.title),
+  });
+
+  return (
+    <form className="grid gap-2.5 rounded-xl border border-line bg-raised p-3" onSubmit={(e) => { e.preventDefault(); if (canSubmit) submit(); }}>
+      <Input value={title} onChange={(e) => setTitle(e.target.value)} autoFocus placeholder="Plan title" aria-label="Plan title" />
+      <textarea className={cn(field, 'min-h-16 resize-y')} value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="What should this plan accomplish? (optional)" aria-label="Plan summary" />
+      <div className="grid gap-1.5">
+        <span className="text-[12px] font-medium text-dim">Tasks</span>
+        {tasks.map((t, i) => (
+          <div key={i} className="flex gap-1.5">
+            <Input value={t} onChange={(e) => setTask(i, e.target.value)} placeholder={`Task ${i + 1} title`} aria-label={`Task ${i + 1} title`} />
+            {tasks.length > 1 ? <Button size="icon-sm" variant="ghost" type="button" aria-label="Remove task" onClick={() => removeTask(i)}><X /></Button> : null}
+          </div>
+        ))}
+        <Button size="sm" variant="ghost" type="button" className="justify-self-start" onClick={() => setTasks((prev) => [...prev, ''])}><Plus />Add task</Button>
+      </div>
+      <div className="flex gap-2">
+        <Button size="sm" type="submit" variant="primary" disabled={!canSubmit || m.isPending}>{m.isPending ? <Spinner className="size-3.5" /> : <Check />}Create plan</Button>
+        <Button size="sm" variant="ghost" type="button" onClick={() => { setOpen(false); setTitle(''); setSummary(''); setTasks(['']); }}>Cancel</Button>
+      </div>
+    </form>
   );
 }

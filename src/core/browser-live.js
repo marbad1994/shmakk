@@ -13,6 +13,7 @@ let cdpSession = null;          // active Page CDP session while streaming
 let lastMeta = null;            // most recent screencast frame metadata
 let lastUrl = null;
 let streaming = false;
+let hasPage = false;            // a page has been created and is streamable
 
 function setPageProvider(fn) {
   getPage = fn;
@@ -41,8 +42,7 @@ function emitFrame(b64, meta, url) {
 }
 
 function emitState() {
-  const has = !!(getPage);
-  sendToAll({ t: 'state', open: has, url: lastUrl || '' });
+  sendToAll({ t: 'state', open: hasPage || streaming, url: lastUrl || '' });
 }
 
 function emitUrl(url) {
@@ -59,6 +59,7 @@ async function startScreencast() {
   if (streaming) return;
   const page = getPage ? await getPage() : null;
   if (!page) return;
+  hasPage = true;
   try {
     cdpSession = await page.context().newCDPSession(page);
     cdpSession.on('Page.screencastFrame', async (payload) => {
@@ -83,7 +84,8 @@ async function startScreencast() {
 async function stopScreencast() {
   if (!streaming || !cdpSession) { cdpSession = null; streaming = false; return; }
   try { await cdpSession.send('Page.stopScreencast'); } catch {}
-  try { cdpSession.detach(); } catch {}
+  // detach() returns a promise that rejects once the page/browser is gone.
+  try { await cdpSession.detach(); } catch {}
   cdpSession = null;
   streaming = false;
 }
@@ -114,6 +116,7 @@ async function show(url) {
   if (!getPage) return { error: 'browser unavailable' };
   const page = await getPage();
   if (!page) return { error: 'browser unavailable' };
+  hasPage = true;
   try {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
   } catch (e) {
@@ -156,8 +159,9 @@ async function input(event) {
         break;
       }
       case 'key': {
+        const keyType = event.keyType || (event.down === false ? 'keyUp' : 'keyDown');
         await cdpSession.send('Input.dispatchKeyEvent', {
-          type: event.down === false ? 'keyUp' : 'keyDown',
+          type: keyType,
           key: event.key || '',
           code: event.code || '',
           text: event.text || undefined,
@@ -175,10 +179,12 @@ async function input(event) {
 }
 
 function reset() {
-  stopScreencast();
-  subscribers.clear();
+  hasPage = false;
   lastMeta = null;
   lastUrl = null;
+  // Keep subscribers: panes stay connected across a browser restart, they just
+  // drop back to the "no page open" state until the next show/navigate.
+  stopScreencast().then(() => emitState()).catch(() => emitState());
 }
 
 module.exports = { setPageProvider, subscribe, input, notify, show, reset };

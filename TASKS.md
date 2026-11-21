@@ -63,3 +63,8 @@ cloud-to-desktop and moves, SSH reverse tunnel for remote (local) sessions.
 - [x] Origin and CSRF review for the proxy route
 - [ ] Resume-after-pause behavior test (mid-conversation move)
 - [x] Tests for bundle export/import round-trip and tar traversal rejection
+
+## shmakk plans
+
+## shmakk plans
+

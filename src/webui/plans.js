@@ -24,6 +24,15 @@
 //
 // Plans live in <workspace>/.shmakk/plans/<id>.json, assets (screenshots,
 // per-attempt diffs) in <workspace>/.shmakk/plans/<id>/.
+//
+// Why files and not a sqlite table: a plan has to travel with the workspace it
+// describes. The CLI runner reads and writes the same files, bundles export
+// them, and plans move between machines with the repo. shmakk's only database
+// (src/session-search.js) is a global, derived search index — putting the
+// authoritative plan record there would make plans unportable and split the
+// source of truth between the web UI and the CLI. So the store is the file set:
+// the record schema below is the table definition, the file name is the primary
+// key, and migratePlans() is the migration.
 
 const fs = require('fs');
 const os = require('os');
@@ -32,6 +41,39 @@ const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 
 const MAX_ATTEMPTS = 3;
+// Plan record schema. There is no SQL table for plans: a plan is one JSON file
+// in <workspace>/.shmakk/plans/ and the file name is its primary key.
+// Bump SCHEMA_VERSION when the record shape changes, and migratePlans() will
+// upgrade older files in place the next time the store is opened.
+const SCHEMA_VERSION = 2;
+const PLAN_STATUSES = ['draft', 'running', 'queued', 'paused', 'awaiting_review', 'needs_attention', 'done'];
+// The table definition. Equivalent DDL:
+//   CREATE TABLE plans (
+//     id            TEXT PRIMARY KEY,   -- the file name, <workspace>/.shmakk/plans/<id>.json
+//     title         TEXT NOT NULL,
+//     owner         TEXT NOT NULL,      -- no accounts: $SHMAKK_OWNER, else the OS user
+//     status        TEXT NOT NULL,
+//     createdAt     INTEGER NOT NULL,   -- epoch ms
+//     updatedAt     INTEGER NOT NULL,   -- epoch ms, bumped on write
+//     schemaVersion INTEGER NOT NULL
+//   );
+// validatePlan() enforces exactly this on every read and write, newPlan() is the
+// INSERT, normalizePlan()+migratePlans() are the migration, and the file name is
+// the primary key.
+const PLAN_SCHEMA = {
+  table: 'plans',
+  primaryKey: 'id',
+  columns: {
+    id: { type: 'text', nullable: false, primaryKey: true },
+    title: { type: 'text', nullable: false },
+    owner: { type: 'text', nullable: false },
+    status: { type: 'text', nullable: false },
+    createdAt: { type: 'integer', nullable: false },
+    updatedAt: { type: 'integer', nullable: false },
+    schemaVersion: { type: 'integer', nullable: false },
+  },
+};
+const REQUIRED_FIELDS = Object.entries(PLAN_SCHEMA.columns).filter(([, c]) => !c.nullable).map(([name]) => name);
 const MAX_DIFF_FOR_REVIEW = 60 * 1024;
 const MAX_DIFF_STORED = 400 * 1024;
 
@@ -47,18 +89,213 @@ function assetsDir(root, id) { return path.join(plansDir(root), id); }
 function newId(prefix) { return `${prefix}${Date.now().toString(36)}${crypto.randomBytes(3).toString('hex')}`; }
 const validId = (id) => /^[a-z0-9_-]{4,64}$/i.test(String(id || ''));
 
-function readPlan(root, id) {
-  if (!validId(id)) return null;
-  try { return JSON.parse(fs.readFileSync(planFile(root, id), 'utf8')); } catch { return null; }
+/** Who a plan belongs to. shmakk has no accounts: env override, else the OS user. */
+function defaultOwner() {
+  if (process.env.SHMAKK_OWNER) return str(process.env.SHMAKK_OWNER, 120) || 'local';
+  try { return str(os.userInfo().username, 120) || 'local'; } catch { return 'local'; }
 }
 
-function writePlan(root, plan) {
+/**
+ * A new plan record in the current schema. Both create paths (the web UI's plan
+ * manager and the CLI runner) go through this, so every row that gets written
+ * carries the same required fields.
+ */
+function newPlan({
+  title = '', summary = '', source = 'manual', origin = null, workspace = '',
+  tasks = [], requireSignoff = true, convId = null, owner = null,
+} = {}) {
+  const now = Date.now();
+  const list = Array.isArray(tasks) ? tasks : [];
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    id: newId('p'),
+    title: str(title, 160) || str(list[0] && list[0].title, 160) || 'Untitled plan',
+    summary: str(summary, 2000),
+    owner: str(owner, 120) || defaultOwner(),
+    source: str(source, 40) || 'manual',
+    origin: origin && typeof origin === 'object' ? origin : null,
+    workspace: workspace ? path.resolve(workspace) : '',
+    requireSignoff: requireSignoff !== false,
+    status: 'draft',
+    started: false,
+    paused: false,
+    convId: convId || null,
+    createdAt: now,
+    updatedAt: now,
+    tasks: list,
+  };
+}
+
+/**
+ * Coerce a stored record to the current schema. Pure: it never writes, so
+ * reading an old file still yields a complete plan. `changed` reports that the
+ * on-disk copy is behind the schema (i.e. migratePlans should rewrite it).
+ */
+function normalizePlan(raw, id = null, root = null) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const tasks = (Array.isArray(src.tasks) ? src.tasks : []).filter((t) => t && typeof t === 'object');
+  const createdAt = Number.isFinite(src.createdAt) ? src.createdAt : Date.now();
+  const plan = {
+    ...src,
+    schemaVersion: SCHEMA_VERSION,
+    // The file name is the primary key, so an explicit id wins over the payload.
+    id: validId(id) ? String(id) : validId(src.id) ? String(src.id) : null,
+    title: str(src.title, 160) || str(tasks[0] && tasks[0].title, 160) || 'Untitled plan',
+    owner: str(src.owner, 120) || defaultOwner(),
+    status: PLAN_STATUSES.includes(src.status) ? src.status : 'draft',
+    summary: str(src.summary, 2000),
+    source: str(src.source, 40) || 'manual',
+    workspace: str(src.workspace, 1000) || (root ? path.resolve(root) : null),
+    requireSignoff: src.requireSignoff !== false,
+    started: src.started === true,
+    paused: src.paused === true,
+    createdAt,
+    updatedAt: Number.isFinite(src.updatedAt) ? src.updatedAt : createdAt,
+    tasks,
+  };
+  const changed = Number(src.schemaVersion || 0) < SCHEMA_VERSION
+    || !validId(src.id)
+    || (validId(id) && String(src.id) !== String(id))
+    || !str(src.title, 160)
+    || !str(src.owner, 120)
+    || !PLAN_STATUSES.includes(src.status)
+    || !Number.isFinite(src.createdAt)
+    || !Number.isFinite(src.updatedAt);
+  return { plan, changed };
+}
+
+/** Required fields must be present and not null; there are no columns to enforce it. */
+/**
+ * The NOT NULL half of PLAN_SCHEMA, checked on every read and write. An empty
+ * string counts as missing: '' is not a value a plan column may hold.
+ */
+function validatePlan(plan) {
+  const problems = [];
+  if (plan == null || typeof plan !== 'object') problems.push('record is not an object');
+  else {
+    for (const [col, spec] of Object.entries(PLAN_SCHEMA.columns)) {
+      const v = plan[col];
+      if (v === undefined || v === null || v === '') {
+        if (!spec.nullable) problems.push(`${col} is required`);
+        continue;
+      }
+      if (spec.type === 'integer' && !Number.isFinite(v)) problems.push(`${col} must be an integer`);
+      if (spec.type === 'text' && typeof v !== 'string') problems.push(`${col} must be text`);
+    }
+  }
+  if (problems.length) {
+    const e = new Error(`plan violates the ${PLAN_SCHEMA.table} schema: ${problems.join(', ')}`);
+    e.status = 500;
+    throw e;
+  }
+  return plan;
+}
+
+// ── create-request validation ──────────────────────────────────────────────
+
+const MAX_TASKS_PER_PLAN = 50;
+// Known sources, for the comment and for callers' benefit. Only the shape is
+// enforced: adding a source must not require editing a whitelist here.
+const KNOWN_SOURCES = ['manual', 'chat', 'browser', 'show2plan', 'cli', 'automation'];
+
+const badRequest = (message) => {
+  const e = new Error(message);
+  e.status = 400;
+  return e;
+};
+
+/**
+ * Validate a create-plan request from the HTTP boundary. Pure: it reads nothing
+ * and writes nothing, so a rejected request cannot leave a plan behind.
+ * Throws a 400 naming the bad field, and returns the normalized payload
+ * create() takes: { title, summary, source, tasks, requireSignoff, origin }.
+ *
+ * create() stays lenient on purpose: in-process callers (chat, the CLI runner)
+ * pass model-generated tasks that makeTask() coerces. The row-level invariants
+ * are enforced on every write by validatePlan(), so a coerced task still lands
+ * with a title.
+ */
+function validateCreate(payload) {
+  if (payload == null || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw badRequest('expected a JSON object');
+  }
+  const title = typeof payload.title === 'string' ? payload.title.trim() : '';
+  if (!title) throw badRequest('title is required');
+  if (title.length > 200) throw badRequest('title must be 200 characters or fewer');
+
+  if (payload.summary != null && typeof payload.summary !== 'string') throw badRequest('summary must be a string');
+  if (typeof payload.summary === 'string' && payload.summary.length > 4000) throw badRequest('summary must be 4000 characters or fewer');
+
+  if (payload.source != null && (typeof payload.source !== 'string' || !/^[a-z][a-z0-9_-]{0,31}$/.test(payload.source))) {
+    throw badRequest(`source must be a short lowercase token (${KNOWN_SOURCES.join(', ')})`);
+  }
+  if (payload.requireSignoff != null && typeof payload.requireSignoff !== 'boolean') throw badRequest('requireSignoff must be true or false');
+  if (payload.origin != null && (typeof payload.origin !== 'object' || Array.isArray(payload.origin))) throw badRequest('origin must be an object');
+
+  const tasks = payload.tasks;
+  if (!Array.isArray(tasks) || tasks.length === 0) throw badRequest('tasks must be a non-empty array');
+  if (tasks.length > MAX_TASKS_PER_PLAN) throw badRequest(`tasks must be ${MAX_TASKS_PER_PLAN} items or fewer`);
+  tasks.forEach((t, i) => {
+    if (t == null || typeof t !== 'object' || Array.isArray(t)) throw badRequest(`tasks[${i}] must be an object`);
+    if (typeof t.title !== 'string' || !t.title.trim()) throw badRequest(`tasks[${i}].title is required`);
+    if (t.title.trim().length > 200) throw badRequest(`tasks[${i}].title must be 200 characters or fewer`);
+    if (t.acceptance != null && !Array.isArray(t.acceptance)) throw badRequest(`tasks[${i}].acceptance must be an array`);
+  });
+
+  return {
+    title,
+    summary: typeof payload.summary === 'string' ? payload.summary : '',
+    source: payload.source || 'manual',
+    tasks,
+    requireSignoff: payload.requireSignoff !== false,
+    origin: payload.origin || null,
+  };
+}
+
+function readPlan(root, id) {
+  if (!validId(id)) return null;
+  let raw;
+  try { raw = JSON.parse(fs.readFileSync(planFile(root, id), 'utf8')); } catch { return null; }
+  return validatePlan(normalizePlan(raw, id, root).plan);
+}
+
+/**
+ * Upsert by primary key (plan.id). `touch: false` keeps updatedAt as it is,
+ * which the migration needs so upgrading a file does not reshuffle the list.
+ */
+function writePlan(root, plan, { touch = true } = {}) {
   fs.mkdirSync(plansDir(root), { recursive: true });
-  plan.updatedAt = Date.now();
+  plan.workspace = plan.workspace || path.resolve(root);
+  plan.schemaVersion = SCHEMA_VERSION;
+  if (touch) plan.updatedAt = Date.now();
+  validatePlan(plan);
   const tmp = `${planFile(root, plan.id)}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(plan, null, 2));
   fs.renameSync(tmp, planFile(root, plan.id));
   return plan;
+}
+
+/**
+ * Upgrade every plan file under <root>/.shmakk/plans to the current schema:
+ * fills in the required fields that older versions did not write (owner,
+ * schemaVersion) and takes the primary key from the file name. Idempotent: a
+ * second run migrates 0. Unparseable files are counted and left untouched.
+ */
+function migratePlans(root) {
+  const dir = plansDir(root);
+  let names = [];
+  try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.json')); } catch { return { scanned: 0, migrated: 0, corrupt: 0 }; }
+  const out = { scanned: names.length, migrated: 0, corrupt: 0 };
+  for (const name of names) {
+    const id = name.slice(0, -5);
+    if (!validId(id)) continue;
+    let raw;
+    try { raw = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')); } catch { out.corrupt++; continue; }
+    const { plan, changed } = normalizePlan(raw, id, root);
+    if (!changed) continue;
+    try { writePlan(root, plan, { touch: false }); out.migrated++; } catch { out.corrupt++; }
+  }
+  return out;
 }
 
 function listPlans(root) {
@@ -208,6 +445,25 @@ function applyVerdict(task, verdict, { requireSignoff = true, maxAttempts = MAX_
 
 // ── measuring what a task changed ───────────────────────────────────────────
 
+// Why the last snapshotTree returned null, for the runner's log. Null on success.
+let lastSnapshotError = null;
+function snapshotFailure() { return lastSnapshotError; }
+
+/**
+ * Files the agent itself wrote, as workspace-relative paths. The edit tracker is
+ * the one source that attributes a change to the agent rather than to the person
+ * working beside it, so an empty attempt diff can still be widened to the
+ * agent's own files without dragging the person's uncommitted work into review.
+ */
+function editedFiles(root, edits) {
+  const out = new Set();
+  for (const e of edits || []) {
+    const rel = path.relative(root, e && e.filePath ? e.filePath : '');
+    if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) out.add(rel);
+  }
+  return [...out].sort();
+}
+
 function git(root, args, env) {
   return execFileSync('git', args, {
     cwd: root, encoding: 'utf8', timeout: 60000, maxBuffer: 64 * 1024 * 1024,
@@ -215,40 +471,100 @@ function git(root, args, env) {
   });
 }
 
-const EXCLUDES = [':(exclude).shmakk', ':(exclude)TASKS.md'];
+// Paths the review snapshot leaves out: shmakk's own runtime state and the
+// generated task list. They are not part of the work being reviewed.
+const EXCLUDES = ['.shmakk', 'TASKS.md'];
 
 /**
  * Tree id of the working tree as it is now (tracked + untracked, honouring
  * .gitignore), written through a throwaway index. Null outside git.
+ *
+ * The excluded paths cannot be filtered with `:(exclude)` pathspecs: git add
+ * refuses a pathspec that names a path .gitignore already ignores ("The
+ * following paths are ignored..."), which killed the snapshot in every repo
+ * that gitignores .shmakk — including shmakk itself. So everything is added
+ * first and the excluded paths are then forced back to their HEAD copy (or
+ * dropped from the index when they are not tracked).
  */
 function snapshotTree(root) {
-  try { git(root, ['rev-parse', '--is-inside-work-tree']); } catch { return null; }
+  lastSnapshotError = null;
+  try { git(root, ['rev-parse', '--is-inside-work-tree']); } catch (e) { lastSnapshotError = (e && e.message) || String(e); return null; }
   const idx = path.join(os.tmpdir(), `shmakk-plan-idx-${process.pid}-${crypto.randomBytes(4).toString('hex')}`);
   try {
     const env = { GIT_INDEX_FILE: idx };
-    try { git(root, ['read-tree', 'HEAD'], env); } catch { /* no commits yet: empty index */ }
-    git(root, ['add', '-A', '--', '.', ...EXCLUDES], env);
+    let hasHead = true;
+    try { git(root, ['read-tree', 'HEAD'], env); } catch { hasHead = false; /* no commits yet: empty index */ }
+    git(root, ['add', '-A', '--', '.'], env);
+    for (const p of EXCLUDES) {
+      if (hasHead) {
+        try { git(root, ['reset', '-q', 'HEAD', '--', p], env); continue; } catch { /* not tracked in HEAD */ }
+      }
+      try { git(root, ['rm', '-r', '-q', '--cached', '--ignore-unmatch', '--', p], env); } catch {}
+    }
     return git(root, ['write-tree'], env).trim();
-  } catch {
+  } catch (e) {
+    // A silent null here costs a whole review cycle: the reviewer is handed an
+    // empty diff for work that exists. Keep the reason reachable.
+    lastSnapshotError = (e && e.message) || String(e);
     return null;
   } finally {
     try { fs.rmSync(idx, { force: true }); } catch {}
   }
 }
 
-function diffTrees(root, a, b) {
+function diffTrees(root, a, b, paths) {
   if (!a || !b) return null;
   if (a === b) return { files: [], stat: '', patch: '', added: 0, removed: 0 };
+  const only = paths && paths.length ? ['--', ...paths] : [];
   try {
-    const numstat = git(root, ['diff', '--numstat', a, b]).trim();
+    const numstat = git(root, ['diff', '--numstat', a, b, ...only]).trim();
     const files = numstat ? numstat.split('\n').map((l) => { const [ad, rm, ...p] = l.split('\t'); return { path: p.join('\t'), added: Number(ad) || 0, removed: Number(rm) || 0 }; }) : [];
-    let patch = git(root, ['diff', '--no-color', '-M', a, b]);
+    let patch = git(root, ['diff', '--no-color', '-M', a, b, ...only]);
     if (patch.length > MAX_DIFF_STORED) patch = `${patch.slice(0, MAX_DIFF_STORED)}\n\n[diff truncated]\n`;
-    const stat = git(root, ['diff', '--stat', a, b]).trim();
+    const stat = git(root, ['diff', '--stat', a, b, ...only]).trim();
     return { files, stat, patch, added: files.reduce((n, f) => n + f.added, 0), removed: files.reduce((n, f) => n + f.removed, 0) };
   } catch {
     return null;
   }
+}
+
+/**
+ * Diff handed to the review gate.
+ *
+ * The task's change is cumulative: attempt 2 of a task must show the work of
+ * attempt 1 as well, otherwise a reviewer re-checks a diff that no longer
+ * contains the code it is judging. Two things used to break that: a failed
+ * snapshot nulled the baseline (so the next attempt re-baselined after the work
+ * was already on disk), and a resumed run starts with an empty edit log. So the
+ * file set the task has touched is remembered on the task record, and the diff
+ * is taken from HEAD for exactly those files. Unrelated uncommitted work stays
+ * out, and files are never dropped from the window. When the remembered set is
+ * empty (a resumed run whose baseline was lost) the files the edit tracker saw
+ * the agent write are used instead — those are attributable to the agent, so the
+ * person's own uncommitted work still stays out of the review.
+ */
+function reviewDiff(root, task, attemptDiff, after, editFiles = []) {
+  // The `after` snapshot can be lost (a failed snapshot, a resumed run). Retry it
+  // before giving up: it is one cheap git call, and skipping it hands the
+  // reviewer an empty diff for work that is on disk.
+  const tree = after || snapshotTree(root);
+  if (!tree) return attemptDiff;
+  const attempted = attemptDiff && Array.isArray(attemptDiff.files) ? attemptDiff.files.map((f) => f.path) : [];
+  const declared = (Array.isArray(task.files) ? task.files : []).map((f) => (f && f.path) || (typeof f === 'string' ? f : null));
+  const paths = [...new Set([...(task.touched || []), ...attempted, ...declared, ...editFiles])].filter(Boolean).sort();
+  if (paths.length) {
+    const scoped = diffTrees(root, 'HEAD', tree, paths);
+    if (scoped && scoped.files.length) {
+      task.touched = [...new Set([...(task.touched || []), ...scoped.files.map((f) => f.path)])].sort();
+      return scoped;
+    }
+    // The scoped diff can legitimately come back empty (the files are already
+    // at HEAD, or the throwaway index disagreed). Still remember what the task
+    // is responsible for, so the next attempt does not start from a blank
+    // window and hand the reviewer an empty diff again.
+    if (!(task.touched || []).length) task.touched = paths;
+  }
+  return attemptDiff;
 }
 
 /** Diff from the session edit log (no git): edits recorded since `from`. */
@@ -403,6 +719,12 @@ function syncTaskFile(root, plans) {
 function createPlanManager(ctx) {
   const runners = new Map(); // planId → { stop: bool, convId, current }
   const ws = () => path.resolve(ctx.getWorkspace());
+  const migrated = new Set(); // roots already upgraded to the current schema
+  const ensureMigrated = (root) => {
+    if (migrated.has(root)) return;
+    migrated.add(root);
+    try { migratePlans(root); } catch {}
+  };
   const changed = (plan) => {
     try { syncTaskFile(plan.workspace || ws(), listPlans(plan.workspace || ws())); } catch {}
     ctx.broadcast({ t: 'plans.changed', planId: plan.id });
@@ -416,6 +738,7 @@ function createPlanManager(ctx) {
   };
 
   function load(id, root = ws()) {
+    ensureMigrated(root);
     const p = readPlan(root, id);
     if (!p) { const e = new Error('plan not found'); e.status = 404; throw e; }
     return p;
@@ -428,6 +751,7 @@ function createPlanManager(ctx) {
   }
 
   function list() {
+    ensureMigrated(ws());
     return listPlans(ws()).map((p) => {
       const counts = {};
       for (const t of p.tasks) counts[t.status] = (counts[t.status] || 0) + 1;
@@ -446,22 +770,10 @@ function createPlanManager(ctx) {
     const root = ws();
     const made = linkDependencies((Array.isArray(tasks) ? tasks : []).map(makeTask));
     if (!made.length) { const e = new Error('a plan needs at least one task'); e.status = 400; throw e; }
-    const plan = {
-      id: newId('p'),
-      title: str(title, 160) || made[0].title,
-      summary: str(summary, 2000),
-      source: str(source, 40) || 'manual',
-      origin: origin && typeof origin === 'object' ? origin : null,
-      workspace: root,
-      requireSignoff: requireSignoff !== false,
-      status: 'draft',
-      started: false,
-      paused: false,
-      convId: convId || null,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      tasks: made,
-    };
+    const plan = newPlan({
+      title, summary, source, origin, workspace: root, tasks: made, requireSignoff, convId,
+      owner: typeof ctx.getOwner === 'function' ? ctx.getOwner() : null,
+    });
     if (assets && assets.frames && typeof assets.frames === 'object') {
       const dir = assetsDir(root, plan.id);
       fs.mkdirSync(dir, { recursive: true });
@@ -638,9 +950,16 @@ function createPlanManager(ctx) {
     save(plan);
 
     // Review the task's whole change, not just this attempt's increment, as
-    // long as no other task has touched the tree since this one started.
+    // long as no other task has touched the tree since this one started. The
+    // baseline is taken once per task: a failed snapshot must not be replaced
+    // later, because a later baseline starts after work already on disk.
     const now = snapshotTree(root);
-    if (!task.baseTree || plan.lastTaskId !== task.id) { task.baseTree = now; task.baseEdits = getEdits().length; }
+    if (!now) console.error('[shmakk plan] git snapshot failed, falling back to the edit log:', snapshotFailure());
+    if (!task.baseCaptured || plan.lastTaskId !== task.id) { task.baseTree = now; task.baseEdits = getEdits().length; task.baseCaptured = true; }
+    // A rework starts with the earlier attempt's files already on disk, so the
+    // baseline cannot tell them apart from the person's own edits. The edit
+    // tracker can, so seed the remembered window from it when nothing is known.
+    if (task.attempts > 1 && !(task.touched || []).length) task.touched = editedFiles(root, getEdits());
     plan.lastTaskId = task.id;
     save(plan);
     const before = task.baseTree;
@@ -664,8 +983,9 @@ function createPlanManager(ctx) {
     }
     task.report = str(out.summary, 6000) || null;
 
-    const after = before ? snapshotTree(root) : null;
-    const diff = before && after ? diffTrees(root, before, after) : diffFromEdits(getEdits(), editsFrom, root);
+    const after = snapshotTree(root);
+    const attempt = before && after ? diffTrees(root, before, after) : diffFromEdits(getEdits(), editsFrom, root);
+    const diff = reviewDiff(root, task, attempt, after, editedFiles(root, getEdits()));
     const diffName = `${task.id}-${task.attempts}.diff`;
     if (diff && diff.patch) {
       fs.mkdirSync(assetsDir(root, plan.id), { recursive: true });
@@ -772,11 +1092,14 @@ function createPlanManager(ctx) {
     }
   }
 
-  return { list, get, create, update, remove, editTask, addTask, deleteTask, moveTask, approve, requestChanges, skip, retry, run, pause, diffFor, assetFor, shutdown, recover, isRunning: (id) => runners.has(id) };
+  return { list, get, create, validateCreate, update, remove, editTask, addTask, deleteTask, moveTask, approve, requestChanges, skip, retry, run, pause, diffFor, assetFor, shutdown, recover, isRunning: (id) => runners.has(id) };
 }
 
 module.exports = {
   MAX_ATTEMPTS,
+  SCHEMA_VERSION,
+  PLAN_STATUSES,
+  REQUIRED_FIELDS,
   TASK_STATUSES,
   makeTask,
   linkDependencies,
@@ -786,8 +1109,12 @@ module.exports = {
   derivePlanStatus,
   normalizeVerdict,
   applyVerdict,
+  PLAN_SCHEMA,
   snapshotTree,
+  snapshotFailure,
+  editedFiles,
   diffTrees,
+  reviewDiff,
   diffFromEdits,
   taskPrompt,
   reviewPrompt,
@@ -796,6 +1123,14 @@ module.exports = {
   renderTaskBlock,
   syncTaskFile,
   createPlanManager,
+  defaultOwner,
+  newPlan,
+  normalizePlan,
+  validatePlan,
+  validateCreate,
+  MAX_TASKS_PER_PLAN,
+  KNOWN_SOURCES,
+  migratePlans,
   readPlan,
   writePlan,
   listPlans,

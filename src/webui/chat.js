@@ -36,6 +36,7 @@ const sessionSearch = require('../session-search');
 const { HELP } = require('../cli');
 const audit = require('../audit');
 const store = require('./store');
+const sessionSync = require('./session-sync');
 const artefacts = require('./artefacts');
 
 const HISTORY_MAX_ENTRIES = 30;
@@ -176,6 +177,9 @@ class ChatManager {
   // `project` narrows the list: 'none' (or null) keeps only chats that belong to
   // no project, a project id keeps that project's chats, undefined keeps all.
   list({ project } = {}) {
+    // Sessions started in a terminal (or by another shmakk instance) are
+    // mirrored into the store first, so they list like any other conversation.
+    try { sessionSync.sync(); } catch {}
     const metas = store.listConversations();
     // live conversations may be newer than what's on disk
     const byId = new Map(metas.map((m) => [m.id, m]));
@@ -184,6 +188,16 @@ class ChatManager {
     if (project === 'none' || project === null) out = out.filter((c) => !c.projectId);
     else if (project !== undefined) out = out.filter((c) => c.projectId === project);
     return out;
+  }
+
+  // Push turns recorded by other processes (a terminal session, another shmakk
+  // instance) into the mirrored conversations and tell open windows.
+  syncExternalSessions() {
+    let result;
+    try { result = sessionSync.sync({ force: true }); } catch { return 0; }
+    for (const meta of result.changed) this.ctx.broadcast({ t: 'conv', conv: meta });
+    for (const { convId, item } of result.items) this.ctx.broadcast({ t: 'item', convId, item });
+    return result.changed.length;
   }
 
   // workspace/repo are set for GitHub cloud sessions; plain chats use the
@@ -254,11 +268,15 @@ class ChatManager {
   }
 
   remove(id) {
-    const conv = this.convs.get(id);
-    if (conv) {
+    const live = this.convs.get(id);
+    const conv = live || store.loadConversation(id);
+    // Deleting a mirrored terminal session hides it from future syncs; the
+    // session itself stays in the index (the CLI can still resume it).
+    if (conv && conv.origin === 'cli' && conv.sessionId) sessionSync.hide(conv.sessionId);
+    if (live) {
       this.stop(id);
-      if (conv.saveTimer) clearTimeout(conv.saveTimer);
-      if (conv.sessionId) { try { sessionSearch.recordSessionEnd({ sessionId: conv.sessionId }); } catch {} }
+      if (live.saveTimer) clearTimeout(live.saveTimer);
+      if (live.sessionId && live.origin !== 'cli') { try { sessionSearch.recordSessionEnd({ sessionId: live.sessionId }); } catch {} }
       this.convs.delete(id);
     }
     store.deleteConversation(id);
@@ -272,7 +290,7 @@ class ChatManager {
       if (conv.run) conv.run.ctrl.abort(new Error('stopped'));
       if (conv.saveTimer) clearTimeout(conv.saveTimer);
       store.saveConversation(conv);
-      if (conv.sessionId) { try { sessionSearch.recordSessionEnd({ sessionId: conv.sessionId }); } catch {} }
+      if (conv.sessionId && conv.origin !== 'cli') { try { sessionSearch.recordSessionEnd({ sessionId: conv.sessionId }); } catch {} }
     }
   }
 
@@ -424,6 +442,15 @@ class ChatManager {
     const refContext = attachmentContext(refs);
     if (!text && !refContext) return { ok: false, error: 'empty message' };
 
+    // A mirrored terminal session turns into a normal conversation the first
+    // time it is continued here: the mirror stops syncing it so the same turns
+    // are never written into the transcript twice.
+    if (conv.origin === 'cli') {
+      conv.origin = null;
+      try { sessionSync.adopt(conv); } catch {}
+      this.ctx.broadcast({ t: 'conv', conv: store.metaOf(conv) });
+    }
+
     if (/^\$\s+/.test(text)) { mode = 'shell'; text = text.replace(/^\$\s+/, ''); }
 
     const ctrl = new AbortController();
@@ -445,6 +472,8 @@ class ChatManager {
     if (!conv.sessionId) {
       conv.sessionId = sessionSearch.makeSessionId();
       try { sessionSearch.recordSessionStart({ sessionId: conv.sessionId, workspace: conv.workspace, pid: process.pid }); } catch {}
+      // Owned by this conversation: never mirror it back as a terminal session.
+      try { sessionSync.claim(conv.sessionId, conv.id); } catch {}
       audit.append({ kind: 'session-start', sessionId: conv.sessionId, workspace: conv.workspace, via: 'web', review: !!this.ctx.settings.review, pid: process.pid });
     }
 
@@ -881,6 +910,18 @@ class ChatManager {
 
   // ── agent event → transcript item mapping ───────────────────────────────
 
+  // A browser `show` call (the tool that opens a URL in the shared live pane)
+  // should switch the web UI's pane over to the live browser view. Every mode
+  // shares this behaviour except design, which renders its own live preview.
+  _broadcastBrowserOpen(name, args, result, mode) {
+    if (mode === 'design') return;
+    if (name !== 'browser' || !args || args.command !== 'show') return;
+    if (!result || !result.ok) return;
+    try {
+      this.ctx.broadcast({ t: 'browser.open', url: result.url || args.url || '' });
+    } catch {}
+  }
+
   _eventSink(conv, { agentLabel = null } = {}) {
     let current = null;            // streaming assistant item
     const tools = new Map();       // tool_call id → item
@@ -953,6 +994,7 @@ class ChatManager {
           if (!ev.error && (ev.name === 'write_file' || ev.name === 'edit_file')) {
             this._captureArtefact(conv, ev.name, ev.args);
           }
+          this._broadcastBrowserOpen(ev.name, ev.args, ev.result, conv.mode);
           it.endedAt = Date.now();
           this._touch(conv, it);
           break;
@@ -1106,11 +1148,11 @@ class ChatManager {
       return;
     }
     const { client, model: resolvedModel } = makeClientForModel(this._modelFor(conv));
-    const tools = TOOLS.filter((t) => t.function.name === 'web_search' || t.function.name === 'fetch_url');
+    const tools = TOOLS.filter((t) => t.function.name === 'web_search' || t.function.name === 'fetch_url' || t.function.name === 'browser');
     const system = [
       `You are shmakk, a thoughtful, direct assistant. Today is ${new Date().toDateString()}.`,
       'Answer the question that was asked, at the depth it deserves. Use Markdown where it helps (code blocks, short lists, tables for comparisons).',
-      'You can search the web and fetch pages when the answer depends on current or specific facts; say so briefly when you do. You have no access to files or a shell in this mode — if the user wants work done in a codebase, suggest Code mode; for visual work, Design mode; for recurring or scheduled work, Cowork mode.',
+      'You can search the web and fetch pages when the answer depends on current or specific facts; say so briefly when you do. For anything that needs a real page driven — clicking, filling a form, reading what a page renders — use the browser tool, and `browser show` opens the page in the live pane so the user can watch and take over. You have no access to files or a shell in this mode — if the user wants work done in a codebase, suggest Code mode; for visual work, Design mode; for recurring or scheduled work, Cowork mode.',
       renderMemoryForPrompt(this.ctx.getWorkspace()),
       this._globalPrompt(),
       this._projectContext(conv),
@@ -1151,9 +1193,7 @@ class ChatManager {
         sink({ type: 'tool_start', id: c.id, name: c.function.name, args });
         const allowed = tools.some((t) => t.function.name === c.function.name);
         const result = allowed ? await dispatchTool(c.function.name, args, [], null, ctrl.signal, null) : { error: 'tool not available in Chat mode' };
-        if (c.function.name === 'browser' && args && args.command === 'show' && result && result.ok) {
-          try { this.ctx.broadcast({ t: 'browser.open', url: result.url || args.url || '' }); } catch {}
-        }
+        this._broadcastBrowserOpen(c.function.name, args, result, conv.mode);
         sink({ type: 'tool_end', id: c.id, name: c.function.name, args, result, summary: summarizeToolResult(c.function.name, result), error: result && result.error ? result.error : null });
         messages.push({ role: 'tool', tool_call_id: c.id, content: JSON.stringify(result).slice(0, 8000) });
         if (ctrl.signal.aborted) throw new Error('stopped');

@@ -2960,6 +2960,435 @@ function highlightDiffLines(text) {
   });
 }
 
+// ── plans: store schema + migration ────────────────────────────────────────
+{
+  const os = require('os');
+  const path = require('path');
+  const P = require('../src/webui/plans');
+  const planDir = (root) => path.join(root, '.shmakk', 'plans');
+  const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'plans-schema-'));
+  const legacy = (root, id, extra = {}) => {
+    fs.mkdirSync(planDir(root), { recursive: true });
+    const file = path.join(planDir(root), `${id}.json`);
+    fs.writeFileSync(file, JSON.stringify({
+      id, title: 'Legacy plan', workspace: root,
+      tasks: [{ id: 'tx0001', title: 'T', status: 'todo' }], ...extra,
+    }, null, 2));
+    return file;
+  };
+
+  test('plans: a new record carries every required field non-null', () => {
+    const plan = P.newPlan({ title: 'Ship', workspace: '/tmp/ws', tasks: [P.makeTask({ title: 'A' }, 0)] });
+    for (const f of P.REQUIRED_FIELDS) {
+      assert.ok(plan[f] !== null && plan[f] !== undefined && plan[f] !== '', `${f} must be set`);
+    }
+    assert.strictEqual(plan.schemaVersion, P.SCHEMA_VERSION);
+    assert.strictEqual(plan.status, 'draft');
+    assert.strictEqual(typeof plan.createdAt, 'number');
+    assert.strictEqual(typeof plan.updatedAt, 'number');
+    assert.match(plan.owner, /\S/);
+    assert.ok(P.validatePlan(plan));
+  });
+
+  test('plans: the schema declares a primary key and the required columns', () => {
+    assert.strictEqual(P.PLAN_SCHEMA.primaryKey, 'id');
+    const cols = P.PLAN_SCHEMA.columns;
+    assert.deepStrictEqual(Object.keys(cols), ['id', 'title', 'owner', 'status', 'createdAt', 'updatedAt', 'schemaVersion']);
+    assert.strictEqual(cols.id.primaryKey, true);
+    assert.deepStrictEqual(P.REQUIRED_FIELDS, ['id', 'title', 'owner', 'status', 'createdAt', 'updatedAt', 'schemaVersion']);
+    for (const c of P.REQUIRED_FIELDS) assert.strictEqual(cols[c].nullable, false, `${c} cannot be null`);
+    // A record that satisfies the schema round-trips through a real write.
+    const root = tmp();
+    try {
+      const plan = P.newPlan({ title: 'Ship', workspace: root, tasks: [P.makeTask({ title: 'A' }, 0)] });
+      P.writePlan(root, plan);
+      const back = P.readPlan(root, plan.id);
+      assert.strictEqual(back.id, plan.id, 'the file name is the primary key');
+      for (const c of P.REQUIRED_FIELDS) assert.ok(back[c] !== null && back[c] !== undefined && back[c] !== '');
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test('plans: validation rejects a record missing a required field', () => {
+    const plan = P.newPlan({ title: 'x', workspace: '/tmp/ws', tasks: [P.makeTask({ title: 'A' }, 0)] });
+    delete plan.owner;
+    assert.throws(() => P.validatePlan(plan), /owner/);
+    plan.owner = null;
+    assert.throws(() => P.validatePlan(plan), /owner/);
+    plan.owner = 'someone';
+    plan.status = '';
+    assert.throws(() => P.validatePlan(plan), /status/);
+  });
+
+  test('plans: creating a plan persists one row, keyed by its id', () => {
+    const root = tmp();
+    try {
+      const mgr = P.createPlanManager({ getWorkspace: () => root, broadcast: () => {}, chat: {}, settings: {} });
+      const plan = mgr.create({ title: 'Migrate me', tasks: [{ title: 'Step', acceptance: ['works'] }] });
+      const file = path.join(planDir(root), `${plan.id}.json`);
+      assert.ok(fs.existsSync(file));
+      const onDisk = JSON.parse(fs.readFileSync(file, 'utf8'));
+      for (const f of P.REQUIRED_FIELDS) {
+        assert.ok(onDisk[f] !== null && onDisk[f] !== undefined && onDisk[f] !== '', `${f} stored non-null`);
+      }
+      assert.strictEqual(onDisk.id, plan.id);
+      assert.deepStrictEqual(mgr.list().map((p) => p.id), [plan.id]);
+      assert.strictEqual(mgr.get(plan.id).title, 'Migrate me');
+      const second = mgr.create({ title: 'Second', tasks: [{ title: 'Other' }] });
+      assert.notStrictEqual(second.id, plan.id);
+      assert.deepStrictEqual(mgr.list().map((p) => p.id).sort(), [plan.id, second.id].sort());
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test('plans: opening the store migrates old records', () => {
+    const root = tmp();
+    try {
+      const file = legacy(root, 'pdead00001');
+      assert.strictEqual(JSON.parse(fs.readFileSync(file, 'utf8')).owner, undefined);
+      // reading is pure: it normalises in memory and leaves the file alone
+      assert.match(P.readPlan(root, 'pdead00001').owner, /\S/);
+      assert.strictEqual(JSON.parse(fs.readFileSync(file, 'utf8')).owner, undefined);
+      // the manager upgrades the store once, on first use
+      const mgr = P.createPlanManager({ getWorkspace: () => root, broadcast: () => {}, chat: {}, settings: {} });
+      assert.deepStrictEqual(mgr.list().map((p) => p.id), ['pdead00001']);
+      const after = JSON.parse(fs.readFileSync(file, 'utf8'));
+      for (const f of P.REQUIRED_FIELDS) assert.ok(after[f] !== null && after[f] !== '', `${f} after migrate`);
+      assert.strictEqual(after.schemaVersion, P.SCHEMA_VERSION);
+      assert.strictEqual(typeof after.createdAt, 'number');
+      assert.strictEqual(typeof after.updatedAt, 'number');
+      assert.deepStrictEqual(P.migratePlans(root), { scanned: 1, migrated: 0, corrupt: 0 });
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test('plans: migration keeps updatedAt so the list order does not jump', () => {
+    const root = tmp();
+    try {
+      legacy(root, 'pold000001', { owner: 'someone', status: 'draft', createdAt: 1000, updatedAt: 2000 });
+      assert.deepStrictEqual(P.migratePlans(root), { scanned: 1, migrated: 1, corrupt: 0 });
+      const after = JSON.parse(fs.readFileSync(path.join(planDir(root), 'pold000001.json'), 'utf8'));
+      assert.strictEqual(after.updatedAt, 2000);
+      assert.strictEqual(after.schemaVersion, P.SCHEMA_VERSION);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test('plans: corrupt files are left alone and the file name is the primary key', () => {
+    const root = tmp();
+    try {
+      fs.mkdirSync(planDir(root), { recursive: true });
+      fs.writeFileSync(path.join(planDir(root), 'pbad000001.json'), '{not json');
+      assert.deepStrictEqual(P.migratePlans(root), { scanned: 1, migrated: 0, corrupt: 1 });
+      assert.ok(fs.existsSync(path.join(planDir(root), 'pbad000001.json')));
+      assert.strictEqual(P.readPlan(root, 'pbad000001'), null);
+      const file = legacy(root, 'pkey000001', { id: 'pother0001' });
+      P.migratePlans(root);
+      assert.strictEqual(JSON.parse(fs.readFileSync(file, 'utf8')).id, 'pkey000001');
+      assert.strictEqual(P.readPlan(root, 'pkey000001').id, 'pkey000001');
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test('plans: create-request validation rejects malformed input with a 400', () => {
+    const good = { title: 'Add create-new-plan flow', tasks: [{ title: 'Endpoint' }] };
+    assert.deepStrictEqual(P.validateCreate(good), {
+      title: 'Add create-new-plan flow', summary: '', source: 'manual', tasks: good.tasks, requireSignoff: true, origin: null,
+    });
+    assert.strictEqual(P.validateCreate({ ...good, title: '  padded  ' }).title, 'padded');
+    assert.strictEqual(P.validateCreate({ ...good, requireSignoff: false }).requireSignoff, false);
+    assert.strictEqual(P.validateCreate({ ...good, source: 'show2plan' }).source, 'show2plan');
+
+    const cases = [
+      [null, /object/],
+      [[], /object/],
+      [{}, /title is required/],
+      [{ title: '   ', tasks: [{ title: 'A' }] }, /title is required/],
+      [{ title: 42, tasks: [{ title: 'A' }] }, /title is required/],
+      [{ title: 'x'.repeat(201), tasks: [{ title: 'A' }] }, /200 characters/],
+      [{ title: 'ok' }, /tasks must be a non-empty array/],
+      [{ title: 'ok', tasks: [] }, /tasks must be a non-empty array/],
+      [{ title: 'ok', tasks: 'nope' }, /tasks must be a non-empty array/],
+      [{ title: 'ok', tasks: Array.from({ length: 51 }, () => ({ title: 'A' })) }, /50 items or fewer/],
+      [{ title: 'ok', tasks: [null] }, /tasks\[0\] must be an object/],
+      [{ title: 'ok', tasks: [{ instructions: 'no title' }] }, /tasks\[0\]\.title is required/],
+      [{ title: 'ok', tasks: [{ title: 'A', acceptance: 'not a list' }] }, /tasks\[0\]\.acceptance must be an array/],
+      [{ title: 'ok', tasks: [{ title: 'A' }], requireSignoff: 'yes' }, /requireSignoff/],
+      [{ title: 'ok', tasks: [{ title: 'A' }], source: 'Not A Token' }, /source/],
+      [{ title: 'ok', tasks: [{ title: 'A' }], summary: 12 }, /summary/],
+    ];
+    for (const [body, want] of cases) {
+      assert.throws(() => P.validateCreate(body), (e) => e.status === 400 && want.test(e.message), `should reject ${JSON.stringify(body).slice(0, 60)}`);
+    }
+  });
+
+  test('plans: POST /api/plans creates one plan and returns its id and title', async () => {
+    const root = tmp();
+    try {
+      const mgr = P.createPlanManager({ getWorkspace: () => root, broadcast: () => {}, chat: {}, settings: {} });
+      const api = require('../src/webui/api').createApi({
+        getWorkspace: () => root, settings: {}, saveSettings() {}, plans: mgr, nodes: {}, capture: {}, mcp: {},
+      });
+      const out = await api.handle('POST', '/api/plans', {
+        body: { title: 'Add create-new-plan flow', summary: 'why', source: 'browser', requireSignoff: true, tasks: [{ title: 'Add create-plan endpoint' }] },
+        raw: null, query: {},
+      });
+      assert.strictEqual(out.found, true, 'the route must exist');
+      const plan = out.result;
+      assert.match(plan.id, /^p[\w-]{6,}$/);
+      assert.strictEqual(plan.title, 'Add create-new-plan flow');
+      assert.strictEqual(plan.source, 'browser');
+      assert.strictEqual(plan.tasks.length, 1);
+      assert.strictEqual(plan.tasks[0].status, 'todo');
+
+      // Exactly one row, keyed by the returned id.
+      const rows = fs.readdirSync(planDir(root)).filter((n) => n.endsWith('.json'));
+      assert.deepStrictEqual(rows, [`${plan.id}.json`]);
+      assert.strictEqual(P.readPlan(root, plan.id).id, plan.id);
+      assert.strictEqual(P.readPlan(root, plan.id).title, plan.title);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test('plans: POST /api/plans rejects invalid input without writing a plan', async () => {
+    const root = tmp();
+    try {
+      const mgr = P.createPlanManager({ getWorkspace: () => root, broadcast: () => {}, chat: {}, settings: {} });
+      const api = require('../src/webui/api').createApi({
+        getWorkspace: () => root, settings: {}, saveSettings() {}, plans: mgr, nodes: {}, capture: {}, mcp: {},
+      });
+      const post = (body) => api.handle('POST', '/api/plans', { body, raw: null, query: {} });
+      const rows = () => { try { return fs.readdirSync(planDir(root)); } catch { return []; } };
+
+      for (const body of [{}, { title: 'x' }, { title: 'x', tasks: [] }, { title: 'x', tasks: [{}] }, { title: '', tasks: [{ title: 'A' }] }, { title: 'x', tasks: [{ title: 'A' }], requireSignoff: 'true' }]) {
+        await assert.rejects(post(body), (e) => e.status === 400, `should reject ${JSON.stringify(body)}`);
+        assert.deepStrictEqual(rows(), [], `no plan may be written for ${JSON.stringify(body)}`);
+      }
+      // And nothing was written for the plan directory at all.
+      assert.strictEqual(fs.existsSync(planDir(root)), false);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test('plans: POST /api/plans rejects an unauthenticated request without writing a plan', () => withTempHome(async (dir) => {
+    const { startWebServer } = require('../src/webui/server');
+    const h = await startWebServer({ port: 0, workspace: dir, quiet: true, token: 'tok-plans' });
+    try {
+      const res = await fetch(h.baseUrl + '/api/plans', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ title: 'Add create-new-plan flow', tasks: [{ title: 'Add create-plan endpoint' }] }),
+      });
+      assert.strictEqual(res.status, 401, 'an unauthenticated POST /api/plans must be rejected');
+      assert.strictEqual(fs.existsSync(path.join(dir, '.shmakk', 'plans')), false, 'no plan row may be written for an unauthenticated request');
+    } finally { await h.close(); }
+  }));
+
+  test('plans: the review diff is cumulative across attempts and limited to files the task touched', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plans-cum-'));
+    const identity = { GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.com', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.com' };
+    const git = (...args) => require('child_process').execFileSync('git', args, {
+      cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...identity },
+    });
+    try {
+      git('init', '-q');
+      fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+      fs.writeFileSync(path.join(root, 'src', 'schema.js'), 'module.exports = 0;\n');
+      fs.writeFileSync(path.join(root, 'notes.md'), 'unrelated\n');
+      git('add', '-A');
+      git('commit', '-q', '-m', 'base');
+      // Something the person owns, not the agent: must stay out of the review.
+      fs.writeFileSync(path.join(root, 'notes.md'), 'draft of something else\n');
+      // Attempt 1 changed src/schema.js; the run was resumed, so the baseline of
+      // attempt 2 is taken after that work and the edit log no longer has it.
+      fs.writeFileSync(path.join(root, 'src', 'schema.js'), 'module.exports = 1;\n');
+      const task = { id: 't1', touched: ['src/schema.js'] };
+      const after1 = P.snapshotTree(root);
+      const attempt2Before = after1;
+      fs.writeFileSync(path.join(root, 'src', 'create.js'), 'module.exports = 2;\n');
+      const attempt = P.diffTrees(root, attempt2Before, P.snapshotTree(root));
+      assert.deepStrictEqual(attempt.files.map((f) => f.path), ['src/create.js']);
+      const diff = P.reviewDiff(root, task, attempt, P.snapshotTree(root));
+      assert.deepStrictEqual(diff.files.map((f) => f.path).sort(), ['src/create.js', 'src/schema.js']);
+      assert.ok(!/notes\.md/.test(diff.patch), 'unrelated uncommitted work stays out of the review');
+      assert.ok(/module\.exports = 1/.test(diff.patch), 'the earlier attempt is still in the diff');
+      assert.deepStrictEqual(task.touched, ['src/create.js', 'src/schema.js'], 'the file set is remembered on the task');
+      assert.deepStrictEqual(P.diffTrees(root, 'HEAD', 'HEAD').files, []);
+      // A missing `after` snapshot is retried from the working tree instead of
+      // handing back the empty diff, and the task's remembered files still scope it.
+      const retried = P.reviewDiff(root, task, null, null);
+      assert.deepStrictEqual(retried.files.map((f) => f.path).sort(), ['src/create.js', 'src/schema.js']);
+      // Outside git there is nothing to snapshot, so the attempt diff comes back.
+      const plain = fs.mkdtempSync(path.join(os.tmpdir(), 'plans-nogit-'));
+      try { assert.strictEqual(P.reviewDiff(plain, { id: 'x', files: [] }, null, null), null); } finally { fs.rmSync(plain, { recursive: true, force: true }); }
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test("plans: a lost baseline still hands the reviewer the task's work", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plans-base-'));
+    const identity = { GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.com', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.com' };
+    const git = (...args) => require('child_process').execFileSync('git', args, {
+      cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...identity },
+    });
+    const empty = { files: [], stat: '', patch: '', added: 0, removed: 0 };
+    try {
+      git('init', '-q');
+      fs.writeFileSync(path.join(root, 'a.js'), 'a1\n');
+      fs.writeFileSync(path.join(root, 'b.js'), 'b1\n');
+      git('add', '-A');
+      git('commit', '-q', '-m', 'base');
+      fs.writeFileSync(path.join(root, 'a.js'), 'a2\n');
+      fs.writeFileSync(path.join(root, 'b.js'), 'b2\n');
+
+      // A null baseline with no attempt diff used to hand the reviewer an empty
+      // diff, so it rejected work that was plainly on disk. The files the edit
+      // tracker saw the agent write fill that gap.
+      const logged = P.reviewDiff(root, { id: 't1', files: [] }, empty, null, ['a.js']);
+      assert.deepStrictEqual(logged.files.map((f) => f.path), ['a.js']);
+      assert.match(logged.patch, /\+a2/);
+      // b.js is the person's own uncommitted work: attribution keeps it out.
+      assert.ok(!/b\.js/.test(logged.patch), 'only the agent\'s own files are in the window');
+
+      // A remembered, declared or logged file set all narrow the window.
+      for (const args of [[{ id: 't2', touched: ['a.js'], files: [] }, []], [{ id: 't3', files: ['a.js'] }, []], [{ id: 't5', files: [] }, ['a.js']]]) {
+        const scoped = P.reviewDiff(root, args[0], empty, null, args[1]);
+        assert.deepStrictEqual(scoped.files.map((f) => f.path), ['a.js']);
+      }
+
+      // Nothing attributable: the attempt diff comes back as it was, never a
+      // fabricated one, and the person's work is never exposed.
+      assert.strictEqual(P.reviewDiff(root, { id: 't4', files: [], touched: [] }, empty, null, []), empty);
+
+      // Clean tree: still nothing to show.
+      git('add', '-A');
+      git('commit', '-q', '-m', 'work');
+      assert.strictEqual(P.reviewDiff(root, { id: 't6', files: [] }, empty, null, ['a.js']), empty);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test('plans: a task remembers its files even when the scoped diff is empty', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plans-remember-'));
+    const identity = { GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.com', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.com' };
+    const git = (...args) => require('child_process').execFileSync('git', args, {
+      cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...identity },
+    });
+    try {
+      git('init', '-q');
+      // Commit a.js so it is clean at HEAD; the scoped diff for it is empty.
+      fs.writeFileSync(path.join(root, 'a.js'), 'a\n');
+      git('add', '-A');
+      git('commit', '-q', '-m', 'base');
+      const task = { id: 't1', files: [], touched: [] };
+      const empty = { files: [], stat: '', patch: '', added: 0, removed: 0 };
+      assert.strictEqual(P.reviewDiff(root, task, empty, P.snapshotTree(root), ['a.js']), empty);
+      // The file the edit tracker attributed is remembered for the next attempt.
+      assert.deepStrictEqual(task.touched, ['a.js']);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test('plans: the review snapshot survives a gitignored .shmakk and leaves it out of the diff', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plans-snap-'));
+    const identity = { GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.com', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.com' };
+    const git = (...args) => require('child_process').execFileSync('git', args, {
+      cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...identity },
+    });
+    try {
+      git('init', '-q');
+      fs.writeFileSync(path.join(root, '.gitignore'), '.shmakk/\n');
+      fs.writeFileSync(path.join(root, 'TASKS.md'), '# tasks\n');
+      fs.writeFileSync(path.join(root, 'keep.js'), 'module.exports = 1;\n');
+      git('add', '-A');
+      git('commit', '-q', '-m', 'base');
+      // .shmakk/ is gitignored and TASKS.md is generated. Naming them as exclude
+      // pathspecs made `git add` fail, so snapshotTree returned null and the
+      // reviewer was handed the edit log instead of the real tree diff.
+      fs.mkdirSync(path.join(root, '.shmakk', 'plans'), { recursive: true });
+      fs.writeFileSync(path.join(root, '.shmakk', 'plans', 'p1.json'), '{}');
+      fs.writeFileSync(path.join(root, 'TASKS.md'), '# tasks\n- [x] regenerated\n');
+      const base = P.snapshotTree(root);
+      assert.ok(base, 'snapshotTree must not return null when .shmakk is gitignored');
+      fs.writeFileSync(path.join(root, 'keep.js'), 'module.exports = 2;\n');
+      const diff = P.diffTrees(root, base, P.snapshotTree(root));
+      assert.deepStrictEqual(diff.files.map((f) => f.path), ['keep.js']);
+      assert.strictEqual(diff.added, 1);
+      assert.strictEqual(diff.removed, 1);
+      assert.ok(!/\.shmakk|TASKS\.md/.test(diff.patch), 'agent state and the generated task list stay out of the diff');
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
+// ── plans: sqlite store schema + migration ─────────────────────────────────
+{
+  const os = require('os');
+  const path = require('path');
+  const DB = require('../src/plans-db');
+
+  test('plans-db: module loads and reports better-sqlite3 availability', () => {
+    assert.strictEqual(typeof DB.isAvailable, 'function');
+    assert.strictEqual(typeof DB.migrate, 'function');
+    assert.strictEqual(typeof DB.createPlan, 'function');
+    assert.strictEqual(typeof DB.getPlan, 'function');
+    assert.strictEqual(typeof DB.openDb, 'function');
+  });
+
+  if (DB.isAvailable()) {
+    const tmpDb = () => path.join(os.tmpdir(), `shmakk-plans-test-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
+
+    test('plans-db: the migration creates a plans table with a primary key and NOT NULL columns', () => {
+      const db = DB.openDb(tmpDb());
+      try {
+        const rows = db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name = 'plans'").all();
+        assert.strictEqual(rows.length, 1, 'plans table must exist after migration');
+        const cols = db.prepare('PRAGMA table_info(plans)').all();
+        const byName = Object.fromEntries(cols.map((c) => [c.name, c]));
+        assert.deepStrictEqual(Object.keys(byName), ['id', 'title', 'owner', 'status', 'createdAt', 'updatedAt']);
+        assert.strictEqual(byName.id.pk, 1, 'id is the primary key');
+        for (const f of DB.REQUIRED_FIELDS) {
+          assert.strictEqual(byName[f].notnull, 1, `${f} must be NOT NULL`);
+        }
+        // Idempotent: running the migration again is a no-op.
+        assert.deepStrictEqual(DB.migrate(db), { ok: true, version: DB.SCHEMA_VERSION });
+      } finally { DB.closeDb(db); }
+    });
+
+    test('plans-db: creating a row persists it with every required field non-null', () => {
+      const db = DB.openDb(tmpDb());
+      try {
+        const now = Date.now();
+        const row = DB.createPlan(db, { id: 'p00000001', title: 'Add create-new-plan flow', owner: 'marcusb', status: 'draft', createdAt: now, updatedAt: now });
+        assert.ok(row, 'createPlan must return the inserted row');
+        for (const f of DB.REQUIRED_FIELDS) {
+          assert.ok(row[f] !== null && row[f] !== undefined && row[f] !== '', `${f} stored non-null`);
+        }
+        assert.strictEqual(row.id, 'p00000001');
+        assert.strictEqual(row.title, 'Add create-new-plan flow');
+        assert.strictEqual(row.owner, 'marcusb');
+        assert.strictEqual(row.status, 'draft');
+        assert.strictEqual(row.createdAt, now);
+        assert.strictEqual(row.updatedAt, now);
+        // Read it back by primary key and list it.
+        assert.deepStrictEqual(DB.getPlan(db, 'p00000001'), row);
+        assert.deepStrictEqual(DB.listPlans(db).map((p) => p.id), ['p00000001']);
+        // Defaults fill the timestamps so the row always has non-null values.
+        const second = DB.createPlan(db, { id: 'p00000002', title: 'Second', owner: 'marcusb' });
+        assert.ok(Number.isFinite(second.createdAt));
+        assert.ok(Number.isFinite(second.updatedAt));
+        assert.strictEqual(second.status, 'draft');
+        assert.deepStrictEqual(DB.listPlans(db).map((p) => p.id).sort(), ['p00000001', 'p00000002']);
+      } finally { DB.closeDb(db); }
+    });
+
+    test('plans-db: creating a row with a missing required field fails and writes nothing', () => {
+      const db = DB.openDb(tmpDb());
+      try {
+        const cases = [
+          [{ title: 'no id', owner: 'x' }, /id is required/],
+          [{ id: 'p00000003', owner: 'x' }, /title is required/],
+          [{ id: 'p00000003', title: 'no owner' }, /owner is required/],
+          [{ id: 'p00000003', title: 'blank status', owner: 'x', status: '' }, /status is required/],
+        ];
+        for (const [row, want] of cases) {
+          assert.throws(() => DB.createPlan(db, row), (e) => e.status === 400 && want.test(e.message), `should reject ${JSON.stringify(row)}`);
+        }
+        assert.deepStrictEqual(DB.listPlans(db), [], 'no row may be written for invalid input');
+      } finally { DB.closeDb(db); }
+    });
+  }
+}
+
 // ── CLI plans: the terminal path uses the same review gate ──────────────────
 {
   const os = require('os');
@@ -3435,6 +3864,65 @@ test('endpoints: DeepSeek Flash is vision-capable; the Settings switch overrides
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 }
+
+test('webui session-sync: terminal sessions are mirrored, then adopted on send', () => withTempHome(async (dir) => {
+  const store = require('../src/webui/store');
+  const sessionSearch = require('../src/session-search');
+  sessionSearch.closeDB();
+  const sync = require('../src/webui/session-sync');
+  sync._resetForTests();
+  try {
+    if (!sessionSearch.isAvailable()) return; // no sqlite bindings here
+    const sid = sessionSearch.makeSessionId();
+    sessionSearch.recordSessionStart({ sessionId: sid, workspace: dir, pid: process.pid });
+    sessionSearch.recordTurn({ sessionId: sid, role: 'user', content: 'what does this repo do' });
+    sessionSearch.recordTurn({ sessionId: sid, role: 'assistant', content: 'it is a coding agent' });
+    assert.ok(store.safeId(sync.convIdFor(sid)));
+
+    // First pass writes the whole session out as a normal conversation.
+    const first = sync.sync({ force: true });
+    assert.strictEqual(first.changed.length, 1);
+    const id = sync.convIdFor(sid);
+    const conv = store.loadConversation(id);
+    assert.ok(conv, 'mirror file written');
+    assert.strictEqual(conv.origin, 'cli');
+    assert.strictEqual(conv.sessionId, sid);
+    assert.strictEqual(conv.items.length, 2);
+    assert.strictEqual(conv.title, 'what does this repo do');
+
+    // Unchanged session: nothing new on the next pass.
+    assert.strictEqual(sync.sync({ force: true }).changed.length, 0);
+
+    // New turns end up in the same transcript exactly once.
+    sessionSearch.recordTurn({ sessionId: sid, role: 'assistant', content: 'second answer' });
+    const second = sync.sync({ force: true });
+    assert.strictEqual(second.items.length, 1);
+    assert.strictEqual(store.loadConversation(id).items.length, 3);
+    assert.strictEqual(sync.sync({ force: true }).items.length, 0);
+
+    // Continued from the app: the conversation owns the session from now on.
+    const mine = store.loadConversation(id);
+    mine.origin = null;
+    store.saveConversation(mine);
+    sync.adopt(mine);
+    sessionSearch.recordTurn({ sessionId: sid, role: 'assistant', content: 'from the web' });
+    assert.strictEqual(sync.sync({ force: true }).items.length, 0);
+    assert.strictEqual(store.loadConversation(id).items.length, 3);
+
+    // A deleted mirror is not recreated by the next pass.
+    const gone = sessionSearch.makeSessionId();
+    sessionSearch.recordSessionStart({ sessionId: gone, workspace: dir, pid: process.pid });
+    sessionSearch.recordTurn({ sessionId: gone, role: 'user', content: 'deleted shortly' });
+    assert.strictEqual(sync.sync({ force: true }).changed.length, 1);
+    sync.hide(gone);
+    store.deleteConversation(sync.convIdFor(gone));
+    assert.strictEqual(sync.sync({ force: true }).changed.length, 0);
+    assert.strictEqual(store.loadConversation(sync.convIdFor(gone)), null);
+  } finally {
+    sessionSearch.closeDB();
+    sync._resetForTests();
+  }
+}));
 
 (async () => {
   let pass = 0, fail = 0;

@@ -7,7 +7,7 @@ import { relTime } from '@/lib/utils';
 import { useApp } from '@/store/app';
 import { Button } from '@/components/ui/button';
 import { Empty } from '@/components/ui/misc';
-import { PlanDetail, PlanList, usePlans } from '@/components/work/PlanBoard';
+import { NewPlan, PlanDetail, PlanList, usePlans } from '@/components/work/PlanBoard';
 import { Loading, Page, Section } from './Page';
 
 /**
@@ -33,6 +33,7 @@ export function PlanView() {
     <Page lead="Each task runs, gets its diff reviewed against its acceptance criteria, and is only done once it passes and you sign off. Failed reviews go back to the agent with the reviewer's notes.">
       <div className="grid items-start gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
         <Section title="Plans" className="min-w-0">
+          <NewPlan onCreated={openPlan} />
           {isLoading ? <Loading /> : <PlanList plans={plans} selected={selected} onSelect={(id) => openPlan(id)} />}
         </Section>
         <Section title="Plan" className="min-w-0">

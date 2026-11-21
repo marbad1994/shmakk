@@ -43,6 +43,7 @@
     "test": "node test/units.js",
     "check": "node -e \"require('./src/agent'); require('./src/orchestrator'); require('./src/webui/server'); console.log('check-ok')\"",
     "test-vision": "node test/vision-e2e.js",
+    "test-browser-live": "node test/browser-live-e2e.js",
     "mock-llm": "node test/mock-llm.js",
     "global:setup": "node src/global-setup.js",
     "global:link": "npm link && npm run global:setup",
@@ -64,6 +65,7 @@
   },
   "dependencies": {
     "@lydell/node-pty": "^1.2.0-beta.12",
+    "node-pty": "^1.1.0",
     "openai": "^4.104.0",
     "wavefile": "^11.0.0",
     "ws": "^8.23.0"

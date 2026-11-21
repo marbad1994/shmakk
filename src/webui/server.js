@@ -611,6 +611,13 @@ async function startWebServer(opts = {}) {
   }, 30000);
   heartbeat.unref();
 
+  // Terminal (CLI) sessions run in their own processes; fold the turns they
+  // record into the conversation list so they show up here too.
+  const sessionSyncTimer = setInterval(() => {
+    try { app.chat.syncExternalSessions(); } catch {}
+  }, 5000);
+  sessionSyncTimer.unref();
+
   // ── listen ──
   const wantPort = opts.port === 0 || opts.port ? Number(opts.port) : DEFAULT_PORT;
   const listen = (port) => new Promise((resolve, reject) => {
@@ -666,6 +673,7 @@ async function startWebServer(opts = {}) {
     if (closed) return;
     closed = true;
     clearInterval(heartbeat);
+    clearInterval(sessionSyncTimer);
     app.automations.stop();
     try { app.nodes.shutdown(); } catch {}
     try { app.capture.shutdown(); } catch {}

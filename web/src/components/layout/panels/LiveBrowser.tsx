@@ -21,6 +21,32 @@ type Msg = FrameMsg | StateMsg | UrlMsg | { t: 'pong' };
  * events back into that same page. The AI and the user therefore see and
  * control the same page instead of two divergent copies.
  */
+
+// CDP `Input.dispatchKeyEvent` modifier bitmask values (Alt=1, Ctrl=2,
+// Meta=4, Shift=8).
+const MOD = { ALT: 1, CTRL: 2, META: 4, SHIFT: 8 } as const;
+
+// Explicit allowlist of modifier shortcuts forwarded to the shared page.
+// Only these combos cross the bridge; any other modifier combo is left alone
+// so the surrounding browser/UI keeps its own accelerators (Ctrl+T, Ctrl+W,
+// Cmd+K, Cmd+L, ...). Add an entry here to opt a shortcut in.
+const KEY_FORWARD_MAP: Record<string, { key: string; code: string }> = {
+  [`${MOD.CTRL}:KeyR`]: { key: 'r', code: 'KeyR' },
+  [`${MOD.CTRL | MOD.SHIFT}:KeyR`]: { key: 'r', code: 'KeyR' },
+  [`${MOD.META}:KeyR`]: { key: 'r', code: 'KeyR' },
+  [`${MOD.META | MOD.SHIFT}:KeyR`]: { key: 'r', code: 'KeyR' },
+};
+
+function modifierMask(e: { altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): number {
+  return (e.altKey ? MOD.ALT : 0) | (e.ctrlKey ? MOD.CTRL : 0) | (e.metaKey ? MOD.META : 0) | (e.shiftKey ? MOD.SHIFT : 0);
+}
+
+function isEditableTarget(el: EventTarget | null): boolean {
+  if (!el || !('isContentEditable' in el)) return false;
+  const node = el as HTMLElement;
+  return node.isContentEditable || node.tagName === 'INPUT' || node.tagName === 'TEXTAREA' || node.tagName === 'SELECT';
+}
+
 export function LiveBrowser() {
   const [url, setUrl] = useState('');
   const [open, setOpen] = useState(false);
@@ -70,6 +96,13 @@ export function LiveBrowser() {
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
   }, []);
 
+  const forwardKey = useCallback(
+    (key: string, code: string, keyType: 'rawKeyDown' | 'keyDown' | 'keyUp', modifiers = 0, text = '') => {
+      send({ t: 'input', event: { type: 'key', key, code, keyType, modifiers, text: text || undefined } });
+    },
+    [send],
+  );
+
   // Map a pointer/keyboard event over the frame into the shared page's space.
   const normPoint = (e: { clientX: number; clientY: number }) => {
     const el = imgRef.current;
@@ -92,10 +125,28 @@ export function LiveBrowser() {
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLImageElement>) => {
-    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.nativeEvent.isComposing || isEditableTarget(e.target)) return;
+
+    const modifiers = modifierMask(e);
+    const mapped = KEY_FORWARD_MAP[`${modifiers}:${e.code}`];
+
+    // Explicitly mapped shortcut: forward a rawKeyDown + keyUp pair so the
+    // shared page's own accelerator (e.g. Ctrl+R reload) actually fires.
+    if (mapped) {
+      if (e.repeat) return;
+      e.preventDefault();
+      forwardKey(mapped.key, mapped.code, 'rawKeyDown', modifiers);
+      forwardKey(mapped.key, mapped.code, 'keyUp', modifiers);
+      return;
+    }
+
+    // Any other modifier combo is a browser/UI shortcut — keep it guarded.
+    if (modifiers !== 0) return;
+
+    // Minimal parity: forward unmodified printable keys only.
     if (!e.key || e.key.length > 1) return; // navigation keys need more mapping
-    send({ t: 'input', event: { type: 'key', key: e.key, code: `Key${e.key.toUpperCase()}`, text: e.key, down: true } });
-    send({ t: 'input', event: { type: 'key', key: e.key, code: `Key${e.key.toUpperCase()}`, text: e.key, down: false } });
+    forwardKey(e.key, `Key${e.key.toUpperCase()}`, 'keyDown', 0, e.key);
+    forwardKey(e.key, `Key${e.key.toUpperCase()}`, 'keyUp', 0, e.key);
   };
 
   return (
@@ -112,7 +163,10 @@ export function LiveBrowser() {
             size="icon-sm"
             aria-label="Reload shared page"
             disabled={!url}
-            onClick={() => send({ t: 'input', event: { type: 'key', key: 'r', code: 'KeyR', down: true, modifiers: 2 } })}
+            onClick={() => {
+              forwardKey('r', 'KeyR', 'rawKeyDown', MOD.CTRL);
+              forwardKey('r', 'KeyR', 'keyUp', MOD.CTRL);
+            }}
           >
             <RefreshCw />
           </Button>
