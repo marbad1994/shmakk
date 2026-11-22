@@ -568,6 +568,9 @@ async function startWebServer(opts = {}) {
           if (ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'navigated', id: msg.id, ...res })); } catch {} }
         });
       }
+      if (msg && msg.t === 'viewport' && msg.width && msg.height) {
+        live.setViewport(msg.width, msg.height).catch(() => {});
+      }
       if (msg && msg.t === 'inspect') {
         live.inspect(msg.x, msg.y).then((res) => {
           if (ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'inspected', id: msg.id, ...res })); } catch {} }

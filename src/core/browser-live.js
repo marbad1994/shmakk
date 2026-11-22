@@ -76,7 +76,7 @@ async function startScreencast() {
     cdpSession.on('Page.frameNavigated', (payload) => {
       if (payload.frame && payload.frame.url) emitUrl(payload.frame.url);
     });
-    await cdpSession.send('Page.startScreencast', { format: 'jpeg', quality: 70, everyNthFrame: 1 });
+    await cdpSession.send('Page.startScreencast', { format: 'jpeg', quality: 82, everyNthFrame: 1 });
     streaming = true;
   } catch {
     // Streaming is best-effort; the browser still works headless.
@@ -105,7 +105,11 @@ function subscribe(handlers) {
   startScreencast().then(() => emitState());
   return () => {
     subscribers.delete(sub);
-    if (subscribers.size === 0) stopScreencast();
+    if (subscribers.size === 0) {
+      stopScreencast();
+      // Hand the page back at a normal desktop size for the agent.
+      resetViewport().catch(() => {});
+    }
   };
 }
 
@@ -164,6 +168,42 @@ async function command(name) {
   lastUrl = page.url();
   emitUrl(lastUrl);
   return { ok: true, url: lastUrl };
+}
+
+// Match the shared page's viewport to the pane, so a narrow dock renders the
+// site at the dock's width instead of a shrunken 1280px canvas.
+//
+// Verified against CDP: `Page.screencastFrame` is always captured at the page's
+// CSS viewport size (device pixel ratio does not raise it, and maxWidth/maxHeight
+// can only downscale). So the only way to fill a pane edge to edge, with the
+// page actually responding to its container, is to move the viewport.
+const DEFAULT_VIEWPORT = { width: 1280, height: 720 };
+
+async function setViewport(width, height) {
+  const w = Math.max(320, Math.min(2560, Math.round(Number(width) || 0)));
+  const h = Math.max(240, Math.min(1600, Math.round(Number(height) || 0)));
+  const page = await currentPage();
+  if (typeof page === 'string') return { error: page };
+  try {
+    await page.setViewportSize({ width: w, height: h });
+    await startScreencast();
+  } catch (e) {
+    return { error: e.message };
+  }
+  return { ok: true, width: w, height: h };
+}
+
+// The pane is gone: put the page back to a normal desktop size, otherwise the
+// agent keeps driving a phone-width browser afterwards.
+async function resetViewport() {
+  const page = await currentPage();
+  if (typeof page === 'string') return { error: page };
+  try {
+    await page.setViewportSize(DEFAULT_VIEWPORT);
+  } catch (e) {
+    return { error: e.message };
+  }
+  return { ok: true };
 }
 
 // Read the element under a point (fractions of the screencast frame). Used by
@@ -275,4 +315,4 @@ function reset() {
   stopScreencast().then(() => emitState()).catch(() => emitState());
 }
 
-module.exports = { setPageProvider, subscribe, input, notify, show, navigate, command, inspect, reset };
+module.exports = { setPageProvider, subscribe, input, notify, show, navigate, command, setViewport, resetViewport, inspect, reset };
