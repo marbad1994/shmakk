@@ -199,4 +199,4 @@ export type ServerMsg =
 export type ViewId = 'chat' | 'project' | 'automations' | 'macros' | 'github' | 'skills' | 'memory' | 'plan' | 'changes' | 'recall' | 'team' | 'mcp' | 'activity' | 'artefacts' | 'settings';
 
 /** Panes of the right-hand inspector, in tab order. */
-export type DocPane = 'browser' | 'live' | 'changes' | 'plan';
+export type DocPane = 'browser' | 'changes' | 'plan';

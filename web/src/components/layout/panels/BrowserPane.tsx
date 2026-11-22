@@ -1,21 +1,37 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, ArrowRight, ArrowUpRight, Monitor, MousePointerClick, RefreshCw, RotateCw, Smartphone, Tablet, WifiOff } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ArrowUpRight, CircleDot, RotateCw, X } from 'lucide-react';
+import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { useApp } from '@/store/app';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/misc';
 import { Tip } from '@/components/ui/tooltip';
-import { BrowserEdit, type PickedElement } from './BrowserEdit';
+import { AnnotationLayer, AnnotationToolbar, buildAnnotationPrompt, type BrowserTool, type InspectedElement, type Note, type Stroke } from './BrowserAnnotate';
 
-type Device = 'desktop' | 'tablet' | 'phone';
-const WIDTH: Record<Device, number | null> = { desktop: null, tablet: 820, phone: 390 };
+interface FrameMsg { t: 'frame'; data: string; metadata: { deviceWidth: number; deviceHeight: number } | null; url: string }
+interface StateMsg { t: 'state'; open: boolean; url: string }
+interface UrlMsg { t: 'url'; url: string }
+interface InspectedMsg { t: 'inspected'; id?: string; ok?: boolean; detail?: InspectedElement | null; error?: string }
+interface NavigatedMsg { t: 'navigated'; id?: string; ok?: boolean; url?: string; error?: string }
+
+type Msg = FrameMsg | StateMsg | UrlMsg | InspectedMsg | NavigatedMsg | { t: 'pong' };
+
+interface Server { port: number; url: string; title: string | null }
+
+// CDP `Input.dispatchKeyEvent` modifier bitmask (Alt=1, Ctrl=2, Meta=4, Shift=8).
+const MOD = { ALT: 1, CTRL: 2, META: 4, SHIFT: 8 } as const;
+const KEY_FORWARD_MAP: Record<string, { key: string; code: string }> = {
+  [`${MOD.CTRL}:KeyR`]: { key: 'r', code: 'KeyR' },
+  [`${MOD.CTRL | MOD.SHIFT}:KeyR`]: { key: 'r', code: 'KeyR' },
+  [`${MOD.META}:KeyR`]: { key: 'r', code: 'KeyR' },
+  [`${MOD.META | MOD.SHIFT}:KeyR`]: { key: 'r', code: 'KeyR' },
+};
 const KEY = 'shmakk.browser.url';
 
-interface LinkRes { path: string; port: number; origin: string | null; target: string }
-interface Probe { ok: boolean; status?: number; title?: string | null; error?: string }
-interface Server { port: number; url: string; title: string | null }
+const uid = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
 const normalise = (raw: string) => {
   const v = raw.trim();
@@ -29,196 +45,305 @@ const normalise = (raw: string) => {
 const readSaved = () => { try { return localStorage.getItem(KEY) || ''; } catch { return ''; } };
 const save = (u: string) => { try { localStorage.setItem(KEY, u); } catch { /* private mode */ } };
 
+function modifierMask(e: { altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): number {
+  return (e.altKey ? MOD.ALT : 0) | (e.ctrlKey ? MOD.CTRL : 0) | (e.metaKey ? MOD.META : 0) | (e.shiftKey ? MOD.SHIFT : 0);
+}
+
+function isEditableTarget(el: EventTarget | null): boolean {
+  if (!el || !('isContentEditable' in el)) return false;
+  const node = el as HTMLElement;
+  return node.isContentEditable || node.tagName === 'INPUT' || node.tagName === 'TEXTAREA' || node.tagName === 'SELECT';
+}
+
 /**
- * Live preview of whatever the workspace serves. The page is fetched by the
- * shmakk server through its preview proxy, so "localhost" means the machine
- * shmakk runs on (also when it runs in Docker or on another host), framing
- * restrictions do not apply, and HMR keeps working. Edit mode lets you pick
- * elements and describe changes; those become planned tasks.
+ * The one browser pane: a live screencast of the page the agent's `browser`
+ * tool is driving, with the user's pointer and keyboard injected into that same
+ * page. Nobody sees a copy. A floating toolbar annotates what is on screen
+ * (pins, freehand, notes, element picks) and hands the result to the composer,
+ * so "change this" always points at the exact thing the agent is looking at.
  */
 export function BrowserPane() {
-  const [target, setTarget] = useState(() => readSaved());
-  const [text, setText] = useState(target);
-  const [src, setSrc] = useState<string | null>(null);
-  const [previewOrigin, setPreviewOrigin] = useState<string | null>(null);
-  const [nonce, setNonce] = useState(0);
-  const [device, setDevice] = useState<Device>('desktop');
-  const [state, setState] = useState<'idle' | 'loading' | 'ready' | 'down' | 'error'>('idle');
-  const [error, setError] = useState<string | null>(null);
-  const [editing, setEditing] = useState(false);
-  const [ready, setReady] = useState(false);
-  const [picked, setPicked] = useState<PickedElement | null>(null);
-  const frameRef = useRef<HTMLIFrameElement>(null);
+  const [url, setUrl] = useState('');
+  const [text, setText] = useState(() => readSaved());
+  const [open, setOpen] = useState(false);
+  const [frame, setFrame] = useState<string | null>(null);
+  const [connecting, setConnecting] = useState(true);
+  const [dims, setDims] = useState({ w: 1280, h: 720 });
+  const [tool, setTool] = useState<BrowserTool>('move');
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [strokes, setStrokes] = useState<Stroke[]>([]);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [navigating, setNavigating] = useState(false);
+  const imgRef = useRef<HTMLImageElement>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const retryRef = useRef(0);
+  const pendingInspect = useRef<{ id: string; x: number; y: number } | null>(null);
 
   const servers = useQuery({ queryKey: ['preview-servers'], queryFn: () => api.get<{ servers: Server[] }>('/api/preview/servers'), staleTime: 15000 });
 
-  // First visit: pick the first dev server found on the machine.
   useEffect(() => {
-    if (target || !servers.data?.servers.length) return;
-    const first = servers.data.servers[0].url;
-    setTarget(first);
-    setText(first);
-  }, [target, servers.data]);
-
-  // Probe from the server, then load through the proxy with a fresh link.
-  useEffect(() => {
-    if (!target) return;
-    let alive = true;
-    setState('loading');
-    setError(null);
-    setReady(false);
-    setPicked(null);
-    (async () => {
-      try {
-        const probe = await api.get<Probe>(`/api/preview/probe?url=${encodeURIComponent(target)}`);
-        if (!alive) return;
-        if (!probe.ok) { setState('down'); setError(probe.error || null); setSrc(null); return; }
-        const link = await api.post<LinkRes>('/api/preview/link', { url: target });
-        if (!alive) return;
-        const origin = link.origin || `${location.protocol}//${location.hostname}:${link.port}`;
-        setPreviewOrigin(origin);
-        setSrc(`${origin}${link.path}`);
-        setState('ready');
-      } catch (e) {
-        if (!alive) return;
-        setState('error');
-        setError(e instanceof Error ? e.message : String(e));
-      }
-    })();
-    return () => { alive = false; };
-  }, [target, nonce]);
-
-  const post = useCallback((msg: Record<string, unknown>) => {
-    frameRef.current?.contentWindow?.postMessage({ source: 'shmakk-preview', ...msg }, '*');
+    let closed = false;
+    const connect = () => {
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      const ws = new WebSocket(`${proto}://${location.host}/ws/browser`);
+      wsRef.current = ws;
+      setConnecting(true);
+      ws.onopen = () => { retryRef.current = 0; setConnecting(false); };
+      ws.onmessage = (ev) => {
+        let msg: Msg;
+        try { msg = JSON.parse(String(ev.data)); } catch { return; }
+        if (msg.t === 'frame') {
+          setFrame(msg.data);
+          if (msg.url) { setUrl(msg.url); setText((cur) => (cur && cur !== msg.url ? cur : msg.url)); }
+          if (msg.metadata) setDims({ w: msg.metadata.deviceWidth || 1280, h: msg.metadata.deviceHeight || 720 });
+        } else if (msg.t === 'state') {
+          setOpen(!!msg.open);
+          if (msg.url) { setUrl(msg.url); setText((cur) => cur || msg.url); }
+        } else if (msg.t === 'url') {
+          setUrl(msg.url);
+        } else if (msg.t === 'navigated') {
+          setNavigating(false);
+          if (!msg.ok && msg.error) toast.error(`Could not open the page: ${msg.error}`);
+        } else if (msg.t === 'inspected') {
+          const pending = pendingInspect.current;
+          if (!pending || (msg.id && msg.id !== pending.id)) return;
+          pendingInspect.current = null;
+          if (!msg.ok || !msg.detail) { toast.error(msg.error || 'Nothing to pick there'); return; }
+          const id = uid();
+          setNotes((n) => [...n, { id, kind: 'element', x: pending.x, y: pending.y, text: '', element: msg.detail as InspectedElement }]);
+          setSelected(id);
+        }
+      };
+      ws.onclose = () => {
+        if (closed) return;
+        setFrame(null);
+        const delay = Math.min(8000, 400 * 2 ** retryRef.current++);
+        setTimeout(connect, delay);
+      };
+      ws.onerror = () => ws.close();
+    };
+    connect();
+    return () => { closed = true; try { wsRef.current?.close(); } catch { /* already gone */ } };
   }, []);
 
-  // Messages from the inspector inside the previewed page.
-  const editingRef = useRef(editing);
-  editingRef.current = editing;
-  const targetRef = useRef(target);
-  targetRef.current = target;
-  useEffect(() => {
-    const onMessage = (e: MessageEvent) => {
-      if (!frameRef.current || e.source !== frameRef.current.contentWindow) return;
-      const d = e.data as { source?: string; type?: string; path?: string; id?: string; detail?: PickedElement['detail'] };
-      if (!d || d.source !== 'shmakk-preview') return;
-      if (d.type === 'ready') { setReady(true); if (editingRef.current) post({ type: 'enable' }); }
-      else if (d.type === 'nav' && typeof d.path === 'string') {
-        // Keep the address bar on the real address, not the proxy's.
-        try {
-          const real = new URL(d.path, targetRef.current).href;
-          setText(real);
-          save(real);
-        } catch { /* ignore */ }
-      } else if (d.type === 'selected' && d.id && d.detail) setPicked({ id: d.id, detail: d.detail });
-      else if (d.type === 'cleared') setPicked(null);
-      else if (d.type === 'tweaked' && d.id && d.detail) setPicked((p) => (p && p.id === d.id ? { ...p, detail: d.detail as PickedElement['detail'] } : p));
-    };
-    window.addEventListener('message', onMessage);
-    return () => window.removeEventListener('message', onMessage);
-  }, [post]);
+  const send = useCallback((msg: Record<string, unknown>) => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+  }, []);
 
-  useEffect(() => { post({ type: editing ? 'enable' : 'disable' }); if (!editing) setPicked(null); }, [editing, post]);
+  const forwardKey = useCallback((key: string, code: string, keyType: 'rawKeyDown' | 'keyDown' | 'keyUp', modifiers = 0, textValue = '') => {
+    send({ t: 'input', event: { type: 'key', key, code, keyType, modifiers, text: textValue || undefined } });
+  }, [send]);
+
+  // Pointer/keyboard over the frame are mapped into the shared page's space.
+  const normPoint = (e: { clientX: number; clientY: number }) => {
+    const el = imgRef.current;
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) return null;
+    return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
+  };
+
+  const onPointerDown = (e: React.PointerEvent<HTMLImageElement>) => {
+    if (tool !== 'move') return;
+    const p = normPoint(e);
+    if (!p) return;
+    send({ t: 'input', event: { type: 'mouse', x: p.x, y: p.y, button: e.button === 2 ? 'right' : e.button === 1 ? 'middle' : 'left' } });
+  };
+
+  const onWheel = (e: React.WheelEvent<HTMLImageElement>) => {
+    if (tool !== 'move') return;
+    const p = normPoint(e);
+    if (!p) return;
+    send({ t: 'input', event: { type: 'wheel', x: p.x, y: p.y, deltaX: e.deltaX, deltaY: e.deltaY } });
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLImageElement>) => {
+    if (tool !== 'move' || e.nativeEvent.isComposing || isEditableTarget(e.target)) return;
+    const modifiers = modifierMask(e);
+    const mapped = KEY_FORWARD_MAP[`${modifiers}:${e.code}`];
+    if (mapped) {
+      if (e.repeat) return;
+      e.preventDefault();
+      forwardKey(mapped.key, mapped.code, 'rawKeyDown', modifiers);
+      forwardKey(mapped.key, mapped.code, 'keyUp', modifiers);
+      return;
+    }
+    if (modifiers !== 0) return;
+    if (!e.key || e.key.length > 1) return;
+    forwardKey(e.key, `Key${e.key.toUpperCase()}`, 'keyDown', 0, e.key);
+    forwardKey(e.key, `Key${e.key.toUpperCase()}`, 'keyUp', 0, e.key);
+  };
 
   const go = (raw: string) => {
     const next = normalise(raw);
     if (!next) return;
     setText(next);
     save(next);
-    if (next === target) setNonce((n) => n + 1);
-    else setTarget(next);
+    setNavigating(true);
+    send({ t: 'navigate', url: next, id: uid() });
+    setTimeout(() => setNavigating(false), 8000);
   };
-  const reload = () => { if (ready) post({ type: 'reload' }); else setNonce((n) => n + 1); };
-  const size = useMemo(() => WIDTH[device], [device]);
+
+  const command = (name: 'back' | 'forward' | 'reload') => send({ t: 'command', name, id: uid() });
+
+  // A mark lands where the user clicked: comments and notes immediately, an
+  // element pick after the server reads the DOM under the point.
+  const place = (x: number, y: number) => {
+    if (tool === 'edit') {
+      pendingInspect.current = { id: uid(), x, y };
+      send({ t: 'inspect', x, y, id: pendingInspect.current.id });
+      toast('Reading the element under the cursor…');
+      return;
+    }
+    const id = uid();
+    setNotes((n) => [...n, { id, kind: tool === 'text' ? 'text' : 'comment', x, y, text: '' }]);
+    setSelected(id);
+  };
+
+  const selectedNote = notes.find((n) => n.id === selected) ?? null;
+
+  const updateNote = (id: string, patch: Partial<Note>) => setNotes((list) => list.map((n) => (n.id === id ? { ...n, ...patch } : n)));
+
+  const removeNote = (id: string) => {
+    setNotes((list) => list.filter((n) => n.id !== id));
+    setSelected((cur) => (cur === id ? null : cur));
+    setTool('move');
+  };
+
+  const closeEditor = () => {
+    // A pin or note with no words is not a mark; drop it.
+    if (selectedNote && !selectedNote.text.trim() && selectedNote.kind !== 'element') removeNote(selectedNote.id);
+    setSelected(null);
+  };
+
+  const clearMarks = () => { setNotes([]); setStrokes([]); setSelected(null); };
+
+  const sendMarks = () => {
+    const filled = notes.filter((n) => n.text.trim() || n.kind === 'element');
+    if (!filled.length && !strokes.length) return;
+    useApp.getState().setDraft(buildAnnotationPrompt(url, filled, strokes), 'ask');
+    toast('Marks sent to the composer — add anything you want to say and send.');
+    setSelected(null);
+    setTool('move');
+  };
+
+  const markCount = notes.filter((n) => n.text.trim() || n.kind === 'element').length + strokes.length;
   const serverList = servers.data?.servers ?? [];
+  const aspect = `${dims.w} / ${dims.h}`;
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-sunken">
       <div className="flex shrink-0 items-center gap-1 border-b border-line bg-panel px-2 py-1.5">
-        <Tip label="Back"><Button variant="ghost" size="icon-sm" aria-label="Back" disabled={!ready} onClick={() => post({ type: 'back' })}><ArrowLeft /></Button></Tip>
-        <Tip label="Forward"><Button variant="ghost" size="icon-sm" aria-label="Forward" disabled={!ready} onClick={() => post({ type: 'forward' })}><ArrowRight /></Button></Tip>
-        <Tip label="Reload"><Button variant="ghost" size="icon-sm" aria-label="Reload preview" onClick={reload}><RotateCw /></Button></Tip>
+        <Tip label="Back"><Button variant="ghost" size="icon-sm" aria-label="Back" disabled={!open} onClick={() => command('back')}><ArrowLeft /></Button></Tip>
+        <Tip label="Forward"><Button variant="ghost" size="icon-sm" aria-label="Forward" disabled={!open} onClick={() => command('forward')}><ArrowRight /></Button></Tip>
+        <Tip label="Reload"><Button variant="ghost" size="icon-sm" aria-label="Reload page" disabled={!open} onClick={() => command('reload')}><RotateCw /></Button></Tip>
         <form className="flex min-w-0 flex-1 items-center gap-1" onSubmit={(e) => { e.preventDefault(); go(text); }}>
           <Input value={text} onChange={(e) => setText(e.target.value)} onFocus={(e) => e.target.select()} aria-label="Address" placeholder="localhost:5173 or a full URL" spellCheck={false} className="h-8 min-w-0 flex-1 text-[12.5px]" />
         </form>
-        <Tip label="Open in a real tab"><Button variant="ghost" size="icon-sm" aria-label="Open in a new tab" disabled={!src} onClick={() => src && window.open(src, '_blank', 'noopener')}><ArrowUpRight /></Button></Tip>
+        {navigating ? <Spinner className="size-3.5 shrink-0" /> : null}
+        <Tip label="Open in a real tab"><Button variant="ghost" size="icon-sm" aria-label="Open in a new tab" disabled={!url} onClick={() => url && window.open(url, '_blank', 'noopener')}><ArrowUpRight /></Button></Tip>
       </div>
 
-      <div className="flex shrink-0 items-center gap-1.5 border-b border-line px-2 py-1.5">
-        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto no-scrollbar">
-          {serverList.map((s) => (
-            <Tip key={s.port} label={s.title || s.url}>
-              <button type="button" onClick={() => go(s.url)}
-                className={cn('shrink-0 rounded-md px-1.5 py-0.5 text-[11.5px] text-faint hover:bg-hover hover:text-fg', target.startsWith(s.url) && 'bg-raised text-fg')}>
-                :{s.port}
-              </button>
-            </Tip>
-          ))}
-          {servers.isFetching ? <Spinner className="size-3" /> : (
-            <Tip label={serverList.length ? 'Look for servers again' : 'No dev servers found, look again'}>
-              <button type="button" aria-label="Find dev servers" onClick={() => void servers.refetch()} className="grid size-6 shrink-0 place-items-center rounded-md text-faint hover:bg-hover hover:text-fg"><RefreshCw className="size-3" /></button>
-            </Tip>
-          )}
+      {serverList.length || !open ? (
+        <div className="flex shrink-0 items-center gap-1.5 border-b border-line px-2 py-1.5">
+          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto no-scrollbar">
+            {serverList.map((s) => (
+              <Tip key={s.port} label={s.title || s.url}>
+                <button type="button" onClick={() => go(s.url)}
+                  className={cn('shrink-0 rounded-md px-1.5 py-0.5 text-[11.5px] text-faint hover:bg-hover hover:text-fg', url.startsWith(s.url) && 'bg-raised text-fg')}>
+                  :{s.port}
+                </button>
+              </Tip>
+            ))}
+            {servers.isFetching ? <Spinner className="size-3" /> : null}
+          </div>
+          <span className={cn('inline-flex shrink-0 items-center gap-1 text-[11px]', open ? 'text-accent' : 'text-faint')}>
+            <CircleDot className="size-3" />{open ? 'Agent live' : 'Idle'}
+          </span>
         </div>
-        <div className="flex shrink-0 rounded-lg border border-line p-0.5" role="radiogroup" aria-label="Preview size">
-          {([['desktop', <Monitor key="d" />], ['tablet', <Tablet key="t" />], ['phone', <Smartphone key="p" />]] as [Device, React.ReactNode][]).map(([d, icon]) => (
-            <Tip key={d} label={d}><button type="button" role="radio" aria-checked={device === d} aria-label={d} onClick={() => setDevice(d)} className={cn('grid size-6 place-items-center rounded-md text-faint hover:text-fg [&_svg]:size-3.5', device === d && 'bg-raised text-fg')}>{icon}</button></Tip>
-          ))}
-        </div>
-        <Tip label={editing ? 'Stop picking elements' : 'Edit in browser: pick an element and describe the change'}>
-          <Button variant={editing ? 'primary' : 'ghost'} size="sm" aria-pressed={editing} disabled={state !== 'ready'} onClick={() => setEditing((v) => !v)}><MousePointerClick />Edit</Button>
-        </Tip>
-      </div>
+      ) : null}
 
       <div className="relative min-h-0 flex-1 overflow-auto">
-        {src && state === 'ready' ? (
-          <div className={cn('mx-auto h-full bg-white transition-[width] duration-200', size ? 'py-3' : null)} style={size ? { width: size, maxWidth: '100%' } : undefined}>
-            <iframe
-              ref={frameRef}
-              key={src}
-              src={src}
-              title="Browser preview"
-              className={cn('size-full border-0 bg-white', editing && 'outline outline-2 -outline-offset-2 outline-violet/60')}
-              allow="clipboard-read; clipboard-write; fullscreen"
-            />
-          </div>
-        ) : null}
-
-        {state === 'loading' ? <div className="absolute inset-0 grid place-items-center"><Spinner className="size-5" /></div> : null}
-
-        {!target && state === 'idle' ? (
+        {!connecting && !open ? (
           <div className="grid h-full place-content-center gap-2 p-6 text-center text-[13px] text-dim">
-            {servers.isLoading ? <Spinner className="mx-auto size-5" /> : <p className="m-0">No dev server is running on the shmakk machine. Start one (for example <code>npm run dev</code>) or type an address above.</p>}
+            <p className="m-0">The agent has no page open. Ask it to open one, start a dev server, or type an address above.</p>
+            {serverList.length ? (
+              <div className="flex flex-wrap justify-center gap-2">
+                {serverList.slice(0, 4).map((s) => (
+                  <Button key={s.port} size="sm" variant="ghost" onClick={() => go(s.url)}>{s.title ? `${s.title} (:${s.port})` : `:${s.port}`}</Button>
+                ))}
+              </div>
+            ) : null}
           </div>
-        ) : null}
+        ) : frame ? (
+          <div className="p-3">
+            <div className="relative mx-auto w-full overflow-hidden rounded-lg border border-line bg-white shadow-pop" style={{ aspectRatio: aspect }}>
+              <img
+                ref={imgRef}
+                src={`data:image/jpeg;base64,${frame}`}
+                alt="The page the agent is on"
+                className={cn('absolute inset-0 size-full select-none', tool === 'move' ? 'cursor-pointer' : 'cursor-default')}
+                tabIndex={0}
+                onPointerDown={onPointerDown}
+                onWheel={onWheel}
+                onKeyDown={onKeyDown}
+              />
+              <AnnotationLayer
+                dims={dims}
+                tool={tool}
+                notes={notes}
+                strokes={strokes}
+                selected={selected}
+                onPlace={place}
+                onDraw={(s) => setStrokes((list) => [...list, s])}
+                onSelect={setSelected}
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="grid h-full place-items-center"><Spinner className="size-5" /></div>
+        )}
 
-        {state === 'down' || state === 'error' ? (
-          <div className="absolute inset-x-3 top-3 rounded-xl border border-warn/40 bg-panel/95 p-3 text-[13px] shadow-pop backdrop-blur">
-            <div className="flex items-center gap-2 font-medium text-warn"><WifiOff className="size-4" />{state === 'down' ? `Nothing answered at ${target}` : 'The preview could not be opened'}</div>
-            <p className="m-0 mt-1 text-dim">
-              {state === 'down'
-                ? 'The address is fetched by the shmakk server, so it has to be reachable from the machine shmakk runs on. Start the dev server there, or pick one that is running:'
-                : error}
-            </p>
-            {state === 'down' && error ? <p className="m-0 mt-1 text-[12px] text-faint">{error}</p> : null}
-            <div className="mt-2 flex flex-wrap gap-2">
-              <Button size="sm" onClick={() => setNonce((n) => n + 1)}><RotateCw />Try again</Button>
-              {serverList.filter((s) => !target.startsWith(s.url)).slice(0, 4).map((s) => <Button key={s.port} size="sm" variant="ghost" onClick={() => go(s.url)}>{s.title ? `${s.title} (:${s.port})` : `:${s.port}`}</Button>)}
+        {/* Note editor: sits above the toolbar so the page stays visible. */}
+        {selectedNote ? (
+          <div className="pointer-events-auto absolute inset-x-3 bottom-16 z-20 rounded-xl border border-line bg-panel/95 p-2.5 shadow-pop backdrop-blur">
+            <div className="mb-1.5 flex items-center gap-1.5 text-[11.5px] text-dim">
+              <span className="min-w-0 flex-1 truncate">
+                {selectedNote.kind === 'element' && selectedNote.element
+                  ? <>Change &lt;{selectedNote.element.tag}&gt; <span className="text-faint">{selectedNote.element.selector}</span></>
+                  : selectedNote.kind === 'text' ? 'Note on the page' : 'Comment on the page'}
+              </span>
+              <button type="button" aria-label="Remove mark" className="text-faint hover:text-danger" onClick={() => removeNote(selectedNote.id)}><X className="size-3.5" /></button>
+            </div>
+            <textarea
+              autoFocus
+              value={selectedNote.text}
+              onChange={(e) => updateNote(selectedNote.id, { text: e.target.value })}
+              onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); closeEditor(); } }}
+              placeholder={selectedNote.kind === 'element' ? 'What should change about this element?' : 'What do you want here?'}
+              aria-label="Mark note"
+              className="w-full resize-y rounded-lg border border-line-strong bg-sunken px-2.5 py-1.5 text-[13px] text-fg outline-none placeholder:text-faint focus:border-accent/45 focus:ring-[3px] focus:ring-accent/15"
+              rows={2}
+            />
+            <div className="mt-1.5 flex items-center justify-end gap-1.5">
+              <Button size="sm" variant="ghost" onClick={closeEditor}>Done</Button>
             </div>
           </div>
         ) : null}
-      </div>
 
-      {editing || picked ? (
-        <BrowserEdit
-          picked={picked}
-          pageUrl={text}
-          previewOrigin={previewOrigin}
-          onTweak={(id, tweak) => post({ type: 'tweak', id, ...tweak })}
-          onClear={() => { setPicked(null); post({ type: 'clear' }); }}
-          onReload={() => post({ type: 'reload' })}
-        />
-      ) : null}
+        {/* Floating toolbar, like a drawing app over the live page. */}
+        <div className="pointer-events-none absolute inset-x-0 bottom-3 z-20 flex justify-center px-3">
+          <AnnotationToolbar
+            tool={tool}
+            onTool={(t) => { setSelected(null); setTool(t); }}
+            count={markCount}
+            canSend={!!frame && markCount > 0}
+            onSend={sendMarks}
+            onClear={clearMarks}
+          />
+        </div>
+      </div>
     </div>
   );
 }

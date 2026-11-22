@@ -17,8 +17,14 @@ function readHash(): { view: ViewId; conv: string | null; project: string | null
 
 const MODE_IDS: Mode[] = ['chat', 'code', 'design', 'cowork'];
 const savedMode = (): Mode => { const m = localStorage.getItem('shmakk.mode') as Mode | null; return m && MODE_IDS.includes(m) ? m : 'code'; };
-const PANES: DocPane[] = ['browser', 'live', 'changes', 'plan'];
-const savedPane = (): DocPane => { const p = localStorage.getItem('shmakk.rightPane') as DocPane | null; return p && PANES.includes(p) ? p : 'browser'; };
+const PANES: DocPane[] = ['browser', 'changes', 'plan'];
+// `live` was the old "shared browser" pane; the browser pane now streams that
+// page itself, so a saved tab from before maps onto it.
+const savedPane = (): DocPane => {
+  const raw = localStorage.getItem('shmakk.rightPane');
+  if (raw === 'live') return 'browser';
+  return raw && PANES.includes(raw as DocPane) ? (raw as DocPane) : 'browser';
+};
 
 // Inspector width: a comfortable default, clamped so the chat never collapses.
 export const RIGHT_MIN = 300;
@@ -241,7 +247,7 @@ export const useApp = create<AppState>((set, get) => {
       case 'show2plan': void queryClient.invalidateQueries({ queryKey: ['show2plan', msg.id] }); break;
       case 'browser.open': {
         const { setRightPane } = get();
-        setRightPane('live');
+        setRightPane('browser');
         break;
       }
       case 'toast': (msg.level === 'error' ? toast.error : toast)(msg.text); break;

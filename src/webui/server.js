@@ -538,6 +538,15 @@ async function startWebServer(opts = {}) {
     ws.isAlive = true;
     ws.on('pong', () => { ws.isAlive = true; });
     const live = require('../core/browser-live');
+    // The pane may be the first thing to ask for a page (type an address, hit
+    // back, pick an element), so register the page provider up front instead of
+    // waiting for the `browser` tool to wire it.
+    try {
+      const browserTool = require('../browser');
+      if (typeof browserTool.ensurePage === 'function') {
+        live.setPageProvider(() => browserTool.ensurePage());
+      }
+    } catch { /* browser.js is optional (playwright) */ }
     const unsub = live.subscribe({
       onMessage: (s) => { if (ws.readyState === 1) { try { ws.send(s); } catch {} } },
     });
@@ -549,6 +558,21 @@ async function startWebServer(opts = {}) {
         return;
       }
       if (msg && msg.t === 'input') live.input(msg.event || {});
+      if (msg && msg.t === 'navigate' && msg.url) {
+        live.navigate(String(msg.url)).then((res) => {
+          if (ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'navigated', id: msg.id, ...res })); } catch {} }
+        });
+      }
+      if (msg && msg.t === 'command' && msg.name) {
+        live.command(String(msg.name)).then((res) => {
+          if (ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'navigated', id: msg.id, ...res })); } catch {} }
+        });
+      }
+      if (msg && msg.t === 'inspect') {
+        live.inspect(msg.x, msg.y).then((res) => {
+          if (ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'inspected', id: msg.id, ...res })); } catch {} }
+        });
+      }
     });
     ws.on('close', () => { try { unsub(); } catch {} });
     ws.on('error', () => {});

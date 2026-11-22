@@ -324,4 +324,6 @@ function classifyBrowserCommand(args) {
   return 'uncertain';
 }
 
-module.exports = { dispatchBrowser, closeBrowser, isAvailable, classifyBrowserCommand };
+// `ensurePage` / `liveStream` are exported for the web UI's live browser pane:
+// it can ask for the shared page without going through the `browser` tool.
+module.exports = { dispatchBrowser, closeBrowser, isAvailable, classifyBrowserCommand, ensurePage, liveStream };

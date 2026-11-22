@@ -57,8 +57,11 @@ function makeThrottle(fps = 10) {
 
 async function startScreencast() {
   if (streaming) return;
-  const page = getPage ? await getPage() : null;
-  if (!page) return;
+  let page = null;
+  try {
+    page = await currentPage();
+  } catch { return; }
+  if (!page || typeof page === 'string') return;
   hasPage = true;
   try {
     cdpSession = await page.context().newCDPSession(page);
@@ -113,9 +116,8 @@ function notify(url) {
 
 // `show` command: navigate and make sure the stream + pane are live.
 async function show(url) {
-  if (!getPage) return { error: 'browser unavailable' };
-  const page = await getPage();
-  if (!page) return { error: 'browser unavailable' };
+  const page = await currentPage();
+  if (typeof page === 'string') return { error: page };
   hasPage = true;
   try {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
@@ -127,6 +129,92 @@ async function show(url) {
   await startScreencast();
   emitState();
   return { ok: true, url: page.url(), title: await page.title() };
+}
+
+// Resolve the shared page, turning "no provider / launch failed" into a
+// human-readable reason the pane can show instead of hanging.
+async function currentPage() {
+  if (!getPage) return 'the browser is not wired up yet';
+  try {
+    const page = await getPage();
+    return page || 'the browser could not be started';
+  } catch (e) {
+    return String((e && e.message) || e).split('\n')[0];
+  }
+}
+
+// Navigate the shared page (address bar / server chips in the browser pane).
+async function navigate(url) {
+  if (!/^https?:\/\//i.test(String(url || ''))) return { error: 'only http(s) URLs' };
+  return show(url);
+}
+
+// History and reload for the shared page.
+async function command(name) {
+  const page = await currentPage();
+  if (typeof page === 'string') return { error: page };
+  try {
+    if (name === 'reload') await page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 });
+    else if (name === 'back') await page.goBack({ waitUntil: 'domcontentloaded', timeout: 20000 });
+    else if (name === 'forward') await page.goForward({ waitUntil: 'domcontentloaded', timeout: 20000 });
+    else return { error: `unknown command ${name}` };
+  } catch (e) {
+    return { error: e.message };
+  }
+  lastUrl = page.url();
+  emitUrl(lastUrl);
+  return { ok: true, url: lastUrl };
+}
+
+// Read the element under a point (fractions of the screencast frame). Used by
+// the pane's edit tool: click an element, describe the change.
+async function inspect(x, y) {
+  const page = await currentPage();
+  if (typeof page === 'string') return { error: page };
+  const meta = lastMeta || { deviceWidth: 1280, deviceHeight: 720 };
+  const px = Math.round((Number(x) || 0) * (meta.deviceWidth || 1));
+  const py = Math.round((Number(y) || 0) * (meta.deviceHeight || 1));
+  try {
+    const detail = await page.evaluate(({ px, py }) => {
+      const el = document.elementFromPoint(px, py);
+      if (!el) return null;
+      const path = (node) => {
+        const parts = [];
+        let cur = node;
+        while (cur && cur.nodeType === 1 && cur !== document.body) {
+          let part = cur.tagName.toLowerCase();
+          if (cur.id) { parts.unshift(`${part}#${cur.id}`); break; }
+          const cls = (cur.getAttribute('class') || '').trim().split(/\s+/).filter(Boolean).slice(0, 2);
+          if (cls.length) part += `.${cls.join('.')}`;
+          const siblings = cur.parentElement ? Array.from(cur.parentElement.children).filter((n) => n.tagName === cur.tagName) : [];
+          if (siblings.length > 1) part += `:nth-of-type(${siblings.indexOf(cur) + 1})`;
+          parts.unshift(part);
+          cur = cur.parentElement;
+        }
+        return parts.join(' > ');
+      };
+      const rect = el.getBoundingClientRect();
+      const text = (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+      return {
+        tag: el.tagName.toLowerCase(),
+        selector: path(el),
+        text,
+        role: el.getAttribute('role') || null,
+        name: el.getAttribute('aria-label') || el.getAttribute('name') || null,
+        href: el.getAttribute('href') || null,
+        rect: {
+          x: rect.left / (window.innerWidth || 1),
+          y: rect.top / (window.innerHeight || 1),
+          w: rect.width / (window.innerWidth || 1),
+          h: rect.height / (window.innerHeight || 1),
+        },
+        page: { href: location.href, title: document.title },
+      };
+    }, { px, py });
+    return { ok: true, detail };
+  } catch (e) {
+    return { error: e.message };
+  }
 }
 
 // Inject a user event (from the pane) into the shared page via CDP.
@@ -187,4 +275,4 @@ function reset() {
   stopScreencast().then(() => emitState()).catch(() => emitState());
 }
 
-module.exports = { setPageProvider, subscribe, input, notify, show, reset };
+module.exports = { setPageProvider, subscribe, input, notify, show, navigate, command, inspect, reset };

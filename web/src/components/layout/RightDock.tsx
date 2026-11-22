@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
-import { FileDiff, Globe, ListChecks, Monitor, X } from 'lucide-react';
+import { FileDiff, Globe, ListChecks, X } from 'lucide-react';
 import type { DocPane } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { RIGHT_MIN, rightMax, useApp } from '@/store/app';
@@ -9,13 +9,11 @@ import { Tip } from '@/components/ui/tooltip';
 
 // Each pane carries a fair amount of code; only the visible one is bundled in.
 const BrowserPane = lazy(() => import('./panels/BrowserPane').then((m) => ({ default: m.BrowserPane })));
-const LiveBrowser = lazy(() => import('./panels/LiveBrowser').then((m) => ({ default: m.LiveBrowser })));
 const ChangesPane = lazy(() => import('./panels/ChangesPane').then((m) => ({ default: m.ChangesPane })));
 const PlanPane = lazy(() => import('./panels/PlanPane').then((m) => ({ default: m.PlanPane })));
 
 export const PANES: { id: DocPane; label: string; icon: React.ReactNode }[] = [
-  { id: 'browser', label: 'Preview', icon: <Globe /> },
-  { id: 'live', label: 'Shared', icon: <Monitor /> },
+  { id: 'browser', label: 'Browser', icon: <Globe /> },
   { id: 'changes', label: 'Changes', icon: <FileDiff /> },
   { id: 'plan', label: 'Plan', icon: <ListChecks /> },
 ];
@@ -148,7 +146,7 @@ export function RightDock() {
         </div>
         <div className="min-h-0 flex-1">
           <Suspense fallback={<div className="grid h-full place-items-center"><Spinner className="size-5" /></div>}>
-            {pane === 'browser' ? <BrowserPane /> : pane === 'live' ? <LiveBrowser /> : pane === 'changes' ? <ChangesPane /> : <PlanPane />}
+            {pane === 'browser' ? <BrowserPane /> : pane === 'changes' ? <ChangesPane /> : <PlanPane />}
           </Suspense>
         </div>
       </aside>
