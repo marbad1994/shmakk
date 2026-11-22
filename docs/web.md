@@ -115,6 +115,9 @@ put it behind a VPN/tunnel with TLS. Microphone access needs HTTPS or localhost.
 - Cross-origin requests are refused; strict CSP; no third-party assets or network calls
 - Tool safety is identical to the CLI: workspace confinement, secret-path checks, the same
   danger patterns, the same audit log (`~/.local/state/shmakk/audit.log`)
+- The built-in `browser` tool drives the pane the user is watching, so every command
+  (`navigate`, `click`, `type`, `evaluate`, …) is auto-approved. Export
+  `SHMAKK_BROWSER_STRICT=1` to be asked before anything that changes the page
 
 ## Development
 

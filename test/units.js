@@ -504,16 +504,29 @@ const test = (name, fn) => tests.push({ name, fn });
     assert.strictEqual(classifyBrowserCommand({ command: 'show' }), 'safe');
   });
 
-  test('browser: classifies interactive commands as uncertain', () => {
-    assert.strictEqual(classifyBrowserCommand({ command: 'navigate' }), 'uncertain');
-    assert.strictEqual(classifyBrowserCommand({ command: 'click' }), 'uncertain');
-    assert.strictEqual(classifyBrowserCommand({ command: 'type' }), 'uncertain');
-    assert.strictEqual(classifyBrowserCommand({ command: 'evaluate' }), 'uncertain');
+  test('browser: interactive commands are auto-approved by default', () => {
+    assert.strictEqual(classifyBrowserCommand({ command: 'navigate' }), 'safe');
+    assert.strictEqual(classifyBrowserCommand({ command: 'click' }), 'safe');
+    assert.strictEqual(classifyBrowserCommand({ command: 'type' }), 'safe');
+    assert.strictEqual(classifyBrowserCommand({ command: 'evaluate' }), 'safe');
+  });
+
+  test('browser: SHMAKK_BROWSER_STRICT=1 asks before interactive commands', () => {
+    const prev = process.env.SHMAKK_BROWSER_STRICT;
+    process.env.SHMAKK_BROWSER_STRICT = '1';
+    try {
+      assert.strictEqual(classifyBrowserCommand({ command: 'read_page' }), 'safe');
+      assert.strictEqual(classifyBrowserCommand({ command: 'navigate' }), 'uncertain');
+      assert.strictEqual(classifyBrowserCommand({ command: 'click' }), 'uncertain');
+    } finally {
+      if (prev === undefined) delete process.env.SHMAKK_BROWSER_STRICT;
+      else process.env.SHMAKK_BROWSER_STRICT = prev;
+    }
   });
 
   test('browser: classifyTool routes browser to per-command classification', () => {
     assert.strictEqual(classifyTool('browser', { command: 'read_page' }), 'safe');
-    assert.strictEqual(classifyTool('browser', { command: 'click' }), 'uncertain');
+    assert.strictEqual(classifyTool('browser', { command: 'click' }), 'safe');
   });
 
   test('browser: describeTool returns readable descriptions', () => {

@@ -317,11 +317,15 @@ async function closeBrowser() {
   }
 }
 
-// Safety classification per browser command
+// Safety classification per browser command.
+// Interactive commands drive the page the user is watching in the live pane, so
+// they run without a prompt by default. SHMAKK_BROWSER_STRICT=1 restores the
+// old behaviour: only the read-only commands stay 'safe'.
 function classifyBrowserCommand(args) {
   const cmd = String(args.command || '').toLowerCase();
   if (cmd === 'read_page' || cmd === 'screenshot' || cmd === 'wait' || cmd === 'close' || cmd === 'show') return 'safe';
-  return 'uncertain';
+  if (process.env.SHMAKK_BROWSER_STRICT === '1') return 'uncertain';
+  return 'safe';
 }
 
 // `ensurePage` / `liveStream` are exported for the web UI's live browser pane:
