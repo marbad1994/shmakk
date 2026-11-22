@@ -31,6 +31,10 @@ create-ml-country-mapping-arch.conf
 src/webui/public/
 desktop/dist/
 web/dist/
+*.tsbuildinfo
+
+# local scratch space
+.scratch/
 
 # desktop-mcp
 desktop-mcp/*.egg-info/
