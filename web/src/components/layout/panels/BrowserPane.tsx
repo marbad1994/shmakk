@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, ArrowRight, ArrowUpRight, CircleDot, RotateCw, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ArrowUpRight, RotateCw, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -75,11 +75,27 @@ export function BrowserPane() {
   const [selected, setSelected] = useState<string | null>(null);
   const [navigating, setNavigating] = useState(false);
   const imgRef = useRef<HTMLImageElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const retryRef = useRef(0);
   const pendingInspect = useRef<{ id: string; x: number; y: number } | null>(null);
 
   const servers = useQuery({ queryKey: ['preview-servers'], queryFn: () => api.get<{ servers: Server[] }>('/api/preview/servers'), staleTime: 15000 });
+
+  // The page is laid out at the pane's size, so the site's own breakpoints
+  // apply to the dock instead of a desktop canvas being scaled down. CDP
+  // captures frames at the page's viewport size, so this is also what makes
+  // the image fill the pane exactly, with no letterbox.
+  const [paneSize, setPaneSize] = useState({ w: 0, h: 0 });
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const measure = () => setPaneSize({ w: el.clientWidth, h: el.clientHeight });
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   useEffect(() => {
     let closed = false;
@@ -130,6 +146,21 @@ export function BrowserPane() {
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
   }, []);
+
+  // Debounced so a drag-resize sends one viewport instead of sixty.
+  const sentViewport = useRef({ w: 0, h: 0 });
+  useEffect(() => {
+    if (!open) { sentViewport.current = { w: 0, h: 0 }; return; }
+    const { w, h } = paneSize;
+    if (!w || !h) return;
+    const last = sentViewport.current;
+    if (Math.abs(last.w - w) < 8 && Math.abs(last.h - h) < 8) return;
+    const t = setTimeout(() => {
+      sentViewport.current = { w, h };
+      send({ t: 'viewport', width: w, height: h });
+    }, 220);
+    return () => clearTimeout(t);
+  }, [open, paneSize, send]);
 
   const forwardKey = useCallback((key: string, code: string, keyType: 'rawKeyDown' | 'keyDown' | 'keyUp', modifiers = 0, textValue = '') => {
     send({ t: 'input', event: { type: 'key', key, code, keyType, modifiers, text: textValue || undefined } });
@@ -230,11 +261,10 @@ export function BrowserPane() {
 
   const markCount = notes.filter((n) => n.text.trim() || n.kind === 'element').length + strokes.length;
   const serverList = servers.data?.servers ?? [];
-  const aspect = `${dims.w} / ${dims.h}`;
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-sunken">
-      <div className="flex shrink-0 items-center gap-1 border-b border-line bg-panel px-2 py-1.5">
+    <div className="flex h-full min-h-0 flex-col bg-panel">
+      <div className="flex shrink-0 items-center gap-1 border-b border-line px-2 py-1.5">
         <Tip label="Back"><Button variant="ghost" size="icon-sm" aria-label="Back" disabled={!open} onClick={() => command('back')}><ArrowLeft /></Button></Tip>
         <Tip label="Forward"><Button variant="ghost" size="icon-sm" aria-label="Forward" disabled={!open} onClick={() => command('forward')}><ArrowRight /></Button></Tip>
         <Tip label="Reload"><Button variant="ghost" size="icon-sm" aria-label="Reload page" disabled={!open} onClick={() => command('reload')}><RotateCw /></Button></Tip>
@@ -245,26 +275,7 @@ export function BrowserPane() {
         <Tip label="Open in a real tab"><Button variant="ghost" size="icon-sm" aria-label="Open in a new tab" disabled={!url} onClick={() => url && window.open(url, '_blank', 'noopener')}><ArrowUpRight /></Button></Tip>
       </div>
 
-      {serverList.length || !open ? (
-        <div className="flex shrink-0 items-center gap-1.5 border-b border-line px-2 py-1.5">
-          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto no-scrollbar">
-            {serverList.map((s) => (
-              <Tip key={s.port} label={s.title || s.url}>
-                <button type="button" onClick={() => go(s.url)}
-                  className={cn('shrink-0 rounded-md px-1.5 py-0.5 text-[11.5px] text-faint hover:bg-hover hover:text-fg', url.startsWith(s.url) && 'bg-raised text-fg')}>
-                  :{s.port}
-                </button>
-              </Tip>
-            ))}
-            {servers.isFetching ? <Spinner className="size-3" /> : null}
-          </div>
-          <span className={cn('inline-flex shrink-0 items-center gap-1 text-[11px]', open ? 'text-accent' : 'text-faint')}>
-            <CircleDot className="size-3" />{open ? 'Agent live' : 'Idle'}
-          </span>
-        </div>
-      ) : null}
-
-      <div className="relative min-h-0 flex-1 overflow-auto">
+      <div ref={wrapRef} className="relative min-h-0 flex-1 overflow-hidden bg-sunken">
         {!connecting && !open ? (
           <div className="grid h-full place-content-center gap-2 p-6 text-center text-[13px] text-dim">
             <p className="m-0">The agent has no page open. Ask it to open one, start a dev server, or type an address above.</p>
@@ -277,29 +288,27 @@ export function BrowserPane() {
             ) : null}
           </div>
         ) : frame ? (
-          <div className="p-3">
-            <div className="relative mx-auto w-full overflow-hidden rounded-lg border border-line bg-white shadow-pop" style={{ aspectRatio: aspect }}>
-              <img
-                ref={imgRef}
-                src={`data:image/jpeg;base64,${frame}`}
-                alt="The page the agent is on"
-                className={cn('absolute inset-0 size-full select-none', tool === 'move' ? 'cursor-pointer' : 'cursor-default')}
-                tabIndex={0}
-                onPointerDown={onPointerDown}
-                onWheel={onWheel}
-                onKeyDown={onKeyDown}
-              />
-              <AnnotationLayer
-                dims={dims}
-                tool={tool}
-                notes={notes}
-                strokes={strokes}
-                selected={selected}
-                onPlace={place}
-                onDraw={(s) => setStrokes((list) => [...list, s])}
-                onSelect={setSelected}
-              />
-            </div>
+          <div className="relative size-full overflow-hidden bg-white">
+            <img
+              ref={imgRef}
+              src={`data:image/jpeg;base64,${frame}`}
+              alt="The page the agent is on"
+              className={cn('absolute inset-0 size-full select-none object-contain', tool === 'move' ? 'cursor-pointer' : 'cursor-default')}
+              tabIndex={0}
+              onPointerDown={onPointerDown}
+              onWheel={onWheel}
+              onKeyDown={onKeyDown}
+            />
+            <AnnotationLayer
+              dims={dims}
+              tool={tool}
+              notes={notes}
+              strokes={strokes}
+              selected={selected}
+              onPlace={place}
+              onDraw={(s) => setStrokes((list) => [...list, s])}
+              onSelect={setSelected}
+            />
           </div>
         ) : (
           <div className="grid h-full place-items-center"><Spinner className="size-5" /></div>

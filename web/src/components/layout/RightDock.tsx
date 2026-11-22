@@ -133,17 +133,19 @@ export function RightDock() {
             )}
           />
         ) : null}
-        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-line px-3 py-1.5">
-          <span className="flex items-center gap-2 text-[13px] font-medium">
-            {active.icon}
-            {active.label}
-          </span>
-          <Tip label="Close">
-            <Button variant="ghost" size="icon-sm" aria-label="Close inspector" onClick={() => toggleRight(false)}>
-              <X />
-            </Button>
-          </Tip>
-        </div>
+        {pane === 'browser' ? null : (
+          <div className="flex shrink-0 items-center justify-between gap-2 border-b border-line px-3 py-1.5">
+            <span className="flex items-center gap-2 text-[13px] font-medium">
+              {active.icon}
+              {active.label}
+            </span>
+            <Tip label="Close">
+              <Button variant="ghost" size="icon-sm" aria-label="Close inspector" onClick={() => toggleRight(false)}>
+                <X />
+              </Button>
+            </Tip>
+          </div>
+        )}
         <div className="min-h-0 flex-1">
           <Suspense fallback={<div className="grid h-full place-items-center"><Spinner className="size-5" /></div>}>
             {pane === 'browser' ? <BrowserPane /> : pane === 'changes' ? <ChangesPane /> : <PlanPane />}
