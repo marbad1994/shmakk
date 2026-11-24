@@ -736,14 +736,22 @@ function createSession(opts = {}) {
       if (fs.existsSync(paths.transcript)) transcript = JSON.parse(fs.readFileSync(paths.transcript, 'utf8'));
     } catch {}
 
+    // `mode` picks the contract the model answers in: 'tasks' describes change,
+    // 'automation' describes actions to replay. It has to be chosen before the
+    // call, not after, because it changes the prompt and the output budget.
+    const mode = opts.mode === 'automation' ? 'automation' : 'tasks';
     const result = await analyzeRecording({
       frames: frameResult.frames,
       transcript,
       signal: opts.signal,
       visionClient: opts.visionClient,
       instructions: opts.instructions,
+      mode,
     });
-    const summary = { id, ...result, createdAt: new Date().toISOString() };
+    // Keep the exact frames the model saw, in vision order: step evidence is
+    // mapped back by position, so a re-selected set would point at the wrong
+    // screenshots.
+    const summary = { id, ...result, frames: frameResult.frames, createdAt: new Date().toISOString() };
     try { fs.writeFileSync(paths.analysis, JSON.stringify(summary, null, 2)); } catch {}
     return summary;
   }
@@ -757,11 +765,19 @@ function createSession(opts = {}) {
     return result;
   }
 
+  // Turn the recording into a replayable spec.
+  //
+  // The narration here is a sequence of actions, not prose to interpret, so the
+  // frames are read with the automation contract and the result is normalized
+  // by pure code. Nothing between normalizeAutomation and the caller is allowed
+  // to reinterpret the steps: whatever the model said is what gets replayed, and
+  // the warnings it raised are what the review list shows.
   async function automation(opts = {}) {
-    const { toAutomation } = require('./showtell');
-    const a = await analyze(opts);
+    const { normalizeAutomation } = require('./automation');
+    const a = await analyze({ ...opts, mode: 'automation' });
     if (!a.analysis) throw new Error('vision analysis produced no structured understanding');
-    const result = { id, ...toAutomation(a.analysis, opts), sourceAnalysis: a.analysis, createdAt: new Date().toISOString() };
+    const playback = normalizeAutomation(a.analysis, { frames: a.frames || [] });
+    const result = { id, ...playback, sourceAnalysis: a.analysis, createdAt: new Date().toISOString() };
     try { fs.writeFileSync(paths.automation, JSON.stringify(result, null, 2)); } catch {}
     return result;
   }

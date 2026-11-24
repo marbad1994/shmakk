@@ -1087,6 +1087,16 @@ function isDeepSeekTarget(model, baseUrl) {
   return false;
 }
 
+// `thinking` is a DeepSeek-native field, not part of the OpenAI schema. Hosts
+// that merely serve DeepSeek model ids (Venice, OpenRouter, local vLLM) reject
+// unknown body fields — Venice answers 400 because its request schema is
+// sealed (additionalProperties: false) — so only DeepSeek's own API gets it.
+function isNativeDeepSeekHost(baseUrl) {
+  const base = String(baseUrl || '').toLowerCase();
+  if (!base) return isDeepSeekProvider();
+  return base.includes('deepseek');
+}
+
 // DeepSeek maps the OpenAI ladder onto low/high, and only `max` stays max.
 function mapDeepSeekEffort(effort) {
   const level = normalizeEffort(effort);
@@ -1102,10 +1112,22 @@ function mapDeepSeekEffort(effort) {
 // or max thinking makes DSML leaks more likely in streaming tool loops.
 // Other OpenAI-compatible providers take `reasoning_effort` only when the
 // caller asked for a level the model accepts.
+//
+// DeepSeek model ids also appear on third-party hosts (Venice serves
+// deepseek-v4-1-flash-*). Those hosts speak plain OpenAI, so they get
+// `reasoning_effort` only and never the `thinking` extra_body.
 function getReasoningOptions(taskType, effort = null, model = null) {
   const resolvedModel = model || modelFor();
   const baseUrl = baseUrlForModel(resolvedModel);
   if (isDeepSeekTarget(resolvedModel, baseUrl)) {
+    if (!isNativeDeepSeekHost(baseUrl)) {
+      // Standard OpenAI surface: honor an explicit composer choice and
+      // otherwise leave the provider default alone.
+      const picked = normalizeEffort(effort);
+      if (!picked) return {};
+      return { reasoning_effort: mapDeepSeekEffort(picked) };
+    }
+
     // Respect runtime override (set after a DSML leak).
     const forceNoThinking = process.env._SHMAKK_FORCE_NO_THINKING === '1';
 

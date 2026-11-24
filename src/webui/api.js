@@ -1321,7 +1321,29 @@ function createApi(app) {
     return a;
   });
   add('DELETE', '/api/automations/:id', ({ params }) => ({ ok: app.automations.remove(params.id) }));
-  add('POST', '/api/automations/:id/run', ({ params }) => app.automations.run(params.id, { trigger: 'manual' }));
+  add('POST', '/api/automations/:id/run', ({ params, body }) => app.automations.run(params.id, {
+    trigger: 'manual',
+    values: body && body.values && typeof body.values === 'object' ? body.values : null,
+  }));
+  // Prove a recording replays before it is saved as an automation.
+  add('POST', '/api/automations/test', async ({ body }) => {
+    const spec = body && body.playback;
+    if (!spec) throw new HttpError(400, 'playback spec is required');
+    const values = body && body.values && typeof body.values === 'object' ? body.values : null;
+    try {
+      return await app.automations.testPlayback(spec, { values });
+    } catch (e) {
+      throw new HttpError(400, e.message);
+    }
+  });
+  // Step screenshots from a recorded run.
+  add('GET', '/api/automations/runs/:runId/:file', ({ params }) => {
+    const { runArtifactDir } = require('../services/automation-replay');
+    if (!/^[a-z0-9_]{4,40}$/i.test(String(params.runId)) || !/^\d{1,3}\.png$/.test(String(params.file))) throw new HttpError(404, 'not found');
+    const file = path.join(runArtifactDir(params.runId), params.file);
+    if (!fs.existsSync(file)) throw new HttpError(404, 'not found');
+    return { __binary: fs.readFileSync(file), contentType: 'image/png' };
+  });
   add('GET', '/api/automations/:id/webhook', ({ params }) => {
     const p = app.automations.webhookPath(params.id);
     if (!p) throw new HttpError(404, 'this automation has no webhook trigger');

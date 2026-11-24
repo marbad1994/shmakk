@@ -306,24 +306,36 @@ function createShow2PlanManager({ getWorkspace, broadcast = () => {}, getModel =
     stage('topics');
     const vision = require('./vision');
     if (!vision.findVisionClient()) throw new Error('An automation needs a vision-capable model to see what you clicked. Configure one (a visionSupport endpoint, or a model marked vision:true), or record Tasks instead.');
-    const selected = pickFrames(clipFrames, transcript.segments, { durationSec, budget: DEFAULT_BUDGET });
+    // A replay needs the whole clip, not just where the speech peaked: a click
+    // that was not narrated still has to be replayed.
+    const budget = Math.max(DEFAULT_BUDGET, Number(process.env.SHMAKK_SHOW2PLAN_AUTOMATION_BUDGET) || 24);
+    const selected = pickFrames(clipFrames, transcript.segments, { durationSec, budget });
     const segmentAt = (t) => (transcript.segments || []).find((x) => t >= x.start - 0.5 && t <= x.end + 1.5);
     const frameObjs = selected.map((f, i) => ({ index: i, file: f.file, path: f.path, t: f.t, reason: f.reason, transcript: (segmentAt(f.t) || {}).text || null }));
-    const a = await vision.analyzeRecording({ frames: frameObjs, transcript, instructions, signal: c.ctrl.signal });
-    const { normalizeAnalysis, toAutomation } = require('./showtell');
-    const analysis = normalizeAnalysis(a.analysis);
+    const { normalizeAutomation } = require('./automation');
+    // mode:'automation' selects the vision contract that returns an ordered
+    // step list. Without it the model treats the recording as a request to
+    // explain, and answers with prose instead of steps.
+    const a = await vision.analyzeRecording({ frames: frameObjs, transcript, instructions, signal: c.ctrl.signal, mode: 'automation' });
+    const spec = normalizeAutomation(a.analysis || {}, { frames: frameObjs });
+    if (!spec.steps.length) {
+      c.warnings.push('The model described what happened but did not name any action it could replay. Say the action as you do it ("click Post", "type the text").');
+    } else {
+      c.warnings.push(...spec.warnings);
+    }
     c.result = {
       mode: 'automation',
-      title: analysis.goal || analysis.summary || 'Recorded automation',
-      summary: analysis.summary || '',
-      app: analysis.app,
+      title: spec.goal || spec.summary || 'Recorded automation',
+      summary: spec.summary || '',
+      app: spec.app,
       transcript: { text: transcript.text, segments: transcript.segments, source: transcript.source },
       frames: frameObjs.map((f) => ({ file: f.file, t: f.t, reason: f.reason, transcript: f.transcript })),
       allFrames: clipFrames.length,
       tasks: [],
-      automation: toAutomation(a.analysis),
+      automation: spec,
       via: 'model',
-      uncertain: analysis.uncertain || [],
+      model: a.model,
+      uncertain: spec.uncertain || [],
     };
     fs.writeFileSync(path.join(dirOf(s.id), `result-${c.n}.json`), JSON.stringify(c.result, null, 2));
     stage('done');

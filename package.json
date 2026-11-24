@@ -25,6 +25,7 @@
     "skills/",
     "scripts/",
     "docs/",
+    "kwin/",
     "desktop/main.js",
     "desktop/preload.js",
     "desktop/package.json",
@@ -72,7 +73,8 @@
   },
   "optionalDependencies": {
     "@huggingface/transformers": "^4.3.2",
-    "better-sqlite3": "^11.0.0",
+    "better-sqlite3": "^11.10.0",
+    "dbus-next": "^0.10.2",
     "kokoro-js": "^1.2.1"
   },
   "devDependencies": {

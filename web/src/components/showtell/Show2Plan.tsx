@@ -15,8 +15,33 @@ import { useRecording, type Deliverable } from '@/lib/recordingStore';
 import { useSessionStatus } from './RecordingBar';
 import type { PlanFull, ProposedTask } from '@/lib/work';
 
-interface AutomationAction { action: string; description: string; target?: string; value?: string | null; key?: string | null }
-interface AutomationResult { summary: string; goal: string; actions: AutomationAction[]; warnings: string[] }
+/** One replay action, as normalized by src/services/automation.js. */
+interface AutomationStep {
+  index: number;
+  surface: 'browser' | 'desktop';
+  action: string;
+  target?: string | null;
+  name?: string | null;
+  role?: string | null;
+  value?: string | null;
+  key?: string | null;
+  input?: string | null;
+  detail?: string | null;
+  expected?: string | null;
+  evidence?: string[];
+}
+interface AutomationInput { name: string; label?: string | null; example?: string | null }
+interface AutomationResult {
+  surface: 'browser' | 'desktop';
+  url: string | null;
+  app: string | null;
+  goal: string | null;
+  summary: string | null;
+  inputs: AutomationInput[];
+  steps: AutomationStep[];
+  warnings: string[];
+  uncertain?: string[];
+}
 
 /** One request found in a clip, with the tasks written for it. */
 interface Topic {
@@ -51,17 +76,20 @@ const STAGE_LABEL: Record<string, string> = {
   recording: 'Uploading', queued: 'Queued', transcribing: 'Transcribing what you said', topics: 'Understanding the request', investigating: 'Reading the code',
 };
 
-/** The prompt a Cowork automation step runs, from one recorded action. */
-function stepPrompt(a: AutomationAction): string {
-  const on = a.target ? ` on "${a.target}"` : '';
-  switch (a.action) {
-    case 'click': return `Click ${a.target || a.description}`;
-    case 'type': return `Type "${a.value ?? ''}"${on}`;
-    case 'press': return `Press ${a.key || 'Enter'}${on}`;
-    case 'select': return `Select "${a.value ?? ''}"${on}`;
-    case 'navigate': return `Open ${a.value || a.target || 'the page'}`;
-    case 'wait': case 'waitSelector': return `Wait for ${a.target || 'the element'}`;
-    default: return a.description || a.action;
+/** One line for a replay step, in the words the run itself will use. */
+function stepLabel(s: AutomationStep): string {
+  const on = s.target ? ` on "${s.target}"` : '';
+  switch (s.action) {
+    case 'click': return `Click ${s.target || s.name || 'the control'}`;
+    case 'dblclick': case 'rightclick': return `${s.action === 'dblclick' ? 'Double click' : 'Right click'} ${s.target || s.name || 'the control'}`;
+    case 'type': return `Type "${s.value ?? (s.input ? `{{${s.input}}}` : '')}"${on}`;
+    case 'press': return `Press ${s.key || 'Enter'}${on}`;
+    case 'select': return `Select "${s.value ?? ''}"${on}`;
+    case 'navigate': return `Open ${s.value || s.target || 'the page'}`;
+    case 'launch': return `Launch ${s.value || s.target || 'the app'}`;
+    case 'scroll': return `Scroll${s.target ? ` in ${s.target}` : ''}${s.value ? ` ${s.value}` : ''}`;
+    case 'wait': return `Wait for ${s.target || 'the element'}`;
+    default: return s.detail || s.target || s.action;
   }
 }
 
@@ -84,7 +112,7 @@ export function Show2Plan() {
   const [deliverable, setDeliverable] = useState<Deliverable>('tasks');
   const [useMic, setUseMic] = useState(true);
   const [drafts, setDrafts] = useState<Record<number, TopicDraft[]>>({});
-  const [actions, setActions] = useState<AutomationAction[] | null>(null);
+  const [steps, setSteps] = useState<AutomationStep[] | null>(null);
   const [planPerTopic, setPlanPerTopic] = useState(false);
   const [title, setTitle] = useState('');
   const [signoff, setSignoff] = useState(true);
@@ -104,16 +132,16 @@ export function Show2Plan() {
     for (const c of serverClips) {
       if (c.stage === 'done' && c.result && drafts[c.n] === undefined) {
         next[c.n] = (c.result.topics ?? []).map((t) => ({ ...t, include: true }));
-        if (c.result.automation && actions === null) setActions(c.result.automation.actions);
+        if (c.result.automation && steps === null) setSteps(c.result.automation.steps);
         if (!title && c.result.title) setTitle(c.result.title);
         changed = true;
       }
     }
     if (changed) setDrafts((d) => ({ ...d, ...next }));
-  }, [serverClips, drafts, actions, title]);
+  }, [serverClips, drafts, steps, title]);
 
   // A fresh dialog for a fresh recording.
-  useEffect(() => { if (rec.phase === 'idle' || rec.phase === 'starting') { setDrafts({}); setActions(null); setTitle(''); setPlanPerTopic(false); } }, [rec.phase]);
+  useEffect(() => { if (rec.phase === 'idle' || rec.phase === 'starting') { setDrafts({}); setSteps(null); setTitle(''); setPlanPerTopic(false); } }, [rec.phase]);
 
   const allTopics = useMemo(() => Object.keys(drafts).map(Number).sort((a, b) => a - b).flatMap((n) => drafts[n].map((t) => ({ clip: n, topic: t }))), [drafts]);
   const included = allTopics.filter(({ topic }) => topic.include && topic.tasks.length && topic.kind !== 'question');
@@ -164,12 +192,18 @@ export function Show2Plan() {
   };
 
   const saveAutomation = async () => {
-    if (!automation || !actions) return;
+    const spec = automation?.automation;
+    if (!automation || !spec || !steps?.length) return;
     setCreating(true);
     try {
+      // Save the spec, not a prose description of it: a playback automation
+      // replays these exact actions, so nothing has to reinterpret them later.
       await api.post('/api/automations', {
-        name: title || automation.title || 'Recorded automation', description: automation.summary || '',
-        steps: actions.map((a) => ({ title: a.description || a.target || a.action, prompt: stepPrompt(a) })),
+        name: title || spec.goal || 'Recorded automation', description: spec.summary || '',
+        playback: {
+          surface: spec.surface, url: spec.url, app: spec.app,
+          goal: spec.goal, inputs: spec.inputs, steps,
+        },
         approval: 'ask', projectId: null, workspace: null, trigger: { type: 'manual' },
       });
       rec.discard();
@@ -240,7 +274,7 @@ export function Show2Plan() {
               ) : null}
 
               {automation ? (
-                <AutomationEditor result={automation} actions={actions ?? []} onChange={setActions} />
+                <AutomationEditor result={automation} steps={steps ?? []} onChange={setSteps} />
               ) : (
                 <>
                   {clips.length > 1 && !planPerTopic ? (
@@ -313,7 +347,7 @@ export function Show2Plan() {
             <>
               <Button variant="ghost" onClick={close}><Trash2 />Discard</Button>
               {automation ? (
-                <Button variant="primary" disabled={!actions?.length || creating} onClick={() => void saveAutomation()}>{creating ? <Spinner className="size-4" /> : <Save />}Save to Cowork</Button>
+                <Button variant="primary" disabled={!steps?.length || creating} onClick={() => void saveAutomation()}>{creating ? <Spinner className="size-4" /> : <Save />}Save to Cowork</Button>
               ) : planPerTopic && included.length > 1 ? (
                 <Button variant="primary" disabled={!taskCount || creating || pending.length > 0} onClick={() => void createPlan(false)}>{creating ? <Spinner className="size-4" /> : <Plus />}Create {included.length} plans</Button>
               ) : (
@@ -330,25 +364,51 @@ export function Show2Plan() {
   );
 }
 
-function AutomationEditor({ result, actions, onChange }: { result: ClipResult; actions: AutomationAction[]; onChange: (a: AutomationAction[]) => void }) {
+function AutomationEditor({ result, steps, onChange }: { result: ClipResult; steps: AutomationStep[]; onChange: (a: AutomationStep[]) => void }) {
+  const spec = result.automation;
+  const patch = (i: number, next: Partial<AutomationStep>) => onChange(steps.map((x, j) => (j === i ? { ...x, ...next } : x)));
+  const needsTarget = (a: string) => ['click', 'dblclick', 'rightclick', 'hover', 'type', 'select', 'press'].includes(a);
   return (
     <div className="grid gap-2">
       {result.summary ? <p className="m-0 text-[13.5px] text-fg">{result.summary}</p> : null}
-      {(result.automation?.warnings ?? []).map((w) => <p key={w} className="m-0 rounded-lg border border-warn/40 bg-warn/10 px-3 py-2 text-[12.5px] text-warn">{w}</p>)}
-      {actions.length ? (
-        <ol className="m-0 grid list-none gap-1.5 p-0">
-          {actions.map((a, i) => (
-            <li key={i} className="flex items-start gap-2 rounded-xl border border-line bg-raised px-3 py-2">
-              <span className="mt-1.5 shrink-0 rounded-md bg-accent/15 px-1.5 text-[11px] font-semibold uppercase text-accent">{a.action}</span>
-              <div className="grid min-w-0 flex-1 gap-1">
-                <Input value={a.description} onChange={(e) => onChange(actions.map((x, j) => (j === i ? { ...x, description: e.target.value } : x)))} aria-label={`Step ${i + 1}`} className="h-8 text-[13px]" />
-                {a.target || a.value ? <span className="text-[12px] text-faint">{[a.target && `on ${a.target}`, a.value && `value "${a.value}"`].filter(Boolean).join(' · ')}</span> : null}
-              </div>
-              <Button variant="ghost" size="icon-sm" aria-label="Remove step" onClick={() => onChange(actions.filter((_, j) => j !== i))}><Trash2 /></Button>
-            </li>
-          ))}
-        </ol>
-      ) : <p className="m-0 text-[13px] text-dim">No steps were recognised. Record again and say each action as you do it.</p>}
+      {spec?.surface ? (
+        <p className="m-0 text-[12px] text-faint">
+          {spec.surface === 'browser' ? 'Replays in the browser' : 'Replays on the desktop'}
+          {spec.url ? ` · starts at ${spec.url}` : spec.app ? ` · in ${spec.app}` : ''}
+        </p>
+      ) : null}
+      {(spec?.warnings ?? []).map((w) => <p key={w} className="m-0 rounded-lg border border-warn/40 bg-warn/10 px-3 py-2 text-[12.5px] text-warn">{w}</p>)}
+      {steps.length ? (
+        <>
+          <ol className="m-0 grid list-none gap-1.5 p-0">
+            {steps.map((s, i) => (
+              <li key={i} className="flex items-start gap-2 rounded-xl border border-line bg-raised px-3 py-2">
+                <span className="mt-1.5 shrink-0 rounded-md bg-accent/15 px-1.5 text-[11px] font-semibold uppercase text-accent">{s.action}</span>
+                <div className="grid min-w-0 flex-1 gap-1">
+                  <span className="truncate text-[13px] text-fg" title={stepLabel(s)}>{stepLabel(s)}</span>
+                  {needsTarget(s.action) ? (
+                    <Input
+                      value={s.target ?? ''}
+                      onChange={(e) => patch(i, { target: e.target.value })}
+                      placeholder="What to act on (the control's text or label)"
+                      aria-label={`Step ${i + 1} target`}
+                      className="h-7 text-[12.5px]"
+                    />
+                  ) : null}
+                  {s.value && s.action !== 'type' && s.action !== 'select' ? <span className="text-[12px] text-faint">value "{s.value}"</span> : null}
+                  {s.detail && s.detail !== s.target ? <span className="text-[12px] text-faint">{s.detail}</span> : null}
+                </div>
+                <Button variant="ghost" size="icon-sm" aria-label="Remove step" onClick={() => onChange(steps.filter((_, j) => j !== i))}><Trash2 /></Button>
+              </li>
+            ))}
+          </ol>
+          {spec?.inputs?.length ? (
+            <p className="m-0 text-[12px] text-faint">
+              Asked for on every run: {spec.inputs.map((i) => `${i.label || i.name}${i.example ? ` (was "${i.example}")` : ''}`).join(', ')}
+            </p>
+          ) : null}
+        </>
+      ) : <p className="m-0 text-[13px] text-dim">The recording was understood, but no replayable action came out of it. Do the steps again and name each one out loud as you do it.</p>}
     </div>
   );
 }

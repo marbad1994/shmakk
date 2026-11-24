@@ -44,6 +44,10 @@ summarise yesterday's commits"); the assistant asks permission before saving it.
 the server was stopped are not replayed. In Docker, schedules use the time zone stored on each
 automation, not the container's.
 
+These automations are instructions, executed by the agent. A *recorded* automation is a different
+thing: a screen recording turned into a fixed list of replayable steps. See
+[docs/automations.md](automations.md) for the spec and the target-resolution rules.
+
 ## Projects
 
 A project groups chats from **any** mode — design a page, build it in Code, automate its upkeep in

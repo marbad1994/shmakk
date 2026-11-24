@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+- **Recorded automations**: a spoken control description is normalized to the accessible name, so the step
+  replay looks for is the one the page actually exposes. `the Save button`, `Save button` and `a Save button`
+  all become `Save`; the article is dropped only when a role noun was removed or the role is known, so a name
+  that merely starts with `the` (`the Netherlands`) survives; a name that is nothing but a role word is never
+  stripped to empty, and URLs pass through untouched. `name` and `target` go through the same rule, so they
+  cannot disagree about which control a step means.
+- Warnings raised by normalization (an action that could not be mapped, a click that names no control, a
+  recording with no actions) are still carried on the spec unchanged.
+
+### Added
+- `docs/automations.md` — the recorded-automation spec reference: step shape, action vocabulary, spoken-name
+  rules, browser and desktop resolution order, inputs, and the replay tuning variables
+- `docs/migration-guide.md` — rebuilding a stored spec from its `sourceAnalysis` without another vision pass
+- README section for recorded automations
+- Unit tests for spoken-name normalization, including the cases that must not change
+
 ## [1.3.0] - 2026-11-14
 
 ### Added

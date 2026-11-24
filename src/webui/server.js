@@ -250,7 +250,7 @@ async function startWebServer(opts = {}) {
   app.plans = createPlanManager({ chat: app.chat, getWorkspace: () => workspace, broadcast, settings });
   try { app.plans.recover(); } catch {}
 
-  app.automations = createAutomations({ chat: app.chat, projects: app.projects, broadcast, getWorkspace: () => workspace });
+  app.automations = createAutomations({ chat: app.chat, projects: app.projects, broadcast, getWorkspace: () => workspace, getMcp: () => app.mcp });
 
   // Macros are triggers ("deploy") that start an automation or run commands;
   // they ride on the same chat plumbing, so they come after the chat manager.

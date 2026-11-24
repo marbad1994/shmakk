@@ -122,6 +122,46 @@ function save(list) {
 
 class AutomationError extends Error {}
 
+// A recorded spec: surface, steps with semantic targets, inputs. Kept small
+// and explicit so a malformed one is rejected at save time instead of failing
+// halfway through a run.
+function cleanPlayback(spec) {
+  if (!spec || typeof spec !== 'object') return null;
+  const surface = spec.surface === 'browser' ? 'browser' : spec.surface === 'desktop' ? 'desktop' : null;
+  if (!surface) throw new AutomationError('A recorded automation needs a surface: browser or desktop.');
+  const steps = (Array.isArray(spec.steps) ? spec.steps : []).map((s, i) => ({
+    index: i + 1,
+    surface,
+    action: String((s && s.action) || 'manual'),
+    target: s && s.target ? String(s.target).slice(0, 200) : null,
+    name: s && s.name ? String(s.name).slice(0, 200) : null,
+    role: s && s.role ? String(s.role).slice(0, 40) : null,
+    value: s && s.value != null ? String(s.value).slice(0, 2000) : null,
+    key: s && s.key ? String(s.key).slice(0, 40) : null,
+    input: s && s.input ? String(s.input).slice(0, 60) : null,
+    selector: s && s.selector ? String(s.selector).slice(0, 400) : null,
+    expected: s && s.expected ? String(s.expected).slice(0, 300) : null,
+    evidence: Array.isArray(s && s.evidence) ? s.evidence.slice(0, 6).map(String) : [],
+  }));
+  if (!steps.length) throw new AutomationError('A recorded automation needs at least one step.');
+  if (steps.length > 80) throw new AutomationError('A recorded automation is limited to 80 steps.');
+  return {
+    kind: 'automation',
+    version: 1,
+    surface,
+    url: spec.url ? String(spec.url).slice(0, 2000) : null,
+    app: spec.app ? String(spec.app).slice(0, 120) : null,
+    goal: spec.goal ? String(spec.goal).slice(0, 200) : null,
+    inputs: (Array.isArray(spec.inputs) ? spec.inputs : []).slice(0, 20).map((i, n) => ({
+      name: String((i && i.name) || `value_${n + 1}`).replace(/[^a-z0-9_]/gi, '_').slice(0, 60),
+      label: i && i.label ? String(i.label).slice(0, 60) : null,
+      example: i && i.example != null ? String(i.example).slice(0, 2000) : null,
+    })),
+    steps,
+    recordedAt: spec.recordedAt || spec.createdAt || new Date().toISOString(),
+  };
+}
+
 function normalize(patch, base) {
   const a = { ...base };
   if (typeof patch.name === 'string' && patch.name.trim()) a.name = patch.name.trim().slice(0, 80);
@@ -130,6 +170,13 @@ function normalize(patch, base) {
     a.steps = patch.steps.map((s) => (typeof s === 'string' ? { title: '', prompt: s } : s))
       .map((s) => ({ title: String(s.title || '').trim().slice(0, 80), prompt: String(s.prompt || '').trim().slice(0, 6000) }))
       .filter((s) => s.prompt).slice(0, MAX_STEPS);
+  }
+  if ('playback' in patch) a.playback = cleanPlayback(patch.playback);
+  // A recorded automation carries its own steps; the prompt list is only the
+  // readable form of them, so derive it when the caller sent none.
+  if ((!a.steps || !a.steps.length) && a.playback) {
+    const { describeStep } = require('../services/automation');
+    a.steps = a.playback.steps.map((s) => ({ title: describeStep(s).slice(0, 80), prompt: describeStep(s) }));
   }
   if (patch.trigger && typeof patch.trigger === 'object') {
     const t = patch.trigger;
@@ -201,10 +248,18 @@ function createAutomations(ctx) {
   }
 
   // Run every step in order inside one fresh Cowork conversation.
-  async function run(id, { trigger = 'manual', payload = null } = {}) {
+  //
+  // A recorded automation (one saved from a screen recording) replays through
+  // the replay engine instead: the steps are deterministic actions with
+  // semantic targets, so replaying them is both faster and repeatable. Steps
+  // typed as prompts are unchanged, and stay with the agent.
+  async function run(id, { trigger = 'manual', payload = null, values = null } = {}) {
     const a = find(id);
     if (!a) throw new AutomationError('automation not found');
     if (running.has(id)) throw new AutomationError('this automation is already running');
+    if (a.playback && Array.isArray(a.playback.steps) && a.playback.steps.length) {
+      return runPlayback(a, { trigger, payload, values });
+    }
     const started = Date.now();
     const project = a.projectId && ctx.projects ? ctx.projects.get(a.projectId) : null;
     const conv = ctx.chat.create({
@@ -243,8 +298,79 @@ function createAutomations(ctx) {
     return { runId: rec.id, convId: conv.id };
   }
 
-  function tick(now = Date.now()) {
-    for (const a of list) {
+  // Flatten a webhook body into replay values: {"email": "a@b"} feeds the
+  // input named "email", so one webhook can drive the recording over many
+  // items. Explicit values win over the payload.
+  function valuesFor(a, { payload, values }) {
+    const out = {};
+    if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+      for (const [k, v] of Object.entries(payload)) if (v != null && typeof v !== 'object') out[k] = String(v);
+    }
+    if (values && typeof values === 'object') for (const [k, v] of Object.entries(values)) if (v != null) out[k] = String(v);
+    return out;
+  }
+
+  // Replay a recorded spec. No conversation: the actions are not a prompt, and
+  // the run record holds exactly what happened step by step.
+  function runPlayback(a, { trigger, payload, values }) {
+    const { replay, runArtifactDir } = require('../services/automation-replay');
+    const started = Date.now();
+    const vals = valuesFor(a, { payload, values });
+    const rec = {
+      id: store.newId('r'), at: started, trigger, status: 'running', durationMs: 0, summary: '',
+      step: 0, steps: a.playback.steps.length, values: vals, via: a.playback.surface, results: [], artifacts: [],
+    };
+    a.runs = [rec, ...(a.runs || [])].slice(0, MAX_RUNS);
+    running.set(a.id, rec.id);
+    changed();
+
+    const finish = (status, summary) => {
+      rec.status = status;
+      rec.summary = String(summary || '').replace(/\s+/g, ' ').slice(0, 280);
+      rec.durationMs = Date.now() - started;
+      running.delete(a.id);
+      a.lastRunAt = started; a.lastStatus = status;
+      changed();
+      ctx.broadcast({ t: 'automation.finished', id: a.id, name: a.name, status, runId: rec.id });
+    };
+
+    const dir = runArtifactDir(rec.id);
+    (async () => {
+      try {
+        const result = await replay(a.playback, {
+          values: vals,
+          mcp: ctx.getMcp ? ctx.getMcp() : null,
+          artifacts: dir,
+          onStep: (e) => {
+            rec.step = e.index;
+            rec.results.push({ index: e.index, action: e.action, note: e.note, ok: e.ok, error: e.error, ms: e.ms, via: e.via });
+            if (e.artifact) rec.artifacts.push(e.artifact);
+            changed();
+            ctx.broadcast({ t: 'automation.progress', id: a.id, runId: rec.id, step: e.index, total: rec.steps, note: e.note, ok: e.ok });
+          },
+        });
+        rec.error = result.error || null;
+        rec.stoppedAt = result.stoppedAt || null;
+        rec.ok = result.steps.filter((s) => s.ok).length;
+        const done = result.steps.filter((s) => s.ok).length;
+        finish(result.ok ? 'ok' : 'error', result.ok ? `${done} of ${rec.steps} steps replayed` : `stopped at step ${result.stoppedAt || '?'}: ${result.error || 'failed'}`);
+      } catch (e) {
+        finish('error', e.message);
+      }
+    })();
+    return { runId: rec.id, convId: null };
+  }
+
+  // Try a spec without saving it, so the review UI can prove a recording
+  // replays before it becomes an automation.
+  async function testPlayback(spec, { values = null } = {}) {
+    const clean = cleanPlayback(spec);
+    const { replay } = require('../services/automation-replay');
+    const id = store.newId('t');
+    return replay(clean, { values: values || {}, mcp: ctx.getMcp ? ctx.getMcp() : null, artifacts: require('../services/automation-replay').runArtifactDir(id) });
+  }
+
+  function tick(now = Date.now()) {    for (const a of list) {
       if (!a.enabled || a.trigger.type !== 'schedule') continue;
       if (!a.nextRunAt) { reschedule(a, now); continue; }
       if (a.nextRunAt > now) continue;
@@ -257,7 +383,7 @@ function createAutomations(ctx) {
   return {
     list: () => list.slice().sort((a, b) => b.updatedAt - a.updatedAt).map(view),
     get: (id) => { const a = find(id); return a ? view(a) : null; },
-    create, update, remove, run, tick,
+    create, update, remove, run, tick, testPlayback,
     webhookPath(id) { const a = find(id); return a && a.trigger.type === 'webhook' ? `/hooks/${a.id}/${a.trigger.secret}` : null; },
     // Webhook entry: constant-time secret check; disabled automations ignore calls.
     async trigger(id, secret, payload) {
