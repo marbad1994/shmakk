@@ -1,0 +1,7 @@
+{
+  "name": "shmakk-screens",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Screen priority widget for shmakk window arranging",
+  "main": "main.js"
+}
