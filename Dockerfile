@@ -20,12 +20,15 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 # The optional voice/browser stacks are several GB; leave them out by default.
 # better-sqlite3 (session recall) is small and worth having.
+# Keep --omit=optional on both steps: the optional usocket package pulls an
+# old node-gyp into node_modules/.bin, which then shadows npm's own node-gyp
+# for `npm rebuild` and fails on Node 22.
 ARG WITH_OPTIONAL=0
 RUN if [ "$WITH_OPTIONAL" = "1" ]; then \
       npm ci --ignore-scripts --no-audit --no-fund; \
     else \
       npm ci --omit=optional --ignore-scripts --no-audit --no-fund \
-      && npm install --no-save --ignore-scripts --no-audit --no-fund better-sqlite3@^11; \
+      && npm install --no-save --omit=optional --ignore-scripts --no-audit --no-fund better-sqlite3@^11; \
     fi \
  && npm rebuild node-pty better-sqlite3
 
