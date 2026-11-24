@@ -3820,6 +3820,33 @@ test('endpoints: DeepSeek Flash is vision-capable; the Settings switch overrides
   }
 });
 
+test('llm: DeepSeek model ids on a third-party OpenAI host never send the thinking field', () => {
+  const os = require('os');
+  const path = require('path');
+  const llm = require('../src/llm');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shmakk-venice-'));
+  const prevCwd = process.cwd();
+  fs.writeFileSync(path.join(dir, 'endpoints.json'), JSON.stringify({
+    models: {
+      venice: { provider: 'openai-compatible', base_url: 'https://api.venice.ai/api/v1', model: 'deepseek-v4-1-flash-1017-uncensored' },
+      native: { base_url: 'https://api.deepseek.com', model: 'deepseek-v4-flash' },
+    },
+  }));
+  try {
+    process.chdir(dir);
+    // Venice seals its request schema (additionalProperties: false), so the
+    // DeepSeek-only `thinking` field would 400 there.
+    assert.deepStrictEqual(llm.getReasoningOptions('tool_loop', 'high', 'deepseek-v4-1-flash-1017-uncensored'), { reasoning_effort: 'high' });
+    assert.deepStrictEqual(llm.getReasoningOptions('chat', null, 'deepseek-v4-1-flash-1017-uncensored'), {});
+    // DeepSeek's own API keeps disabling thinking on tool turns.
+    assert.deepStrictEqual(llm.getReasoningOptions('tool_loop', 'high', 'deepseek-v4-flash'), { extra_body: { thinking: { type: 'disabled' } } });
+    assert.deepStrictEqual(llm.getReasoningOptions('chat', 'max', 'deepseek-v4-flash'), { reasoning_effort: 'max', extra_body: { thinking: { type: 'enabled' } } });
+  } finally {
+    process.chdir(prevCwd);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ── session bundle tar (pack/unpack) ───────────────────────────────────────
 {
   const { packDir, packBundle, unpackStream, headerFor } = require('../src/webui/tarball');
@@ -3936,6 +3963,833 @@ test('webui session-sync: terminal sessions are mirrored, then adopted on send',
     sync._resetForTests();
   }
 }));
+
+// ── recorded automations: normalization, target resolution, replay inputs ────
+{
+  const { normalizeAutomation, bindInputs } = require('../src/services/automation');
+  const { browserStrategies, pickElement } = require('../src/services/automation-replay');
+
+  const frames = [{ file: 'frame_000.png' }, { file: 'frame_001.png' }];
+  const analysis = {
+    surface: 'browser',
+    url: 'https://example.com/signup',
+    app: 'Google Chrome',
+    goal: 'Create an account',
+    inputs: [{ name: 'Email', label: 'Email address', example: 'recorded@example.com' }],
+    uncertain: ['  the plan label  '],
+    notes: ['worked around the cookie banner'],
+    steps: [
+      { action: 'go to', value: 'https://example.com/signup' },
+      { action: 'Click', role: 'button', name: 'the Save button', frames: [1] },
+      { action: 'Click', role: 'button', name: 'the Save button', frames: [1] },
+      { action: 'fill', role: 'textbox', label: 'Email', value: 'me@example.com', input_name: 'Email' },
+      { action: 'press', key: 'Enter' },
+    ],
+  };
+
+  test('automation: normalizeAutomation turns a hand-written analysis into replayable steps', () => {
+    const spec = normalizeAutomation(analysis, { frames });
+    assert.strictEqual(spec.kind, 'automation');
+    assert.strictEqual(spec.version, 1);
+    assert.strictEqual(spec.surface, 'browser');
+    assert.strictEqual(spec.url, 'https://example.com/signup');
+    assert.strictEqual(spec.goal, 'Create an account');
+    assert.strictEqual(spec.app, 'Google Chrome');
+
+    // Synonyms collapse onto one vocabulary, and the repeated click (the same
+    // state photographed twice) is kept once.
+    assert.deepStrictEqual(spec.steps.map((s) => s.action), ['navigate', 'click', 'type', 'press']);
+    assert.deepStrictEqual(spec.steps.map((s) => s.index), [1, 2, 3, 4]);
+    assert.ok(spec.steps.every((s) => s.surface === 'browser'));
+
+    const click = spec.steps[1];
+    assert.strictEqual(click.name, 'Save'); // "the Save button" reads as "Save"
+    assert.strictEqual(click.target, 'Save');
+    assert.strictEqual(click.role, 'button');
+    assert.deepStrictEqual(click.evidence, ['frame_000.png']);
+
+    // Values become inputs, so one recording replays over a list of items.
+    assert.deepStrictEqual(spec.inputs, [{ name: 'email', label: 'Email', example: 'me@example.com' }]);
+    assert.strictEqual(spec.steps[2].input, 'email');
+    assert.strictEqual(spec.steps[2].value, 'me@example.com');
+    assert.strictEqual(spec.steps[3].key, 'Enter');
+    assert.strictEqual(spec.typingSteps, true);
+    assert.deepStrictEqual(spec.warnings, []);
+    assert.deepStrictEqual(spec.uncertain, ['the plan label']);
+    assert.deepStrictEqual(spec.notes, ['worked around the cookie banner']);
+
+    // On the desktop a URL is not an option: navigate becomes launch.
+    const desktop = normalizeAutomation({ surface: 'desktop', steps: [{ action: 'navigate', value: 'kate' }] });
+    assert.strictEqual(desktop.surface, 'desktop');
+    assert.strictEqual(desktop.steps[0].action, 'launch');
+    assert.strictEqual(desktop.steps[0].value, 'kate');
+    assert.strictEqual(desktop.url, null);
+  });
+
+  test('automation: spoken control names normalize to the accessible name', () => {
+    const name = (step) => normalizeAutomation({ surface: 'desktop', steps: [step] }).steps[0].name;
+
+    // The widget noun a person says out loud is not part of the name, with or
+    // without an article in front of it, and whitespace never matters.
+    assert.strictEqual(name({ action: 'click', role: 'button', name: 'the Save button' }), 'Save');
+    assert.strictEqual(name({ action: 'click', role: 'button', name: 'Save button' }), 'Save');
+    assert.strictEqual(name({ action: 'click', role: 'button', name: 'a Save button' }), 'Save');
+    assert.strictEqual(name({ action: 'click', role: 'button', name: '  Save   button  ' }), 'Save');
+
+    // The article goes only when the role is known: a name that merely starts
+    // with "the" is not a spoken description.
+    assert.strictEqual(name({ action: 'click', role: 'button', name: 'the Save' }), 'Save');
+    assert.strictEqual(name({ action: 'click', name: 'the Netherlands' }), 'the Netherlands');
+
+    // A name that is nothing but the role word is never stripped to emptiness.
+    assert.strictEqual(name({ action: 'click', role: 'button', name: 'Button' }), 'Button');
+
+    // Name and spoken description are normalized by the same rule, so they
+    // cannot disagree; a URL is a value, not a name to tidy.
+    const both = normalizeAutomation({ surface: 'browser', steps: [{ action: 'click', role: 'link', target: 'the Docs link' }] }).steps[0];
+    assert.strictEqual(both.name, 'Docs');
+    assert.strictEqual(both.target, 'Docs');
+    const url = 'https://example.com/the-save-button';
+    assert.strictEqual(name({ action: 'click', role: 'link', name: url }), url);
+  });
+
+  test('automation: unnamed or unmappable steps are kept and reported, never guessed', () => {
+    const empty = normalizeAutomation({});
+    assert.strictEqual(empty.surface, 'desktop');
+    assert.deepStrictEqual(empty.steps, []);
+    assert.deepStrictEqual(empty.inputs, []);
+    assert.match(empty.warnings[0], /No actions were found/);
+  });
+
+  test('automation: browserStrategies resolves role, then name, then css', () => {
+    const kinds = (s) => browserStrategies(s).map((x) => x.kind);
+    const full = browserStrategies({ role: 'button', name: 'Save', selector: '#save' });
+
+    assert.deepStrictEqual(kinds({ role: 'button', name: 'Save', selector: '#save' }),
+      ['role', 'role', 'label', 'placeholder', 'text', 'css']);
+    assert.deepStrictEqual(full[0], { kind: 'role', role: 'button', name: 'Save', exact: true });
+    assert.deepStrictEqual(full[1], { kind: 'role', role: 'button', name: 'Save', exact: false });
+    assert.deepStrictEqual(full[5], { kind: 'css', selector: '#save' });
+
+    // No role: the name-only strategies, in the documented order.
+    assert.deepStrictEqual(kinds({ name: 'Email' }), ['label', 'placeholder', 'text']);
+    // target is the fallback name, and surrounding whitespace never matters.
+    assert.deepStrictEqual(browserStrategies({ target: '  Email  ' })[0], { kind: 'label', text: 'Email' });
+    // A role with no accessible name has nothing to match on.
+    assert.deepStrictEqual(kinds({ role: 'button' }), []);
+    assert.deepStrictEqual(kinds({}), []);
+    assert.deepStrictEqual(kinds({ selector: '#x' }), ['css']);
+  });
+
+  test('automation: pickElement prefers an exact name, then the role, then the app', () => {
+    const el = (ref, name, role, extra = {}) => ({ ref, name, role, ...extra });
+
+    // Exact name plus role beats a name that merely contains it.
+    assert.strictEqual(
+      pickElement([el('e1', 'Save', 'button'), el('e2', 'Save all', 'button')], { name: 'Save', role: 'button' }).ref,
+      'e1');
+    // A role match outweighs a substring match when the name is not exact.
+    assert.strictEqual(
+      pickElement([el('e1', 'Submit order', 'link'), el('e2', 'Submit', 'button')], { name: 'Submit', role: 'button' }).ref,
+      'e2');
+    // The wanted name containing the element name still scores above a stranger.
+    assert.strictEqual(
+      pickElement([el('e1', 'Sign in', 'link'), el('e2', 'Email', 'textbox')], { name: 'Email address' }).ref,
+      'e2');
+    // Same name and role: the app breaks the tie.
+    assert.strictEqual(
+      pickElement([el('e1', 'Save', 'button', { app: 'kate' }), el('e2', 'Save', 'button', { app: 'dolphin' })],
+        { name: 'Save', role: 'button', app: 'kate' }).ref,
+      'e1');
+  });
+
+  test('automation: pickElement skips disabled elements and needs a ref', () => {
+    const btn = (ref, name, states) => ({ ref, name, role: 'button', states });
+
+    assert.strictEqual(pickElement([btn('e1', 'Save', 'disabled'), btn('e2', 'Save', '')], { name: 'Save' }).ref, 'e2');
+    // Everything disabled: use the best of the full list rather than nothing.
+    assert.strictEqual(pickElement([btn('e1', 'Cancel', 'disabled'), btn('e2', 'Save', 'disabled')], { name: 'Save' }).ref, 'e2');
+    // An element without a ref cannot be clicked, and an empty list has no answer.
+    assert.strictEqual(pickElement([{ name: 'Save' }], { name: 'Save' }), null);
+    assert.strictEqual(pickElement([], { name: 'Save' }), null);
+    assert.strictEqual(pickElement(null, { name: 'Save' }), null);
+    // A step that names nothing still resolves to the first usable element.
+    assert.strictEqual(pickElement([{ ref: 'e1', name: 'Save' }, { ref: 'e2', name: 'Cancel' }], {}).ref, 'e1');
+  });
+
+  test('automation: bindInputs falls back to the recorded value', () => {
+    const spec = {
+      kind: 'automation',
+      surface: 'browser',
+      inputs: [
+        { name: 'email', label: 'Email', example: 'saved@example.com' },
+        { name: 'plan', label: 'Plan', example: null },
+      ],
+      steps: [
+        { index: 1, action: 'type', name: 'Email', input: 'email', value: 'stale' },
+        { index: 2, action: 'type', name: 'Plan', input: 'plan', value: 'kept as recorded' },
+        { index: 3, action: 'click', name: 'Save', value: null },
+      ],
+    };
+
+    // No overrides: the recorded example is the value, so a run repeats the recording.
+    const same = bindInputs(spec);
+    assert.strictEqual(same.steps[0].value, 'saved@example.com');
+    assert.strictEqual(same.steps[1].value, 'kept as recorded'); // no example to fall back to
+    assert.strictEqual(same.steps[2].value, null);
+    assert.strictEqual(same.steps[2].input, undefined);
+    assert.strictEqual(same.inputs, spec.inputs);
+
+    // An override replaces only the steps that name that input.
+    const bound = bindInputs(spec, { email: 'other@example.com' });
+    assert.strictEqual(bound.steps[0].value, 'other@example.com');
+    assert.strictEqual(bound.steps[1].value, 'kept as recorded');
+    assert.strictEqual(bound.steps[2].value, null);
+    // Unknown keys are ignored.
+    assert.strictEqual(bindInputs(spec, { nickname: 'x' }).steps[0].value, 'saved@example.com');
+
+    // null/undefined means "not supplied", not "empty string".
+    assert.strictEqual(bindInputs(spec, { email: null }).steps[0].value, 'saved@example.com');
+    // Values are coerced to text.
+    assert.strictEqual(bindInputs(spec, { email: 42 }).steps[0].value, '42');
+
+    // The original spec is never mutated, and untouched steps are still copies.
+    assert.strictEqual(spec.steps[0].value, 'stale');
+    assert.notStrictEqual(bindInputs(spec).steps[0], spec.steps[0]);
+    assert.notStrictEqual(bindInputs(spec).steps[2], spec.steps[2]);
+
+    // A spec with nothing to bind is passed through.
+    assert.deepStrictEqual(bindInputs({ surface: 'browser' }), { surface: 'browser', steps: [] });
+  });
+
+  test('webui automations: cleanPlayback rejects a playback that cannot replay', () => withTempHome(async () => {
+    const { createAutomations, AutomationError } = require('../src/webui/automations');
+    const autos = createAutomations({ chat: { create: () => ({ id: 'c1' }) }, projects: null, broadcast() {}, getWorkspace: () => '/w' });
+
+    // cleanPlayback is the save-time gate behind testPlayback and create().
+    await assert.rejects(() => autos.testPlayback({ steps: [{ action: 'click', name: 'Save' }] }), /needs a surface/);
+    await assert.rejects(() => autos.testPlayback({ surface: 'chrome', steps: [{ action: 'click' }] }), /needs a surface/);
+    await assert.rejects(() => autos.testPlayback({ surface: 'browser', steps: [] }), /at least one step/);
+    await assert.rejects(
+      () => autos.testPlayback({ surface: 'desktop', steps: Array.from({ length: 81 }, () => ({ action: 'click', name: 'x' })) }),
+      /limited to 80 steps/);
+    // The rejection is an AutomationError, so the API can answer 400 without guessing.
+    await assert.rejects(() => autos.testPlayback({ surface: 'nope' }), AutomationError);
+
+    // playback: null clears a stored spec instead of storing garbage.
+    assert.strictEqual(autos.create({ name: 'Cleared', steps: ['do it'], playback: null }).playback, null);
+
+    // A valid spec is trimmed to the stored shape, and its steps seed the prompt list.
+    const saved = autos.create({
+      name: 'Recorded',
+      playback: {
+        surface: 'browser',
+        url: 'https://example.com',
+        goal: 'Sign up',
+        inputs: [{ name: 'Email Address', label: 'Email', example: 42 }],
+        steps: [{
+          action: 'click', role: 'button', name: 'Save', selector: '#save', key: 'Enter',
+          input: 'email', value: 5, expected: 'saved',
+          evidence: ['a.png', 'b.png', 'c.png', 'd.png', 'e.png', 'f.png', 'g.png'],
+        }],
+      },
+    });
+    assert.deepStrictEqual(Object.keys(saved.playback).sort(),
+      ['app', 'goal', 'inputs', 'kind', 'recordedAt', 'steps', 'surface', 'url', 'version']);
+    assert.strictEqual(saved.playback.kind, 'automation');
+    assert.strictEqual(saved.playback.version, 1);
+    assert.strictEqual(saved.playback.surface, 'browser');
+    assert.strictEqual(typeof saved.playback.recordedAt, 'string');
+    assert.strictEqual(saved.playback.steps.length, 1);
+    assert.strictEqual(saved.playback.steps[0].index, 1);
+    assert.strictEqual(saved.playback.steps[0].surface, 'browser');
+    assert.strictEqual(saved.playback.steps[0].value, '5');
+    assert.strictEqual(saved.playback.steps[0].evidence.length, 6); // at most six frames
+    assert.strictEqual(saved.playback.inputs[0].name, 'Email_Address');
+    assert.strictEqual(saved.playback.inputs[0].example, '42');
+    assert.strictEqual(saved.steps.length, 1);
+    assert.strictEqual(saved.steps[0].prompt, 'Click Save');
+  }));
+
+  test('webui automations: a recorded analysis saves as replayable steps', () => withTempHome(async () => {
+    const { normalizeAutomation } = require('../src/services/automation');
+    const { createAutomations } = require('../src/webui/automations');
+    const autos = createAutomations({ chat: { create: () => ({ id: 'c1' }) }, projects: null, broadcast() {}, getWorkspace: () => '/w' });
+
+    // What the vision pass produces goes through the same save-time gate as a
+    // hand-written spec. The spoken description ("the Save button") is stored as
+    // the accessible name on both name and target, so a replay can find it.
+    const spec = normalizeAutomation({
+      surface: 'browser',
+      url: 'https://example.com/signup',
+      steps: [
+        { action: 'go to', value: 'https://example.com/signup' },
+        { action: 'Click', role: 'button', name: 'the Save button' },
+        { action: 'fill', role: 'textbox', label: 'Email', value: 'me@example.com', input_name: 'Email' },
+      ],
+    }, { frames: [{ file: 'frame_000.png' }] });
+
+    const saved = autos.create({ name: 'Recorded sign-up', playback: spec });
+    assert.deepStrictEqual(saved.playback.steps.map((s) => s.name), [null, 'Save', 'Email']);
+    assert.deepStrictEqual(saved.playback.steps.map((s) => s.target), [null, 'Save', 'Email']);
+    assert.deepStrictEqual(saved.playback.inputs, [{ name: 'email', label: 'Email', example: 'me@example.com' }]);
+    // The stored steps seed the Cowork prompt list, so they read the same way.
+    assert.deepStrictEqual(saved.steps.map((s) => s.prompt), [
+      'Open https://example.com/signup',
+      'Click Save',
+      'Type "me@example.com" into Email',
+    ]);
+  }));
+}
+
+// ── windows: KWin window awareness ─────────────────────────────────────────
+{
+  const W = require('../src/services/windows');
+  const tools = require('../src/tools');
+  const os = require('os');
+  const path = require('path');
+  const MIN = 60 * 1000;
+
+  // Local-time timestamps so hourBucket() is timezone independent.
+  const at = (h, m = 0, day = 1) => new Date(2026, 10, day, h, m, 0, 0).getTime();
+  const span = (app, start, mins) => ({ app, start, end: start + mins * MIN });
+
+  test('windows: hourBucket splits the day into four buckets', () => {
+    assert.deepStrictEqual([at(3), at(9), at(14), at(21)].map(W.hourBucket), [0, 1, 2, 3]);
+  });
+
+  test('windows: collapseSpans drops blips and merges same-app runs', () => {
+    const t = at(9);
+    const out = W.collapseSpans([
+      span('kate', t, 5),
+      { app: 'plasmashell', start: t + 5 * MIN, end: t + 5 * MIN + 500 },
+      span('kate', t + 6 * MIN, 3),
+      span('firefox', t + 9 * MIN, 2),
+    ]);
+    assert.deepStrictEqual(out.map((s) => s.app), ['kate', 'firefox']);
+    assert.strictEqual(out[0].end, t + 9 * MIN);
+  });
+
+  test('windows: predictNext ranks the habitual next app first', () => {
+    const spans = [];
+    let t = at(9, 0, 2);
+    for (let i = 0; i < 6; i++) {
+      spans.push(span('kate', t, 10)); t += 10 * MIN;
+      spans.push(span('konsole', t, 5)); t += 5 * MIN;
+    }
+    spans.push(span('kate', t, 10)); t += 10 * MIN;
+    spans.push(span('firefox', t, 5)); t += 5 * MIN;
+    const model = W.buildModel(spans, { now: t });
+    const { predictions, evidence } = W.predictNext(model, 'kate', { when: t, k: 2 });
+    assert.strictEqual(predictions[0].app, 'konsole');
+    assert.strictEqual(predictions[1].app, 'firefox');
+    assert.ok(predictions[0].p > predictions[1].p);
+    assert.ok(predictions.every((p) => p.app !== 'kate'), 'never predicts the current app');
+    assert.ok(evidence > 6);
+  });
+
+  test('windows: predictNext prefers what happens at this time of day', () => {
+    const spans = [];
+    for (let d = 2; d <= 6; d++) {
+      spans.push(span('kate', at(9, 0, d), 30), span('konsole', at(9, 30, d), 30));
+      spans.push(span('kate', at(20, 0, d), 30), span('mpv', at(20, 30, d), 30));
+    }
+    const now = at(23, 0, 6);
+    const model = W.buildModel(spans, { now });
+    assert.strictEqual(W.predictNext(model, 'kate', { when: at(9, 0, 7) }).predictions[0].app, 'konsole');
+    assert.strictEqual(W.predictNext(model, 'kate', { when: at(20, 0, 7) }).predictions[0].app, 'mpv');
+  });
+
+  test('windows: predictNext with no history returns nothing', () => {
+    const r = W.predictNext(W.buildModel([]), 'kate');
+    assert.deepStrictEqual(r, { predictions: [], evidence: 0 });
+  });
+
+  test('windows: usage totals focused minutes per app', () => {
+    const t = at(10);
+    const u = W.usage([span('kate', t, 30), span('firefox', t + 30 * MIN, 10), span('kate', t + 40 * MIN, 20)]);
+    assert.deepStrictEqual(u.map((r) => [r.app, r.minutes, r.sessions]), [['kate', 50, 2], ['firefox', 10, 1]]);
+    assert.strictEqual(u[0].share, 0.833);
+  });
+
+  test('windows: normalizeLayout validates placements', () => {
+    assert.ok(W.normalizeLayout({}).error);
+    assert.ok(W.normalizeLayout({ placements: [{ x: 0, y: 0, w: 1, h: 1 }] }).error, 'needs id or app');
+    assert.ok(W.normalizeLayout({ placements: [{ app: 'kate', x: 0.5, y: 0, w: 0.6, h: 1 }] }).error, 'overflows');
+    assert.ok(W.normalizeLayout({ placements: [{ app: 'kate', x: 0, y: 0, w: 0.5 }] }).error, 'partial geometry');
+    const ok = W.normalizeLayout({ placements: [{ app: 'kate', x: 0, y: 0, w: 0.5, h: 1, focus: true }, { id: '{x}' }] });
+    assert.deepStrictEqual(ok.placements, [
+      { app: 'kate', focus: true, unit: 'fraction', x: 0, y: 0, w: 0.5, h: 1 },
+      { id: '{x}', focus: false },
+    ]);
+  });
+
+  test('windows: layout script places, focuses and minimizes against a fake KWin', () => {
+    const vm = require('vm');
+    const desk = { id: 'd1' };
+    const out1 = { name: 'DP-1' };
+    const mk = (id, app) => ({
+      internalId: id, resourceClass: app, caption: app, pid: 1, normalWindow: true, skipTaskbar: false,
+      output: out1, desktops: [desk], minimized: false, fullScreen: false,
+      frameGeometry: { x: 0, y: 0, width: 100, height: 100 },
+      setMaximize() { this.unmaximized = true; },
+    });
+    const kate = mk('{k}', 'kate');
+    const ff = mk('{f}', 'firefox');
+    const vlc = mk('{v}', 'vlc');
+    kate.minimized = true;
+    const sent = [];
+    const workspace = {
+      windowList: () => [kate, ff, vlc],
+      stackingOrder: [kate, ff, vlc],
+      screens: [out1],
+      currentDesktop: desk,
+      activeWindow: null,
+      clientArea: () => ({ x: 0, y: 30, width: 2000, height: 1000 }),
+      sendClientToScreen() {},
+    };
+    const layout = W.normalizeLayout({
+      placements: [
+        { app: 'kate', x: 0, y: 0, w: 0.5, h: 1, focus: true },
+        { id: '{f}', x: 0.5, y: 0, w: 0.5, h: 1 },
+      ],
+      minimizeOthers: true,
+    });
+    vm.runInNewContext(W.buildLayoutScript(layout), {
+      workspace, KWin: { MaximizeArea: 2 }, callDBus: (...a) => sent.push(JSON.parse(a[4])),
+    });
+    // Objects created inside the vm context have a foreign prototype; compare by value.
+    assert.deepStrictEqual({ ...kate.frameGeometry }, { x: 0, y: 30, width: 1000, height: 1000 });
+    assert.deepStrictEqual({ ...ff.frameGeometry }, { x: 1000, y: 30, width: 1000, height: 1000 });
+    assert.strictEqual(kate.minimized, false);
+    assert.strictEqual(vlc.minimized, true);
+    assert.strictEqual(workspace.activeWindow, kate);
+    assert.deepStrictEqual(sent.map((e) => [e.kind, e.window.id]), [['geometry', '{k}'], ['geometry', '{f}']]);
+  });
+
+  test('windows: agent tools are registered and classified', () => {
+    const names = tools.TOOLS.map((t) => t.function.name);
+    for (const n of ['window_list', 'window_usage', 'window_predict', 'window_layout', 'window_proactive', 'window_reorder', 'window_screens', 'window_pairs']) assert.ok(names.includes(n), n);
+    assert.strictEqual(tools.classifyTool('window_list', {}), 'safe');
+    assert.strictEqual(tools.classifyTool('window_layout', { placements: [] }), 'safe');
+    assert.match(tools.describeTool('window_layout', { placements: [{}, {}] }), /2 windows/);
+  });
+
+  const P = require('../src/services/windows-proactive');
+  const popts = P.defaultOptions({ mode: 'suggest' });
+
+  test('windows-proactive: prettyApp shortens app classes', () => {
+    assert.deepStrictEqual(['org.kde.konsole', 'firefox', ''].map(P.prettyApp), ['Konsole', 'Firefox', 'window']);
+  });
+
+  test('windows-proactive: alreadyVisible checks screen, minimized and overlap', () => {
+    const cur = { x: 0, y: 0, w: 1000, h: 1000, screen: 'DP-1' };
+    assert.strictEqual(P.alreadyVisible(cur, { x: 100, y: 100, w: 500, h: 500, screen: 'DP-1' }), false, 'covered');
+    assert.strictEqual(P.alreadyVisible(cur, { x: 1000, y: 0, w: 500, h: 1000, screen: 'DP-1' }), true, 'beside');
+    assert.strictEqual(P.alreadyVisible(cur, { x: 0, y: 0, w: 500, h: 500, screen: 'HDMI-1' }), true, 'other screen');
+    assert.strictEqual(P.alreadyVisible(cur, { x: 1000, y: 0, w: 500, h: 1000, screen: 'DP-1', minimized: 1 }), false, 'minimized');
+  });
+
+  test('windows-proactive: decide applies thresholds, cooldowns and mutes', () => {
+    const base = { mode: 'suggest', top: { app: 'konsole', p: 0.7 }, evidence: 10, now: 1e9, state: {}, opts: popts };
+    assert.strictEqual(P.decide(base).action, 'suggest');
+    assert.strictEqual(P.decide({ ...base, mode: 'off' }).reason, 'off');
+    assert.strictEqual(P.decide({ ...base, top: null }).reason, 'no prediction');
+    assert.strictEqual(P.decide({ ...base, evidence: 2 }).reason, 'low evidence');
+    assert.strictEqual(P.decide({ ...base, top: { app: 'x', p: 0.4 } }).reason, 'low confidence');
+    assert.strictEqual(P.decide({ ...base, state: { lastAt: 1e9 - 1000 } }).reason, 'cooldown');
+    assert.strictEqual(P.decide({ ...base, state: { pairLastAt: 1e9 - 5 * 60 * 1000 } }).reason, 'pair cooldown');
+    assert.strictEqual(P.decide({ ...base, state: { mutedPair: true } }).reason, 'muted');
+    assert.strictEqual(P.decide({ ...base, mode: 'auto' }).action, 'suggest', 'auto mode below autoP suggests');
+    assert.strictEqual(P.decide({ ...base, mode: 'auto', top: { app: 'k', p: 0.9 } }).action, 'auto');
+  });
+
+  test('windows-proactive: splitLayout clamps and focuses the right window', () => {
+    const l = P.splitLayout('a', 'b', 0.9, true);
+    assert.deepStrictEqual(l.placements.map((p) => [p.id, p.x, p.w, p.focus]), [['a', 0, 0.7, false], ['b', 0.7, 0.30000000000000004, true]]);
+    assert.ok(!W.normalizeLayout(l).error);
+    assert.strictEqual(P.restoreLayout([{ id: 'a' }]), null);
+  });
+
+  const R = require('../src/services/windows-reorder');
+
+  // Fake KWin with two screens: DP-1 landscape at 0,0 and HDMI-A-1 at 2560,0.
+  // Panel of 40px at the bottom of DP-1 only.
+  const fakeKwin = (screenDefs, winDefs, activeIdx = 0) => {
+    const vm = require('vm');
+    const desk = { id: 'd1' };
+    const screens = screenDefs.map(([name, x, y, w, h, panel = 0]) => ({ name, geo: { x, y, width: w, height: h - panel } }));
+    const byName = (n) => screens.find((s) => s.name === n);
+    const wins = winDefs.map(([id, app, scr, x, y, w, h, extra = {}]) => ({
+      internalId: id, resourceClass: app, caption: app, pid: 1, normalWindow: true, skipTaskbar: false,
+      output: byName(scr), desktops: [desk], minimized: false, fullScreen: false,
+      frameGeometry: { x, y, width: w, height: h }, setMaximize() {}, ...extra,
+    }));
+    const sent = [];
+    const raised = [];
+    const workspace = {
+      windowList: () => wins, stackingOrder: wins, screens, currentDesktop: desk,
+      activeWindow: wins[activeIdx] || null, activeScreen: wins[activeIdx] ? wins[activeIdx].output : screens[0],
+      clientArea: (_m, o) => ({ x: o.geo.x, y: o.geo.y, width: o.geo.width, height: o.geo.height }),
+      sendClientToScreen: (w, o) => { w.output = o; },
+      raiseWindow: (w) => raised.push(w.internalId),
+    };
+    const run = (src) => vm.runInNewContext(src, {
+      workspace, KWin: { MaximizeArea: 2 }, callDBus: (...a) => sent.push(JSON.parse(a[4])), Date,
+    });
+    return { wins, workspace, sent, raised, run, geo: (i) => ({ ...wins[i].frameGeometry }) };
+  };
+
+  test('windows-reorder: watcher shares its helpers and registers both shortcuts', () => {
+    const shared = W.kwinShared();
+    for (const fn of ['function describe', 'function context', 'function swapScreens', 'function sendCommand']) assert.ok(shared.includes(fn), fn);
+    assert.ok(!shared.includes('registerShortcut'), 'shared block has no side effects');
+    const main = require('fs').readFileSync(path.join(__dirname, '..', 'kwin', 'shmakk-watch', 'contents', 'code', 'main.js'), 'utf8');
+    assert.match(main, /registerShortcut\("shmakk-reorder",[\s\S]*?"Ctrl\+Alt\+;"/);
+    assert.match(main, /registerShortcut\("shmakk-swap-screens",[\s\S]*?"Ctrl\+Alt\+'"/);
+  });
+
+  test('windows-reorder: swapScreens trades windows between screens, keeping maximized ones maximized', () => {
+    const k = fakeKwin(
+      [['DP-1', 0, 0, 2560, 1440, 40], ['HDMI-A-1', 2560, 0, 1920, 1080]],
+      [
+        ['{a}', 'kate', 'DP-1', 0, 0, 1280, 1400],          // left half of DP-1
+        ['{b}', 'firefox', 'DP-1', 0, 0, 2560, 1400],       // fills DP-1 work area
+        ['{c}', 'konsole', 'HDMI-A-1', 3520, 540, 960, 540], // bottom-right quarter of HDMI
+      ],
+    );
+    k.run(`${W.kwinShared()}\nswapScreens();`);
+    assert.deepStrictEqual(k.wins.map((w) => w.output.name), ['HDMI-A-1', 'HDMI-A-1', 'DP-1']);
+    assert.deepStrictEqual(k.geo(0), { x: 2560, y: 0, width: 960, height: 1080 });
+    assert.deepStrictEqual(k.geo(1), { x: 0, y: 0, width: 2560, height: 1400 }, 'maximized geometry left to KWin');
+    assert.deepStrictEqual(k.geo(2), { x: 1280, y: 700, width: 1280, height: 700 });
+    const done = k.sent.filter((e) => e.kind === 'command');
+    assert.deepStrictEqual(done.map((e) => [e.command, e.moved, e.a, e.b]), [['swap-screens', 3, 'DP-1', 'HDMI-A-1']]);
+  });
+
+  test('windows-reorder: swapScreens with one screen reports instead of moving', () => {
+    const k = fakeKwin([['DP-1', 0, 0, 2560, 1440]], [['{a}', 'kate', 'DP-1', 0, 0, 100, 100]]);
+    k.run(`${W.kwinShared()}\nswapScreens();`);
+    assert.deepStrictEqual(k.sent.map((e) => [e.command, e.error]), [['swap-screens', 'only one screen']]);
+  });
+
+  test('windows-reorder: sendCommand ships windows, screens and the active window', () => {
+    const k = fakeKwin([['DP-1', 0, 0, 2560, 1440, 40]], [['{a}', 'kate', 'DP-1', 0, 0, 100, 100], ['{b}', 'mpv', 'DP-1', 0, 0, 100, 100]], 1);
+    k.run(`${W.kwinShared()}\nsendCommand("reorder");`);
+    const ev = k.sent[0];
+    assert.strictEqual(ev.kind, 'command');
+    assert.strictEqual(ev.command, 'reorder');
+    assert.strictEqual(ev.active, '{b}');
+    assert.deepStrictEqual(ev.screens, [{ name: 'DP-1', x: 0, y: 0, w: 2560, h: 1400 }]);
+    assert.deepStrictEqual(ev.windows.map((w) => w.app), ['kate', 'mpv']);
+  });
+
+  test('windows-reorder: layout script sizes against the target screen and raises windows', () => {
+    const k = fakeKwin(
+      [['DP-1', 0, 0, 2560, 1440, 40], ['HDMI-A-1', 2560, 0, 1920, 1080]],
+      [['{a}', 'kate', 'DP-1', 0, 0, 100, 100], ['{b}', 'firefox', 'DP-1', 0, 0, 100, 100]],
+    );
+    const layout = W.normalizeLayout({ placements: [
+      { id: '{a}', screen: 'DP-1', x: 0, y: 0, w: 1, h: 1, focus: true },
+      { id: '{b}', screen: 'HDMI-A-1', x: 0, y: 0, w: 0.5, h: 1 },
+    ] });
+    k.run(W.buildLayoutScript(layout));
+    assert.strictEqual(k.wins[1].output.name, 'HDMI-A-1');
+    assert.deepStrictEqual(k.geo(1), { x: 2560, y: 0, width: 960, height: 1080 });
+    assert.deepStrictEqual(k.raised, ['{b}']);
+    assert.strictEqual(k.workspace.activeWindow, k.wins[0]);
+  });
+
+  const ctxWin = (id, app, screen, geo, extra = {}) => ({ id, app, screen, geo, minimized: false, fullScreen: false, ...extra });
+  const scr1 = [{ name: 'DP-1', x: 0, y: 0, w: 2000, h: 1000 }];
+  const scr2 = [...scr1, { name: 'HDMI-A-1', x: 2000, y: 0, w: 1000, h: 1000 }];
+  const g0 = { x: 0, y: 0, w: 2000, h: 1000 };
+
+  test('windows-reorder: rankWindows puts active first, then recent focus and predicted app', () => {
+    const now = 10 * 60 * 60 * 1000;
+    const ctx = { active: 'a', windows: [ctxWin('a', 'kate', 'DP-1', g0), ctxWin('b', 'firefox', 'DP-1', g0), ctxWin('c', 'konsole', 'DP-1', g0), ctxWin('d', 'mpv', 'DP-1', g0, { fullScreen: true })] };
+    const spans = [{ windowId: 'b', start: now - 30 * MIN, end: now - 25 * MIN }, { windowId: 'c', start: now - 10 * MIN, end: now - 8 * MIN }];
+    const ranked = R.rankWindows(ctx, spans, [], now);
+    assert.deepStrictEqual(ranked.map((r) => r.win.id), ['a', 'b', 'c'], 'fullscreen excluded; 5 min 25 ago beats 2 min 8 ago');
+    const withPred = R.rankWindows(ctx, spans, [{ app: 'konsole', p: 0.9 }], now);
+    assert.deepStrictEqual(withPred.map((r) => r.win.id), ['a', 'c', 'b']);
+    assert.strictEqual(R.relevantCount(ranked), 3);
+    assert.strictEqual(R.relevantCount(R.rankWindows(ctx, [], [], now)), 2, 'no history: active plus one');
+  });
+
+  test('windows-reorder: candidates fit the relevant count on one screen', () => {
+    const ctx = { active: 'a', screens: scr1, windows: ['a', 'b', 'c', 'd'].map((id) => ctxWin(id, id, 'DP-1', g0)) };
+    const ranked = R.rankWindows(ctx, [], [], 0);
+    assert.deepStrictEqual(R.candidates(ranked, ctx, 2).map((c) => c.kind), ['split', 'halves', 'focus', 'main-stack', 'columns', 'grid']);
+    assert.deepStrictEqual(R.candidates(ranked, ctx, 3).map((c) => c.kind).slice(0, 3), ['main-stack', 'columns', 'split']);
+    const c = R.candidates(ranked, ctx, 2)[0];
+    assert.deepStrictEqual(c.placements.map((p) => [p.id, p.x, p.w, p.focus]), [['a', 0, 0.6, true], ['b', 0.6, 0.4, false]]);
+    for (const k of R.candidates(ranked, ctx, 4)) assert.ok(!W.normalizeLayout({ placements: k.placements }).error, k.kind);
+  });
+
+  test('windows-reorder: two screens prefer dual layouts; portrait screens stack', () => {
+    const ctx = { active: 'a', screens: scr2, windows: ['a', 'b', 'c'].map((id) => ctxWin(id, id, 'DP-1', g0)) };
+    const ranked = R.rankWindows(ctx, [], [], 0);
+    const cands = R.candidates(ranked, ctx, 2);
+    assert.deepStrictEqual(cands.slice(0, 3).map((c) => c.kind), ['span', 'here-split', 'here-halves']);
+    assert.deepStrictEqual(cands[0].placements.map((p) => [p.id, p.screen]), [['a', 'DP-1'], ['b', 'HDMI-A-1']]);
+    const portrait = { ...ctx, screens: [{ name: 'DP-1', x: 0, y: 0, w: 1000, h: 2000 }] };
+    const split = R.candidates(R.rankWindows(portrait, [], [], 0), portrait, 2)[0];
+    assert.deepStrictEqual(split.placements.map((p) => [p.x, p.y, p.w, p.h]), [[0, 0, 1, 0.6], [0, 0.6, 1, 0.4]]);
+  });
+
+  test('windows-reorder: matchesCurrent detects an arrangement already in place', () => {
+    const ctx = { screens: scr1, windows: [ctxWin('a', 'kate', 'DP-1', { x: 0, y: 0, w: 1200, h: 1000 }), ctxWin('b', 'ff', 'DP-1', { x: 1200, y: 0, w: 800, h: 1000 })] };
+    const split = [{ id: 'a', screen: 'DP-1', x: 0, y: 0, w: 0.6, h: 1 }, { id: 'b', screen: 'DP-1', x: 0.6, y: 0, w: 0.4, h: 1 }];
+    assert.strictEqual(R.matchesCurrent(split, ctx), true);
+    assert.strictEqual(R.matchesCurrent([{ ...split[0], w: 0.5 }, split[1]], ctx), false);
+  });
+
+  test('windows-reorder: learned preferences reorder candidates', () => {
+    const cands = [{ kind: 'split' }, { kind: 'halves' }, { kind: 'focus' }];
+    assert.deepStrictEqual(R.applyPrefs(cands, { app: new Map(), gen: new Map() }).map((c) => c.kind), ['split', 'halves', 'focus']);
+    assert.deepStrictEqual(R.applyPrefs(cands, { app: new Map([['halves', 1]]), gen: new Map([['split', -1]]) }).map((c) => c.kind), ['halves', 'split', 'focus']);
+  });
+
+  const Screens = require('../src/services/windows-screens');
+  const PXs = require('../src/services/windows-pairs');
+
+  test('windows-screens: stored priority decides main and secondary', () => {
+    const scr = [
+      { name: 'DP-1', enabled: true, width: 3440, height: 1440, scale: 1, x: 0, y: 0, orientation: 'landscape' },
+      { name: 'HDMI-A-1', enabled: true, width: 1920, height: 1080, scale: 1, x: 3440, y: 0, orientation: 'landscape' },
+      { name: 'DP-2', enabled: false, width: 1000, height: 1000, scale: 1 },
+      { name: 'DP-3', enabled: true, width: 1080, height: 1920, scale: 1.5, x: -1080, y: 0, orientation: 'portrait' },
+    ];
+    const snap = Screens.snapshot(scr, ['HDMI-A-1', 'DP-1', 'missing']);
+    assert.deepStrictEqual(snap.order, ['HDMI-A-1', 'DP-1', 'DP-3'], 'stored order first, unknown names ignored, disabled screens skipped');
+    assert.deepStrictEqual(snap.screens.map((s) => s.label).slice(0, 2), ['Main', 'Secondary']);
+    assert.strictEqual(snap.screens[0].primary, true);
+    assert.strictEqual(snap.screens[2].orientation, 'portrait');
+    assert.strictEqual(Screens.mainScreen(['HDMI-A-1', 'DP-1'], scr), 'HDMI-A-1');
+    assert.strictEqual(Screens.mainScreen([], scr), null, 'no stored order: no opinion');
+  });
+
+  test('windows-pairs: alternating apps outrank a one-off block', () => {
+    const t0 = 1700000000000;
+    const spans = [];
+    let t = t0;
+    for (let i = 0; i < 8; i++) {
+      spans.push({ app: 'kate', start: t, end: t + 3 * MIN });
+      t += 3 * MIN;
+      spans.push({ app: 'konsole', start: t, end: t + 2 * MIN });
+      t += 2 * MIN;
+    }
+    spans.push({ app: 'kate', start: t, end: t + 2 * MIN });
+    t += 2 * MIN;
+    spans.push({ app: 'firefox', start: t, end: t + 90 * MIN });
+    t += 90 * MIN;
+    spans.push({ app: 'kate', start: t, end: t + 2 * MIN });
+    const st = PXs.buildPairStats(spans, { now: t + 30 * MIN });
+    assert.strictEqual(st.spans, spans.length);
+    const comp = PXs.companions(st, 'kate', { k: 3, minShare: 0.1, minCount: 2 });
+    assert.strictEqual(comp[0].app, 'konsole');
+    assert.ok(PXs.shareOf(st, 'kate', 'konsole') > PXs.shareOf(st, 'kate', 'firefox'));
+    assert.ok(!PXs.companions(st, 'kate', { minCount: 100 }).length, 'count floor drops thin evidence');
+    const rows = PXs.report(st, { minShare: 0.1, minCount: 2 });
+    assert.deepStrictEqual(rows[0].a === 'kate' ? [rows[0].a, rows[0].b] : [rows[0].b, rows[0].a], ['kate', 'konsole']);
+  });
+
+  test('windows-pairs: short blips and single switches are ignored', () => {
+    const t0 = 1700000000000;
+    const spans = [
+      { app: 'kate', start: t0, end: t0 + 5 * MIN },
+      { app: 'mpv', start: t0 + 5 * MIN, end: t0 + 5 * MIN + 500 },
+      { app: 'kate', start: t0 + 5 * MIN + 500, end: t0 + 10 * MIN },
+    ];
+    const st = PXs.buildPairStats(spans, { now: t0 + 20 * MIN });
+    assert.strictEqual(st.pairs.size, 0, 'sub-second blip collapses into kate');
+    assert.strictEqual(PXs.shareOf(st, 'kate', 'mpv'), 0);
+  });
+
+  test('windows-reorder: screen priority decides which screen leads', () => {
+    const ctx = { active: 'a', activeScreen: 'HDMI-A-1', screens: scr2, windows: ['a', 'b'].map((id) => ctxWin(id, id, 'HDMI-A-1', g0)) };
+    const ranked = R.rankWindows(ctx, [], [], 0);
+    assert.deepStrictEqual(R.pickScreens(ctx, ranked, []).map((s) => s.name), ['HDMI-A-1', 'DP-1'], 'no stored order: active screen first');
+    assert.deepStrictEqual(R.pickScreens(ctx, ranked, ['DP-1', 'HDMI-A-1']).map((s) => s.name), ['DP-1', 'HDMI-A-1']);
+    const cand = R.candidates(ranked, ctx, 2, ['DP-1', 'HDMI-A-1'])[0];
+    assert.deepStrictEqual(cand.placements.map((p) => [p.id, p.screen]), [['a', 'DP-1'], ['b', 'HDMI-A-1']]);
+  });
+
+  test('windows-reorder: the companion is lifted to second place and scores higher', () => {
+    const now = 10 * 60 * 60 * 1000;
+    const ctx = { active: 'a', screens: scr1, windows: [ctxWin('a', 'kate', 'DP-1', g0), ctxWin('b', 'firefox', 'DP-1', g0), ctxWin('c', 'konsole', 'DP-1', g0)] };
+    const spans = [{ windowId: 'b', start: now - 30 * MIN, end: now - 25 * MIN }, { windowId: 'c', start: now - 10 * MIN, end: now - 8 * MIN }];
+    const pairs = {
+      pairs: new Map([[PXs.pairKey('kate', 'konsole'), { strength: 12, count: 9, lastAt: now }], [PXs.pairKey('kate', 'firefox'), { strength: 1, count: 1, lastAt: now }]]),
+      out: new Map([['kate', 13], ['konsole', 12], ['firefox', 1]]),
+    };
+    const ranked = R.rankWindows(ctx, spans, [], now);
+    assert.deepStrictEqual(ranked.map((r) => r.win.id), ['a', 'b', 'c'], 'without pairs, focus time wins');
+    assert.deepStrictEqual(R.rankWindows(ctx, spans, [], now, pairs).map((r) => r.win.id), ['a', 'c', 'b'], 'companion bonus');
+    assert.deepStrictEqual(R.partnerFirst(ranked, pairs).map((r) => r.win.id), ['a', 'c', 'b']);
+    assert.deepStrictEqual(R.partnerFirst(ranked, null).map((r) => r.win.id), ['a', 'b', 'c'], 'no pair data, no change');
+  });
+
+  if (W.isAvailable()) {
+    const tmpDb = () => path.join(os.tmpdir(), `shmakk-windows-test-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
+    const win = (id, app) => ({ id, app, title: `${app} title`, screen: 'DP-1', desktop: 'd1', geo: { x: 0, y: 0, w: 10, h: 10 } });
+
+    test('windows: recordEvent turns focus events into spans', () => {
+      const db = W.openDb(tmpDb());
+      try {
+        const t = at(9);
+        W.recordEvent(db, { kind: 'snapshot', t, windows: [win('a', 'kate'), win('b', 'firefox')], active: 'a' });
+        W.recordEvent(db, { kind: 'focus', t: t + 5 * MIN, window: win('b', 'firefox') });
+        W.recordEvent(db, { kind: 'focus', t: t + 5 * MIN + 10, window: win('b', 'firefox') });
+        W.recordEvent(db, { kind: 'close', t: t + 8 * MIN, window: { id: 'b' } });
+        const spans = W.loadSpans(db, 0, t + 9 * MIN);
+        assert.deepStrictEqual(spans.map((s) => [s.app, (s.end - s.start) / MIN]), [['kate', 5], ['firefox', 3]]);
+        assert.deepStrictEqual(W.listOpenWindows(db).map((w) => w.id), ['a']);
+      } finally {
+        W.closeDb(db);
+      }
+    });
+
+    const proactiveFixture = () => {
+      const db = W.openDb(tmpDb());
+      const M = 60 * 1000;
+      const now = Date.now();
+      const w = (id, app, geo) => ({ id, app, title: app, screen: 'DP-1', geo });
+      const full = { x: 0, y: 0, w: 1000, h: 1000 };
+      let t = now - 12 * 60 * M;
+      W.recordEvent(db, { kind: 'snapshot', t, windows: [w('a', 'kate', full), w('b', 'konsole', full)], active: 'a' });
+      for (let i = 0; i < 8; i++) {
+        t += 20 * M; W.recordEvent(db, { kind: 'focus', t, window: w('b', 'konsole', full) });
+        t += 5 * M; W.recordEvent(db, { kind: 'focus', t, window: w('a', 'kate', full) });
+      }
+      return { db, now, current: w('a', 'kate', full) };
+    };
+
+    test('windows-proactive: suggestion accepted as side by side applies a split', async () => {
+      const { db, now, current } = proactiveFixture();
+      try {
+        const applied = [];
+        const notes = [];
+        const engine = P.createProactive({
+          db, W: { ...W, applyLayout: async (l) => { applied.push(l); return { ok: true }; } },
+          opts: { mode: 'suggest' }, notify: async (n) => { notes.push(n); return { action: 'split' }; },
+          inhibited: async () => false, now: () => now,
+        });
+        const r = await engine.check(current);
+        assert.deepStrictEqual(r, { action: 'suggest', outcome: 'split' });
+        assert.match(notes[0].summary, /Konsole/);
+        assert.deepStrictEqual(applied[0].placements.map((p) => p.id), ['a', 'b']);
+        assert.deepStrictEqual(P.stats(db, 0), { split: 1 });
+        assert.strictEqual((await engine.check(current)).reason, 'cooldown');
+      } finally {
+        W.closeDb(db);
+      }
+    });
+
+    test('windows-proactive: three dismissals mute the pair, unmute clears it', async () => {
+      const { db, now, current } = proactiveFixture();
+      try {
+        let clock = now;
+        const engine = P.createProactive({
+          db, W: { ...W, applyLayout: async () => ({ ok: true }) },
+          opts: { mode: 'suggest' }, notify: async () => ({ action: null }),
+          inhibited: async () => false, now: () => clock,
+        });
+        for (let i = 0; i < 3; i++) {
+          assert.strictEqual((await engine.check(current)).outcome, 'dismissed');
+          clock += 60 * 60 * 1000;
+        }
+        assert.strictEqual((await engine.check(current)).reason, 'muted');
+        assert.deepStrictEqual(P.muted(db), ['kate -> konsole']);
+        P.unmuteAll(db);
+        assert.strictEqual((await engine.check(current)).action, 'suggest');
+      } finally {
+        W.closeDb(db);
+      }
+    });
+
+    test('windows-proactive: auto mode arranges and Undo restores geometry', async () => {
+      const { db, now, current } = proactiveFixture();
+      try {
+        const applied = [];
+        const engine = P.createProactive({
+          db, W: { ...W, applyLayout: async (l) => { applied.push(l); return { ok: true }; } },
+          opts: { mode: 'auto', autoP: 0.5 }, notify: async () => ({ action: 'undo' }),
+          inhibited: async () => false, now: () => now,
+        });
+        assert.deepStrictEqual(await engine.check(current), { action: 'auto', outcome: 'undone' });
+        assert.strictEqual(applied.length, 2);
+        assert.deepStrictEqual(applied[1].placements.map((p) => [p.id, p.unit, p.w]), [['a', 'px', 1000], ['b', 'px', 1000]]);
+        assert.deepStrictEqual(P.stats(db, 0), { undone: 1 });
+      } finally {
+        W.closeDb(db);
+      }
+    });
+
+    test('windows-proactive: quiet under do not disturb and when mode is off', async () => {
+      const { db, now, current } = proactiveFixture();
+      try {
+        const mk = (inh) => P.createProactive({
+          db, W: { ...W, applyLayout: async () => ({ ok: true }) }, opts: { mode: 'suggest' },
+          notify: async () => { throw new Error('should not notify'); }, inhibited: async () => inh, now: () => now,
+        });
+        assert.strictEqual((await mk(true).check(current)).reason, 'do not disturb');
+        W.setKv(db, 'proactiveMode', 'off');
+        assert.strictEqual((await mk(false).check(current)).reason, 'off');
+      } finally {
+        W.closeDb(db);
+      }
+    });
+
+    test('windows-reorder: pressing again cycles layouts and teaches preferences', async () => {
+      const db = W.openDb(tmpDb());
+      try {
+        let clock = 50 * 24 * 60 * 60 * 1000;
+        const applied = [];
+        const r = R.createReorder({
+          db, W: { ...W, applyLayout: async (l) => { applied.push(l); return { ok: true }; } },
+          notify: null, now: () => clock, cycleMs: 60 * 60 * 1000,
+        });
+        const ctx = { kind: 'command', command: 'reorder', active: 'a', screens: scr1,
+          windows: [ctxWin('a', 'kate', 'DP-1', g0), ctxWin('b', 'firefox', 'DP-1', g0)] };
+        const k1 = await r.handle(ctx);
+        clock += 1000;
+        const k2 = await r.handle(ctx);
+        clock += 1000;
+        const k3 = await r.handle(ctx);
+        assert.deepStrictEqual([k1.kind, k2.kind, k3.kind], ['split', 'halves', 'focus']);
+        assert.strictEqual(applied.length, 3);
+        clock += 1000;
+        assert.strictEqual((await r.handle(ctx)).kind, 'split', 'wraps around');
+        const { appKey } = R.keysFor(R.rankWindows(ctx, [], [], 0), 2, 1);
+        const prefs = R.loadPrefs(db, appKey);
+        assert.deepStrictEqual([prefs.get('split'), prefs.get('halves'), prefs.get('focus')], [-1, -1, -1]);
+        // Keep 'split' (next press comes after the cycle window): it gets rewarded.
+        clock += 2 * 60 * 60 * 1000;
+        await r.handle(ctx);
+        assert.strictEqual(R.loadPrefs(db, appKey).get('split'), 0);
+        r.stop();
+      } finally {
+        W.closeDb(db);
+      }
+    });
+
+    test('windows-reorder: skips the layout that is already on screen', async () => {
+      const db = W.openDb(tmpDb());
+      try {
+        const r = R.createReorder({ db, W: { ...W, applyLayout: async () => ({ ok: true }) }, notify: null, now: () => 1e12 });
+        const ctx = { kind: 'command', command: 'reorder', active: 'a', screens: scr1, windows: [
+          ctxWin('a', 'kate', 'DP-1', { x: 0, y: 0, w: 1200, h: 1000 }), ctxWin('b', 'firefox', 'DP-1', { x: 1200, y: 0, w: 800, h: 1000 })] };
+        assert.strictEqual((await r.handle(ctx)).kind, 'halves');
+        assert.deepStrictEqual(await r.handle({ kind: 'command', command: 'swap-screens', error: 'only one screen' }), { action: 'none', reason: 'only one screen' });
+        r.stop();
+      } finally {
+        W.closeDb(db);
+      }
+    });
+  }
+}
 
 (async () => {
   let pass = 0, fail = 0;

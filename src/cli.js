@@ -60,6 +60,9 @@ function parseArgs(argv) {
     shell: null,
     browserDaemon: false,
     browserDaemonPort: null,
+    // windows-daemon subcommand; remaining args go to src/cli/windowsDaemon.js
+    windowsDaemon: false,
+    windowsDaemonArgs: [],
     // connect-browser subcommand
     connectBrowser: false,
     connectBrowserPort: null,
@@ -228,6 +231,11 @@ function parseArgs(argv) {
             break;
           }
         }
+        break;
+      case 'windows-daemon':
+        opts.windowsDaemon = true;
+        opts.windowsDaemonArgs = argv.slice(i + 1);
+        i = argv.length;
         break;
       default: opts.unknown.push(a);
     }
@@ -542,6 +550,13 @@ HELP_SECTIONS.mcp = `═══════════════════�
     shmakk connect-browser --port 9222     connect to specific port
     shmakk connect-browser --status        show connection status
     shmakk connect-browser --disconnect    disconnect
+
+  Desktop window awareness (KDE Plasma, docs/windows.md):
+    shmakk windows-daemon --install-kwin   install the KWin watcher script
+    shmakk windows-daemon                  record window focus and layout
+    shmakk windows-daemon --status         store and daemon status
+  Tools: window_list, window_usage, window_predict, window_layout,
+  window_proactive (suggestions: shmakk windows-daemon --proactive auto).
 
   shmakk --mcp-status              Show configured servers and discovered tools
 `;

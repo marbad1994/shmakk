@@ -94,6 +94,11 @@ async function main() {
     ]));
   }
 
+  if (opts.windowsDaemon) {
+    const { main: runWindowsDaemon } = require('./cli/windowsDaemon');
+    process.exit(await runWindowsDaemon(opts.windowsDaemonArgs));
+  }
+
   if (opts.help) {
     process.stdout.write(resolveHelp(opts.helpCategory));
     process.exit(0);

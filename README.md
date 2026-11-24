@@ -282,6 +282,50 @@ shmakk connect-browser                 # auto-detect and connect to CDP
 shmakk connect-browser --port 9222     # specific port
 ```
 
+## Recorded automations
+
+A screen recording plus your narration becomes a replayable spec: an ordered list of actions, each naming the control it acted on the way a screen reader does.
+
+```bash
+shmakk show2plan clip.mp4 --automation
+```
+
+A step stores a role and an accessible name, never a guessed selector. Spoken descriptions are normalized to the name that is actually on screen, because the two have to agree for the step to resolve:
+
+| You say | The step stores |
+|---|---|
+| `the Save button` | `Save` |
+| `a Save button` | `Save` |
+| `the Netherlands` (no role given) | `the Netherlands` |
+| `https://example.com/the-save-button` | unchanged |
+
+At replay time the browser backend tries role plus exact name, then role plus substring, then label, placeholder, visible text, and CSS only if the spec supplied a selector. The desktop backend scores elements from the accessibility tree: exact name, then name containment, then role, then application. A failed step stops the run rather than clicking something plausible.
+
+Typed and selected values become inputs, so one recording replays over a list with the recorded text as the default. Steps that could not be mapped, and clicks that name no control, are kept and reported in `warnings` for a person to fix; they are never guessed into an action.
+
+→ Full reference: [docs/automations.md](docs/automations.md). Migrating a spec written before names were normalized: [docs/migration-guide.md](docs/migration-guide.md).
+
+## Desktop window awareness (KDE Plasma)
+
+On Plasma the agent can see your windows, arrange them, and learn what you keep open together.
+
+```bash
+shmakk windows-daemon --install-kwin   # one-time: install the KWin watcher script
+shmakk windows-daemon                  # record focus and layout changes
+shmakk windows-daemon --status         # what is stored
+```
+
+Inside a session: `arrange my windows`, `put the terminal next to firefox`, `which apps do I use together`.
+`Ctrl+Alt+;` cycles layouts without the model: halves, main and side, one per screen when you use
+two. Screens have a priority order, so the window you are working in lands on your main screen even
+when you trigger a reorder from the other one.
+
+The tools behind it are `window_list`, `window_usage`, `window_predict`, `window_layout`,
+`window_reorder`, `window_screens`, `window_pairs` and `window_proactive` (opt-in suggestions,
+`shmakk windows-daemon --proactive suggest`).
+
+→ Full reference: [docs/windows.md](docs/windows.md)
+
 ## Remote SSH
 
 The agent can run commands and transfer files on remote hosts via SSH. Configure hosts in `.shmakk/hosts.json` (per-project) or `~/.config/shmakk/hosts.json` (global):

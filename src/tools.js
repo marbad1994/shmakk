@@ -13,6 +13,7 @@ const { recordEdit } = require('./edit-tracker');
 const { isImagePath, mimeForFile, normalizeImage } = require('./images');
 const { appendMemory } = require('./memory');
 const { isMutationTool, hashArgs } = require('./guard');
+const windows = require('./services/windows');
 const https = require('https');
 const http = require('http');
 const os = require('os');
@@ -345,6 +346,8 @@ const TOOLS = [
       },
     },
   }},
+  // Desktop window awareness (KDE Plasma): src/services/windows.js
+  ...windows.TOOL_DEFS,
 ];
 
 // Tool safety classification.
@@ -371,6 +374,7 @@ function classifyTool(name, args, mcpManager) {
   if (name === 'browser') return classifyBrowserCommand(args);
   if (name === 'mobile') return classifyMobileCommand(args);
   if (name === 'electron') return classifyElectronCommand(args);
+  if (windows.TOOL_NAMES.has(name)) return windows.classifyWindowsTool(name, args);
   if (name === 'remember') return 'safe';
   if (name === 'image_gen') return 'unsafe';       // external API call, costs money
   if (name === 'tts_generate') return 'safe';       // local-only, no network
@@ -394,6 +398,7 @@ function describeTool(name, args, mcpManager) {
   if (name === 'fetch_url') return `fetch ${args.url}`;
   if (name === 'remember') return `remember [${args.scope || 'workspace'}/${args.category || 'Notes'}]: ${(args.fact || '').slice(0, 100)}`;
   if (name === 'deliver_file') return `deliver ${args.name || 'file'}`;
+  if (windows.TOOL_NAMES.has(name)) return windows.describeWindowsTool(name, args);
   if (name === 'browser') {
     const cmd = args.command || '';
     if (cmd === 'show') return `browser show ${args.url || ''}`;
@@ -637,6 +642,9 @@ async function dispatchTool(name, args, roots, confirmTool, signal, mcpManager, 
   }
   if (name === 'electron') {
     return await dispatchElectron(args);
+  }
+  if (windows.TOOL_NAMES.has(name)) {
+    return await windows.dispatchWindows(name, args);
   }
   if (name === 'remember') {
     const r = appendMemory({

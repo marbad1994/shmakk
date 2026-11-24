@@ -1,0 +1,14 @@
+{
+  "KPlugin": {
+    "Id": "shmakk-watch",
+    "Name": "shmakk window watcher",
+    "Description": "Reports window events to shmakk over D-Bus and adds reorder and swap-screen shortcuts",
+    "Authors": [{ "Name": "marcusb" }],
+    "License": "MIT",
+    "Version": "0.3.0",
+    "EnabledByDefault": false
+  },
+  "X-Plasma-API": "javascript",
+  "X-Plasma-MainScript": "code/main.js",
+  "KPackageStructure": "KWin/Script"
+}
