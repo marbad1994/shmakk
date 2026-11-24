@@ -3,11 +3,13 @@
 //
 // Needs the optional dependencies dbus-next and better-sqlite3.
 
+const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
 const W = require('../services/windows');
 const P = require('../services/windows-proactive');
 const R = require('../services/windows-reorder');
+const T = require('../services/windows-tray');
 
 const KWIN_PACKAGE = path.join(__dirname, '..', '..', 'kwin', 'shmakk-watch');
 const PLUGIN_ID = 'shmakk-watch';
@@ -19,6 +21,9 @@ Usage:
   shmakk windows-daemon --proactive M   suggestions: off | suggest | auto
   shmakk windows-daemon --install-kwin  install and enable the KWin watcher
   shmakk windows-daemon --status        show store and daemon status
+  shmakk windows-daemon --no-tray       skip the panel indicator
+  shmakk windows-daemon --tray-check    is the indicator on the panel?
+  shmakk windows-daemon --install-autostart
   shmakk windows-daemon --reorder       same as Ctrl+Alt+; (daemon must run)
   shmakk windows-daemon --swap-screens  same as Ctrl+Alt+'
 
@@ -31,6 +36,11 @@ Proactive suggestions (default: suggest) fire after you stay in a window for
 SHMAKK_WINDOWS_DWELL_SEC (30) when the next-app prediction reaches
 SHMAKK_WINDOWS_MIN_P (0.6); auto mode arranges at SHMAKK_WINDOWS_AUTO_P (0.8).
 The agent can change the mode at runtime with the window_proactive tool.
+
+The indicator is a StatusNotifierItem in the Plasma panel: cycle the layout,
+swap screens, pick the suggestion mode, focus an open window, quit. Turn it
+off with --no-tray or SHMAKK_WINDOWS_TRAY=0. --install-autostart writes
+~/.config/autostart/shmakk-windows.desktop so it starts with the session.
 `;
 
 function run(cmd, args) {
@@ -65,6 +75,59 @@ async function installKwin() {
   return 0;
 }
 
+const AUTOSTART = path.join(process.env.HOME || '', '.config', 'autostart', 'shmakk-windows.desktop');
+
+function autostartEntry() {
+  const bin = path.join(__dirname, '..', '..', 'bin', 'shmakk.js');
+  return [
+    '[Desktop Entry]',
+    'Type=Application',
+    'Name=shmakk windows',
+    'Comment=Record window focus and show the windows indicator',
+    `Exec="${process.execPath}" "${bin}" windows-daemon`,
+    'Terminal=false',
+    'X-KDE-autostart-after=panel',
+    'X-GNOME-Autostart-enabled=true',
+    '',
+  ].join('\n');
+}
+
+async function installAutostart() {
+  const dir = path.dirname(AUTOSTART);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(AUTOSTART, autostartEntry());
+  } catch (e) {
+    process.stderr.write(`[shmakk windows] could not write ${AUTOSTART}: ${e.message}\n`);
+    return 1;
+  }
+  process.stdout.write(`[shmakk windows] wrote ${AUTOSTART}\n`);
+  process.stdout.write('[shmakk windows] it starts with the next login; run `shmakk windows-daemon` now to start it here\n');
+  return 0;
+}
+
+async function trayCheck() {
+  let dbus;
+  try {
+    dbus = require('dbus-next');
+  } catch {
+    process.stderr.write('[shmakk windows] dbus-next is not installed. Run: npm install dbus-next\n');
+    return 1;
+  }
+  const bus = dbus.sessionBus();
+  try {
+    let expected = null;
+    if (W.isAvailable()) {
+      const db = W.getDB();
+      if (db) { expected = W.getKv(db, 'trayItem'); W.closeDb(db); }
+    }
+    for (const line of await T.describeTray(bus, dbus.Message, expected)) process.stdout.write(`${line}\n`);
+  } finally {
+    bus.disconnect();
+  }
+  return 0;
+}
+
 async function status() {
   const running = await W.daemonRunning();
   process.stdout.write(`daemon:  ${running ? 'running' : 'not running'}\n`);
@@ -88,7 +151,7 @@ async function status() {
   return 0;
 }
 
-async function serve(mode) {
+async function serve(mode, options = {}) {
   const log = (s) => process.stdout.write(`[shmakk windows] ${s}\n`);
   let dbus;
   try {
@@ -126,6 +189,7 @@ async function serve(mode) {
         if (W.recordEvent(db, ev)) {
           events++;
           engine.onEvent(ev);
+          if (tray) tray.refresh();
         }
       } catch (e) {
         if (process.env.SHMAKK_DEBUG) process.stderr.write(`[shmakk windows] ${e.message}\n`);
@@ -144,6 +208,46 @@ async function serve(mode) {
   }
   log(`listening on ${W.BUS_NAME}, store ${W.defaultDbPath()}, proactive ${engine.mode()}`);
 
+  // The panel indicator reads this synchronously on every menu rebuild, so it
+  // stays cheap: open windows from the store, screen names from the config.
+  const trayState = () => {
+    let windows = [];
+    try {
+      windows = W.listOpenWindows(db).slice(0, 8).map((w) => ({ id: w.id, app: P.prettyApp(w.app) }));
+    } catch {}
+    let names = [];
+    try {
+      const cfg = W.Screens.readConfig();
+      if (Array.isArray(cfg.order) && cfg.order.length) names = cfg.order;
+    } catch {}
+    if (!names.length) names = [...new Set(windows.map((w) => w.screen).filter(Boolean))];
+    const stored = W.getKv(db, 'proactiveMode');
+    return {
+      mode: P.MODES.includes(stored) ? stored : engine.mode(),
+      windows,
+      screens: names.map((name) => ({ name, enabled: true })),
+      muted: P.muted(db),
+      daemon: true,
+    };
+  };
+
+  const wantTray = options.tray !== false && process.env.SHMAKK_WINDOWS_TRAY !== '0';
+  let tray = null;
+  if (wantTray) {
+    try {
+      tray = await T.startTray({
+        bus, dbus, db, W, P, reorder,
+        getState: trayState,
+        log,
+        onQuit: () => shutdown('tray'),
+      });
+    } catch (e) {
+      log(`tray: could not start (${e.message})`);
+      tray = null;
+    }
+    if (tray) W.setKv(db, 'trayItem', tray.name);
+  }
+
   try {
     await W.requestSnapshot();
   } catch (e) {
@@ -156,8 +260,12 @@ async function serve(mode) {
   const pruneTimer = setInterval(() => { try { W.prune(db); } catch {} }, 6 * 60 * 60 * 1000);
   pruneTimer.unref();
 
-  const shutdown = () => {
-    log('shutting down');
+  const shutdown = (why) => {
+    log(why ? `shutting down (${why})` : 'shutting down');
+    if (tray) {
+      tray.stop();
+      try { W.setKv(db, 'trayItem', ''); } catch {}
+    }
     engine.stop();
     reorder.stop();
     try { W.closeDangling(db); } catch {}
@@ -165,8 +273,8 @@ async function serve(mode) {
     bus.disconnect();
     process.exit(0);
   };
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
   return new Promise(() => {});
 }
 
@@ -175,6 +283,11 @@ async function main(argv = process.argv.slice(2)) {
   if (args.includes('--help') || args.includes('-h')) { process.stdout.write(HELP); return 0; }
   if (args.includes('--install-kwin')) return installKwin();
   if (args.includes('--status')) return status();
+  if (args.includes('--tray-check')) return trayCheck();
+  if (args.includes('--install-autostart')) return installAutostart();
+  const tray = !args.includes('--no-tray');
+  const noTray = args.indexOf('--no-tray');
+  if (noTray >= 0) args.splice(noTray, 1);
   for (const cmd of W.COMMANDS) {
     if (!args.includes(`--${cmd}`)) continue;
     if (cmd === 'reorder' && !(await W.daemonRunning())) {
@@ -205,7 +318,7 @@ async function main(argv = process.argv.slice(2)) {
     process.stderr.write(`[shmakk windows] unknown option: ${unknown}\n${HELP}`);
     return 2;
   }
-  return serve(mode);
+  return serve(mode, { tray });
 }
 
 if (require.main === module) {
