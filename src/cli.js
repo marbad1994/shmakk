@@ -63,6 +63,8 @@ function parseArgs(argv) {
     // windows-daemon subcommand; remaining args go to src/cli/windowsDaemon.js
     windowsDaemon: false,
     windowsDaemonArgs: [],
+    screensWidget: false,
+    screensWidgetArgs: [],
     // connect-browser subcommand
     connectBrowser: false,
     connectBrowserPort: null,
@@ -235,6 +237,11 @@ function parseArgs(argv) {
       case 'windows-daemon':
         opts.windowsDaemon = true;
         opts.windowsDaemonArgs = argv.slice(i + 1);
+        i = argv.length;
+        break;
+      case 'screens':
+        opts.screensWidget = true;
+        opts.screensWidgetArgs = argv.slice(i + 1);
         i = argv.length;
         break;
       default: opts.unknown.push(a);
@@ -555,6 +562,7 @@ HELP_SECTIONS.mcp = `═══════════════════�
     shmakk windows-daemon --install-kwin   install the KWin watcher script
     shmakk windows-daemon                  record window focus and layout
     shmakk windows-daemon --status         store and daemon status
+    shmakk screens                          click screens into a priority order
   Tools: window_list, window_usage, window_predict, window_layout,
   window_proactive (suggestions: shmakk windows-daemon --proactive auto).
 

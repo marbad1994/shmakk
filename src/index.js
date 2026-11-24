@@ -94,6 +94,14 @@ async function main() {
     ]));
   }
 
+  if (opts.screensWidget) {
+    const { openScreensWidget } = require('./services/windows-screens-ui');
+    const portArg = opts.screensWidgetArgs.find((a) => a.startsWith('--debug-port='));
+    const res = openScreensWidget({ remoteDebuggingPort: portArg ? portArg.split('=')[1] : null });
+    if (res.error) process.stderr.write(`[shmakk screens] ${res.error}\n`);
+    process.exit(res.error ? 1 : 0);
+  }
+
   if (opts.windowsDaemon) {
     const { main: runWindowsDaemon } = require('./cli/windowsDaemon');
     process.exit(await runWindowsDaemon(opts.windowsDaemonArgs));
