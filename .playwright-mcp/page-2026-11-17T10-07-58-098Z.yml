@@ -1,0 +1,202 @@
+- generic:
+  - generic:
+    - generic:
+      - link [aria-hidden]:
+        - /url: "#composer-input"
+        - text: Skip to message box
+      - generic [aria-hidden]:
+        - complementary:
+          - generic:
+            - button:
+              - generic [aria-hidden]: ❯
+              - text: shmakk
+            - button
+          - tablist:
+            - tab: Chat
+            - tab [selected]: Code
+            - tab: Design
+            - tab: Cowork
+          - generic:
+            - button: New session
+          - generic:
+            - generic:
+              - generic: Projects
+              - button
+            - generic:
+              - generic:
+                - button:
+                  - generic: ShmakkGui
+                - button
+            - list:
+              - generic:
+                - generic: Today
+                - listitem:
+                  - button:
+                    - generic: "Plan: The NSFW/SFW switch in the Prompt panel should be moved to the top, made full width, take up 50% of the"
+                  - button
+                - listitem:
+                  - button:
+                    - generic: "Plan: Hide project-assigned chats from history list"
+                  - button
+              - generic:
+                - generic: Yesterday
+                - listitem:
+                  - button:
+                    - generic: The Show & tell dialog is open over a dark app, an…
+                  - button
+                - listitem:
+                  - button:
+                    - generic: "Give me a tour of this codebase: entry points, str…"
+                  - button
+              - generic:
+                - generic: Previous 7 days
+                - listitem:
+                  - button:
+                    - generic: can you remove all sessions called 'hello there' a…
+                  - button
+                - listitem:
+                  - button:
+                    - generic: I want you to implement a show and tell function f…
+                  - button
+                - listitem:
+                  - button:
+                    - generic: To record a screen demonstration and generate a pl…
+                  - button
+                - listitem:
+                  - button:
+                    - generic: /show2plan
+                  - button
+                - listitem:
+                  - button:
+                    - generic: Lets create a file vault with artefacts. the page…
+                  - button
+                - listitem:
+                  - button:
+                    - generic: you can see the bottom bar there. all of that is r…
+                  - button
+                - listitem:
+                  - button:
+                    - generic: this should be removed from all modes, the can be…
+                  - button
+                - listitem:
+                  - button:
+                    - generic: REmove the profile and review and yes files from t…
+                  - button
+                - listitem:
+                  - button:
+                    - generic: This is...
+                  - button
+                - listitem:
+                  - button:
+                    - generic: The web app has "new chat" but it doesnt actually…
+                  - button
+                - listitem:
+                  - button:
+                    - generic: Whats the weather in new york right now?
+                  - button
+                - listitem:
+                  - button:
+                    - generic: marbad1994/SocialPostAPI · shmakk/test
+                  - button
+                - listitem:
+                  - button:
+                    - generic: git status
+                  - button
+          - generic:
+            - generic:
+              - button [expanded]:
+                - generic [aria-hidden]: m
+                - generic:
+                  - generic: marcusb
+                  - generic: shmakk
+              - button
+      - generic:
+        - banner [aria-hidden]:
+          - heading [level=1]: New session
+          - button
+          - group:
+            - button
+            - button
+            - button
+        - generic:
+          - main:
+            - generic:
+              - generic [aria-hidden]:
+                - generic:
+                  - heading [level=2]: What are we building in shmakk?
+                  - paragraph: Ask for a change, run a command, or hand over a whole task. shmakk reads, edits and runs inside your workspace, and asks before anything risky.
+                  - button:
+                    - generic:
+                      - strong: Start from a GitHub repository
+                      - text: Clone a repo here and work on it in its own session, then push and open a PR when you’re done.
+                  - generic:
+                    - button:
+                      - generic: understand
+                      - generic: "Give me a tour of this codebase: entry points, structure, and how to run it"
+                    - button:
+                      - generic: fix
+                      - generic: Run the tests and fix whatever is failing
+                    - button:
+                      - generic: shell
+                      - generic: $ git status
+                    - button:
+                      - generic: review
+                      - generic: Review my uncommitted changes for bugs and risky edits
+                  - button: Show me something else
+              - generic:
+                - generic:
+                  - generic [aria-hidden]:
+                    - generic:
+                      - generic [aria-hidden]: ❯
+                      - textbox:
+                        - /placeholder: Ask shmakk anything — / for commands
+                    - generic:
+                      - generic:
+                        - radiogroup:
+                          - radio [checked]: ask
+                          - radio: shell
+                        - button: deepseek-v4-flash-vision-exp
+                      - button
+                      - button
+                      - button
+                      - button [disabled]
+          - generic:
+            - generic: Browser
+            - button
+          - generic:
+            - button [disabled]
+            - button [disabled]
+            - button
+            - textbox:
+              - /placeholder: localhost:5173 or a full URL
+              - text: http://localhost:4317
+            - button
+          - generic:
+            - button: :4317
+            - button: :4399
+            - button: :41423
+            - button
+            - radiogroup:
+              - radio [checked]
+              - radio
+              - radio
+            - button: Edit
+    - region "Notifications alt+T"
+  - menu "Account menu, marcusb" [active] [ref=e427]:
+    - generic [ref=e428]: Workspace
+    - menuitem "Change workspace…" [ref=e429]
+    - menuitem "GitHub sessions" [ref=e432]
+    - menuitem "SSH hosts" [ref=e437]
+    - separator [ref=e441]
+    - menuitem "Skills" [ref=e442]
+    - menuitem "Plan" [ref=e446]
+    - menuitem "Activity" [ref=e450]
+    - menuitem "Recall" [ref=e453]
+    - menuitem "Memory" [ref=e458]
+    - menuitem "MCP" [ref=e467]
+    - menuitem "Team" [ref=e470]
+    - menuitem "Artefacts" [ref=e476]
+    - separator [ref=e487]
+    - menuitem "Settings Ctrl ," [ref=e488]:
+      - text: Settings
+      - generic [ref=e492]: Ctrl ,

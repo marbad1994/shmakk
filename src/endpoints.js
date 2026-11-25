@@ -77,7 +77,7 @@ function normalizeModelConfig(name, cfg) {
   if (!cfg || typeof cfg !== 'object') return null;
 
   const provider = String(cfg.provider || cfg.type || 'openai-compatible').toLowerCase();
-  return {
+  const out = {
     name,
     provider,
     base_url: cfg.base_url || cfg.baseUrl || cfg.host || cfg.url || null,
@@ -89,6 +89,10 @@ function normalizeModelConfig(name, cfg) {
     fast: !!cfg.fast,
     vision: _supportsVisionForConfig(cfg),
   };
+  // Optional reasoning_effort override: false/[] hide the control, true = all
+  // known levels, or an explicit list like ["low","high"].
+  if ('effort' in cfg) out.effort = cfg.effort;
+  return out;
 }
 
 function normalizeRegistry(raw) {
@@ -166,6 +170,12 @@ function getCurrentEndpointName() {
   return currentEndpointName;
 }
 
+// Drop the active preset so plain SHMAKK_* env vars take effect again.
+function clearEndpoint() {
+  currentEndpointName = null;
+  currentEndpointConfig = null;
+}
+
 function _supportsVisionForConfig(cfg) {
   if (!cfg) return false;
 
@@ -176,6 +186,11 @@ function _supportsVisionForConfig(cfg) {
   const provider = (cfg.provider || '').toLowerCase();
   const model = (cfg.model || '').toLowerCase();
 
+  // DeepSeek Flash reads images (api-docs.deepseek.com/guides/vision), with
+  // the same image_url blocks as OpenAI. Covers deepseek-flash, versioned
+  // names and the retired deepseek-v4-flash-vision-exp alias.
+  if (/deepseek[\w.-]*flash/.test(model)) return true;
+
   // Providers whose APIs always support image_url content blocks
   const visionProviders = new Set([
     'anthropic',  // Claude 3+
@@ -183,6 +198,8 @@ function _supportsVisionForConfig(cfg) {
     'codex',      // Codex / OpenAI
     'openai',
     'nvidia',     // NIM
+    'xai',        // Grok 2+ vision
+    'grok',
   ]);
 
   if (visionProviders.has(provider)) return true;
@@ -196,8 +213,15 @@ function _supportsVisionForConfig(cfg) {
   return false;
 }
 
+// SHMAKK_VISION (set from Settings → "This model can read images") says it
+// for a provider configured by URL rather than in endpoints.json, where
+// auto-detection by name cannot know newer models.
 function supportsVision() {
-  return _supportsVisionForConfig(currentEndpointConfig);
+  if (currentEndpointConfig) return _supportsVisionForConfig(currentEndpointConfig);
+  const env = String(process.env.SHMAKK_VISION || '').trim();
+  if (/^(1|true|yes|on)$/i.test(env)) return true;
+  if (/^(0|false|no|off)$/i.test(env)) return false;
+  return _supportsVisionForConfig({ provider: 'openai-compatible', model: process.env.SHMAKK_MODEL || '' });
 }
 
 function listEndpoints(cwd) {
@@ -222,14 +246,132 @@ function getVisionSupport(cwd) {
   return normalizeModelConfig('visionSupport', raw.visionSupport);
 }
 
+// ── Registry editing (Settings → Model provider) ─────────────────────────────
+// The registry file belongs to the user, so edits keep every key shmakk does
+// not understand (visionSupport, per-model extras) and keep the stored API key
+// when the form leaves the field blank.
+
+const MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._ -]{0,63}$/;
+
+function registryFilePath(cwd) {
+  return configPath(cwd || process.cwd());
+}
+
+function editError(message, status = 400) {
+  const err = new Error(message);
+  err.status = status;
+  return err;
+}
+
+function readEditableRegistry(cwd) {
+  const file = registryFilePath(cwd);
+  if (file.endsWith('.js')) {
+    throw editError('This registry is endpoints.js — convert it to endpoints.json to edit it here');
+  }
+  let raw = {};
+  if (fs.existsSync(file)) {
+    let parsed;
+    try { parsed = JSON.parse(fs.readFileSync(file, 'utf8')); }
+    catch { throw editError(`Cannot edit ${file}: it is not valid JSON`); }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw editError(`Cannot edit ${file}: expected a JSON object`);
+    }
+    raw = parsed;
+  }
+  if (!raw.models || typeof raw.models !== 'object' || Array.isArray(raw.models)) {
+    const legacy = Object.keys(raw).filter((k) => k !== 'main' && k !== 'fast' && k !== 'visionSupport');
+    if (legacy.length) {
+      throw editError(`Cannot edit ${file}: entries must live inside a "models" object`);
+    }
+    raw.models = {};
+  }
+  return { file, raw };
+}
+
+function writeEditableRegistry(file, raw) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify(raw, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+}
+
+function cleanModelName(name) {
+  const value = String(name || '').trim();
+  if (!MODEL_NAME_RE.test(value) || ['__proto__', 'constructor', 'prototype'].includes(value)) {
+    throw editError('Name must be 1–64 characters: letters, digits, space, dot, dash or underscore');
+  }
+  return value;
+}
+
+function saveModel(cwd, name, cfg = {}) {
+  const key = cleanModelName(name);
+  const { file, raw } = readEditableRegistry(cwd);
+  const prev = raw.models[key] && typeof raw.models[key] === 'object' ? raw.models[key] : {};
+  const next = { ...prev };
+
+  if (cfg.provider !== undefined) next.provider = String(cfg.provider || '').trim() || prev.provider || 'openai-compatible';
+  if (cfg.model !== undefined) next.model = String(cfg.model || '').trim() || key;
+  else if (!next.model) next.model = key;
+
+  if (cfg.baseUrl !== undefined) {
+    const value = String(cfg.baseUrl || '').trim();
+    if (value) next.base_url = value;
+    else delete next.base_url;
+  }
+  if (cfg.apiKey !== undefined) {
+    const value = String(cfg.apiKey || '').trim();
+    if (value) next.api_key = value;
+    else delete next.api_key;
+  }
+  if (cfg.headers !== undefined) {
+    const value = cfg.headers && typeof cfg.headers === 'object' ? cfg.headers : String(cfg.headers || '').trim();
+    if (value && (typeof value === 'object' || value)) next.headers = value;
+    else delete next.headers;
+  }
+  if (cfg.registry !== undefined) {
+    const value = String(cfg.registry || '').trim();
+    if (value) next.registry = value;
+    else delete next.registry;
+  }
+  if (cfg.vision !== undefined) {
+    if (cfg.vision === null) delete next.vision;
+    else next.vision = !!cfg.vision;
+  }
+  raw.models[key] = next;
+
+  if (cfg.main === true) raw.main = key;
+  else if (cfg.main === false && raw.main === key) delete raw.main;
+
+  if (cfg.fast === true) raw.fast = key;
+  else if (cfg.fast === false && raw.fast === key) delete raw.fast;
+
+  writeEditableRegistry(file, raw);
+  return { name: key, config: next, path: file };
+}
+
+function deleteModel(cwd, name) {
+  const key = cleanModelName(name);
+  const { file, raw } = readEditableRegistry(cwd);
+  if (!raw.models[key]) throw editError(`model "${key}" not found`, 404);
+  delete raw.models[key];
+  if (raw.main === key) delete raw.main;
+  if (raw.fast === key) delete raw.fast;
+  writeEditableRegistry(file, raw);
+  if (currentEndpointName === key) clearEndpoint();
+  return { name: key, path: file };
+}
+
 module.exports = {
   applyEndpoint,
   listEndpoints,
   getCurrentEndpoint,
   getCurrentEndpointName,
+  clearEndpoint,
+  loadEndpoints,
   supportsVision,
   getModelRegistry,
   getVisionSupport,
+  registryFilePath,
+  saveModel,
+  deleteModel,
   _test: { normalizeRegistry, normalizeModelConfig },
   _supportsVisionForConfig,
 };

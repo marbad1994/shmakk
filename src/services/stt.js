@@ -1,6 +1,8 @@
-// Speech-to-text via Whisper ONNX using @huggingface/transformers.
-// No Python, no server — 100% JS, runs locally in-process.
-// Model auto-downloads on first use (~45MB quantized whisper-tiny).
+// Speech-to-text. Primary engine for show-and-tell is DeepSeek's hosted ASR
+// (POST /v1/tools/asr), which is far more accurate than the local model and
+// accepts the same 16 kHz mono 16-bit PCM WAV the capture service produces.
+// Local Whisper ONNX (@huggingface/transformers, Xenova/whisper-base) is the
+// offline fallback and runs fully in-process, no Python or server.
 
 const path = require('path');
 const fs = require('fs');
@@ -81,6 +83,169 @@ function _wavToFloat32(audioPath) {
   return audioData;
 }
 
+// ── DeepSeek ASR (cloud) ────────────────────────────────────────────────────
+// The local Whisper-base model is cheap but hallucinates badly on quiet or
+// noisy microphone audio. DeepSeek's hosted ASR returns a far more accurate
+// transcript. It has no timestamp support, so we emit a single full-duration
+// segment; frame selection degrades gracefully to interval + cue sampling.
+//
+// Used when a DeepSeek endpoint is configured and the clip fits the service
+// limits (120 s / 8 MiB). Local Whisper stays as fallback; force it with
+// SHMAKK_STT=whisper, or force ASR with SHMAKK_STT=deepseek.
+
+const ASR_PATH = '/v1/tools/asr';
+const ASR_MAX_BYTES = 8 * 1024 * 1024; // 8 MiB per request
+const ASR_MAX_SECONDS = 120;           // 120 s per request
+
+function _deepseekAsrConfig() {
+  const base = process.env.SHMAKK_STT_BASE_URL
+    || (/deepseek/i.test(process.env.SHMAKK_BASE_URL || '') ? process.env.SHMAKK_BASE_URL : null);
+  const key = process.env.SHMAKK_STT_API_KEY || process.env.SHMAKK_API_KEY || null;
+  if (base && key) return { base, key };
+
+  try {
+    const { getModelRegistry } = require('../endpoints');
+    const registry = getModelRegistry();
+    for (const cfg of Object.values(registry.models || {})) {
+      if (cfg && cfg.base_url && /deepseek/i.test(cfg.base_url) && cfg.api_key) {
+        return { base: cfg.base_url, key: cfg.api_key };
+      }
+    }
+  } catch {}
+  return null;
+}
+
+function _wavDurationSec(audioPath) {
+  try {
+    const wav = new WaveFile(fs.readFileSync(audioPath));
+    const rate = wav.fmt && Number(wav.fmt.sampleRate);
+    const samples = wav.data && wav.data.samples;
+    let count = 0;
+    if (Array.isArray(samples) && samples.length && Array.isArray(samples[0])) {
+      count = samples[0].length;
+    } else if (samples && typeof samples.length === 'number') {
+      count = samples.length;
+    }
+    return rate && count ? count / rate : null;
+  } catch { return null; }
+}
+
+const ASR_CHUNK_SECONDS = 100;
+
+/**
+ * Split a WAV into mono 16-bit chunks of at most `chunkSec` seconds.
+ * Returns [{ buf, offset, durationSec }].
+ */
+function _splitWav(audioPath, chunkSec = ASR_CHUNK_SECONDS) {
+  const wav = new WaveFile(fs.readFileSync(audioPath));
+  wav.toBitDepth('16');
+  const rate = Number(wav.fmt.sampleRate) || 16000;
+  let samples = wav.getSamples(false, Int16Array);
+  if (Array.isArray(samples)) samples = samples[0]; // keep the first channel
+  const per = Math.max(1, Math.floor(chunkSec * rate));
+  const out = [];
+  for (let i = 0; i < samples.length; i += per) {
+    const part = samples.subarray(i, Math.min(samples.length, i + per));
+    const w = new WaveFile();
+    w.fromScratch(1, rate, '16', part);
+    out.push({ buf: Buffer.from(w.toBuffer()), offset: i / rate, durationSec: part.length / rate });
+  }
+  return out;
+}
+
+async function _asrRequest(cfg, buf) {
+  const url = cfg.base.replace(/\/+$/, '') + ASR_PATH;
+  const fd = new FormData();
+  fd.append('file', new Blob([buf], { type: 'audio/wav' }), 'audio.wav');
+  const res = await fetch(url, { method: 'POST', headers: { authorization: `Bearer ${cfg.key}` }, body: fd });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw new Error(`DeepSeek ASR failed (${res.status}): ${detail.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  return String((data && data.text) || '').trim();
+}
+
+/**
+ * DeepSeek ASR accepts 120 s / 8 MiB per request. Longer recordings used to be
+ * skipped entirely (so the narration after two minutes was lost to a weaker
+ * fallback); they are now sent in 100 s chunks, which also gives coarse timing.
+ */
+async function _transcribeDeepSeek(audioPath) {
+  const cfg = _deepseekAsrConfig();
+  if (!cfg) return null;
+  const durationSec = _wavDurationSec(audioPath);
+  const size = fs.statSync(audioPath).size;
+  const chunks = (durationSec != null && durationSec <= ASR_MAX_SECONDS && size <= ASR_MAX_BYTES)
+    ? [{ buf: fs.readFileSync(audioPath), offset: 0, durationSec: durationSec || 0 }]
+    : _splitWav(audioPath);
+  const segments = [];
+  for (const c of chunks) {
+    const text = await _asrRequest(cfg, c.buf);
+    if (text) segments.push({ start: c.offset, end: c.offset + c.durationSec, text });
+  }
+  const text = segments.map((x) => x.text).join(' ').trim();
+  if (!text) throw new Error('DeepSeek ASR returned an empty transcript');
+  return { text, durationSec, segments };
+}
+
+// ── xAI speech-to-text (cloud, word timestamps) ────────────────────────────
+// POST https://api.x.ai/v1/stt with multipart form (file last). Returns words
+// with start/end times, which is what lets Show & tell line the narration up
+// with the screenshots. Used when an x.ai endpoint or key is configured;
+// force with SHMAKK_STT=xai.
+
+function _xaiSttConfig() {
+  const isXai = (u) => /(^|\/\/)([^/]*\.)?x\.ai(\/|$)/i.test(String(u || ''));
+  if (process.env.XAI_API_KEY) return { base: 'https://api.x.ai', key: process.env.XAI_API_KEY };
+  const base = process.env.SHMAKK_STT_BASE_URL || process.env.SHMAKK_BASE_URL || '';
+  const key = process.env.SHMAKK_STT_API_KEY || process.env.SHMAKK_API_KEY || '';
+  if (isXai(base) && key) return { base: 'https://api.x.ai', key };
+  try {
+    const { getModelRegistry } = require('../endpoints');
+    for (const cfg of Object.values(getModelRegistry().models || {})) {
+      if (cfg && isXai(cfg.base_url) && cfg.api_key) return { base: 'https://api.x.ai', key: cfg.api_key };
+    }
+  } catch {}
+  return null;
+}
+
+/** Group xAI words into short timed segments (break on pauses or ~8 s). */
+function _wordsToSegments(words) {
+  const out = [];
+  let cur = null;
+  for (const w of words) {
+    const text = String(w.text || '').trim();
+    if (!text) continue;
+    const start = Number(w.start) || 0;
+    const end = Number(w.end) || start;
+    if (!cur || start - cur.end > 0.8 || end - cur.start > 8) { cur = { start, end, text }; out.push(cur); } else { cur.text += ` ${text}`; cur.end = end; }
+  }
+  return out;
+}
+
+async function _transcribeXai(audioPath, opts = {}) {
+  const cfg = _xaiSttConfig();
+  if (!cfg) return null;
+  const buf = fs.readFileSync(audioPath);
+  const fd = new FormData();
+  fd.append('format', 'true');
+  if (opts.language && /^[a-z]{2}$/i.test(opts.language)) fd.append('language', opts.language.toLowerCase());
+  fd.append('filler_words', 'false');
+  fd.append('file', new Blob([buf], { type: 'audio/wav' }), 'audio.wav'); // file must be last
+  const res = await fetch(`${cfg.base}/v1/stt`, { method: 'POST', headers: { authorization: `Bearer ${cfg.key}` }, body: fd });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw new Error(`xAI speech-to-text failed (${res.status}): ${detail.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  const text = String((data && data.text) || '').trim();
+  const words = Array.isArray(data && data.words) ? data.words : [];
+  const durationSec = Number(data && data.duration) || _wavDurationSec(audioPath) || 0;
+  const segments = words.length ? _wordsToSegments(words) : (text ? [{ start: 0, end: durationSec, text }] : []);
+  return { text, segments, durationSec, language: (data && data.language) || null, engine: 'xai-stt' };
+}
+
 /**
  * Transcribe a WAV file to text.
  * @param {string} audioPath - path to WAV audio file
@@ -106,6 +271,133 @@ async function transcribe(audioPath, opts = {}) {
 }
 
 /**
+ * Normalise the raw `chunks` returned by transformers.js when
+ * `return_timestamps` is enabled into clean, monotonic segments.
+ *
+ * transformers.js returns:
+ *   { text, chunks: [ { text, timestamp: [start, end] } ] }
+ * where `timestamp` is in seconds. We tolerate several shapes and clamp to a
+ * sane, non-overlapping timeline so downstream frame selection stays stable.
+ */
+function _normaliseChunks(result, durationSec) {
+  const chunks = result && result.chunks;
+  const segments = [];
+  if (Array.isArray(chunks) && chunks.length) {
+    let prevEnd = 0;
+    for (const c of chunks) {
+      const text = String((c && c.text) || '').trim();
+      if (!text) continue;
+      let start = null;
+      let end = null;
+      const ts = c && c.timestamp;
+      if (Array.isArray(ts)) {
+        start = Number(ts[0]);
+        end = Number(ts[1] != null ? ts[1] : ts[0]);
+      } else if (ts && typeof ts === 'object') {
+        start = Number(ts.start);
+        end = Number(ts.end != null ? ts.end : ts.start);
+      } else if (typeof ts === 'number') {
+        start = ts;
+        end = ts;
+      }
+      if (!Number.isFinite(start) || !Number.isFinite(end)) {
+        start = prevEnd;
+        end = prevEnd;
+      }
+      if (start < 0) start = 0;
+      if (end < start) [start, end] = [end, start];
+      if (start < prevEnd) start = prevEnd;
+      if (end > durationSec) end = durationSec;
+      if (start > durationSec) start = durationSec;
+      if (end <= start) end = Math.min(durationSec, start + 0.01);
+      segments.push({ start, end, text });
+      prevEnd = end;
+    }
+  }
+
+  if (!segments.length) {
+    const text = String((result && result.text) || '').trim();
+    if (text) segments.push({ start: 0, end: durationSec, text });
+  }
+
+  return segments;
+}
+
+/**
+ * Transcribe a WAV file into a timestamped transcript.
+ * @param {string} audioPath - path to WAV audio file
+ * @param {object} [opts]
+ * @param {string} [opts.language] - ISO language code hint (e.g. "en")
+ * @returns {Promise<{text:string, segments:Array<{start:number,end:number,text:string}>, durationSec:number, language:string}>}
+ */
+async function transcribeTimestamped(audioPath, opts = {}) {
+  if (!fs.existsSync(audioPath)) {
+    throw new Error(`Audio file not found: ${audioPath}`);
+  }
+
+  const engine = String(opts.engine || process.env.SHMAKK_STT || 'auto').toLowerCase();
+
+  // xAI first: it returns word timestamps, which align speech with frames.
+  if (engine === 'auto' || engine === 'xai') {
+    if (engine === 'xai' && !_xaiSttConfig()) throw new Error('xAI speech-to-text requested but no x.ai key is configured');
+    try {
+      const r = await _transcribeXai(audioPath, opts);
+      if (r && r.text) return r;
+    } catch (e) {
+      if (engine === 'xai') throw e;
+    }
+  }
+
+  // Then DeepSeek ASR unless explicitly forced to local Whisper.
+  if (engine !== 'whisper' && engine !== 'xai') {
+    const asrCfg = _deepseekAsrConfig();
+    if (engine === 'deepseek' && !asrCfg) {
+      throw new Error('DeepSeek ASR requested but no DeepSeek endpoint is configured');
+    }
+    if (asrCfg) {
+      try {
+        const asr = await _transcribeDeepSeek(audioPath);
+        if (asr && asr.text) {
+          const durationSec = asr.durationSec || _wavDurationSec(audioPath) || 0;
+          return {
+            text: asr.text,
+            segments: asr.segments && asr.segments.length ? asr.segments : [{ start: 0, end: durationSec, text: asr.text }],
+            durationSec,
+            language: null,
+            engine: 'deepseek-asr',
+          };
+        }
+      } catch (e) {
+        // Explicit request: surface the error. Otherwise fall back to Whisper.
+        if (engine === 'deepseek') throw e;
+      }
+    }
+  }
+
+  const transcriber = await _ensureModel();
+  const audioData = _wavToFloat32(audioPath);
+  const durationSec = audioData.length / 16000;
+
+  const kwargs = {
+    language: opts.language || 'english',
+    // `true` -> sentence/segment-level chunks; `'word'` -> word-level chunks.
+    return_timestamps: opts.wordLevel ? 'word' : true,
+  };
+
+  const result = await transcriber(audioData, kwargs);
+  const text = String((result && result.text) || '').trim();
+  const segments = _normaliseChunks(result, durationSec);
+
+  return {
+    text,
+    segments,
+    durationSec,
+    language: (result && result.language) || kwargs.language || 'english',
+    engine: 'whisper',
+  };
+}
+
+/**
  * Check if the STT model files are already cached locally.
  * Used for pre-flight warnings.
  */
@@ -128,4 +420,17 @@ function isCached() {
   }
 }
 
-module.exports = { transcribe, isCached, _ensureModel };
+module.exports = {
+  transcribe,
+  transcribeTimestamped,
+  isCached,
+  _normaliseChunks,
+  _ensureModel,
+  _deepseekAsrConfig,
+  _wavDurationSec,
+  _transcribeDeepSeek,
+  _splitWav,
+  _xaiSttConfig,
+  _wordsToSegments,
+  _transcribeXai,
+};

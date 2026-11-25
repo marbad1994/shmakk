@@ -1,7 +1,7 @@
 const { parseArgs, HELP, resolveHelp } = require('./cli');
 const { normalizeProfile, resolveProfile } = require('./profiles');
 const { applyEndpoint, getCurrentEndpoint, getCurrentEndpointName } = require('./endpoints');
-const { ensureModelRuntime } = require('./llm');
+const { ensureModelRuntime, KNOWN_EFFORT_LEVELS } = require('./llm');
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
@@ -76,6 +76,15 @@ async function main() {
     opts.markdown = v === 'true';
   }
 
+  if (opts.effort !== null) {
+    const v = String(opts.effort).toLowerCase();
+    if (!KNOWN_EFFORT_LEVELS.includes(v)) {
+      process.stderr.write(`[shmakk] invalid --effort. Use: ${KNOWN_EFFORT_LEVELS.join('|')}\n`);
+      process.exit(2);
+    }
+    process.env.SHMAKK_EFFORT = v;
+  }
+
   if (opts.browserDaemon) {
     const { main: runBrowserDaemon } = require('./cli/browserDaemon');
     process.exit(await runBrowserDaemon([
@@ -83,6 +92,19 @@ async function main() {
       ...(opts.browserDaemonPort ? ['--port', String(opts.browserDaemonPort)] : []),
       ...(opts.help ? ['--help'] : []),
     ]));
+  }
+
+  if (opts.screensWidget) {
+    const { openScreensWidget } = require('./services/windows-screens-ui');
+    const portArg = opts.screensWidgetArgs.find((a) => a.startsWith('--debug-port='));
+    const res = openScreensWidget({ remoteDebuggingPort: portArg ? portArg.split('=')[1] : null });
+    if (res.error) process.stderr.write(`[shmakk screens] ${res.error}\n`);
+    process.exit(res.error ? 1 : 0);
+  }
+
+  if (opts.windowsDaemon) {
+    const { main: runWindowsDaemon } = require('./cli/windowsDaemon');
+    process.exit(await runWindowsDaemon(opts.windowsDaemonArgs));
   }
 
   if (opts.help) {
@@ -119,6 +141,7 @@ async function main() {
       baseUrl: activeEndpoint?.base_url || process.env.SHMAKK_BASE_URL || null,
       apiKey: activeEndpoint?.api_key ? (activeEndpoint.api_key.slice(0, 8) + '...' + activeEndpoint.api_key.slice(-4)) : null,
       model: activeEndpoint?.model || process.env.SHMAKK_MODEL || null,
+      models: activeEndpoint?.models || process.env.SHMAKK_MODELS || process.env.SHMAKK_REGISTRY || null,
       provider: activeEndpoint?.provider || process.env.SHMAKK_PROVIDER || null,
       modelRecommendation: process.env.SHMAKK_MODEL_RECOMMENDATION === '1',
       registry: activeEndpoint?.registry || process.env.SHMAKK_REGISTRY || null,
@@ -188,6 +211,29 @@ async function main() {
     process.stderr.write(`[shmakk] unknown args: ${opts.unknown.join(' ')}\n`);
     process.stderr.write(HELP);
     process.exit(2);
+  }
+
+  // ── Graphical front-ends ──
+  if (opts.desktop) {
+    const { launchDesktop } = require('./webui/desktop-launcher');
+    process.exit(await launchDesktop(opts));
+  }
+  if (opts.web) {
+    const { runWebCli } = require('./webui/server');
+    const code = await runWebCli({
+      port: opts.port,
+      host: opts.host,
+      workspace: opts.workspace || process.cwd(),
+      open: !opts.noOpen,
+      newToken: opts.newToken,
+      review: opts.review,
+      yesFiles: opts.yesFiles,
+      noCorrection: opts.noCorrection,
+      noAi: opts.noAi,
+      debug: opts.debug,
+      profile: normalizeProfile(opts.profile),
+    });
+    process.exit(code);
   }
 
   // Lazy-init STT/TTS models if flags are set (model downloads happen on first use)

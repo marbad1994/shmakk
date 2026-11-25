@@ -1,0 +1,168 @@
+- generic [ref=e2]:
+  - generic [ref=e7]:
+    - link "Skip to message box" [ref=e8] [cursor=pointer]:
+      - /url: "#composer-input"
+    - complementary "Navigation" [ref=e10]:
+      - generic [ref=e11]:
+        - button "shmakk, new chat" [ref=e12] [cursor=pointer]:
+          - generic [aria-hidden] [ref=e13]: ❯
+          - text: shmakk
+        - button "Hide sidebar" [ref=e15] [cursor=pointer]
+      - tablist "Mode" [ref=e16]:
+        - tab "Chat" [ref=e17] [cursor=pointer]
+        - tab "Code" [selected] [ref=e20] [cursor=pointer]
+        - tab "Design" [ref=e25] [cursor=pointer]
+        - tab "Cowork" [ref=e32] [cursor=pointer]
+      - button "New session" [ref=e38] [cursor=pointer]
+      - generic [ref=e41]:
+        - generic [ref=e42]:
+          - generic [ref=e43]: Projects
+          - button "New project" [ref=e44] [cursor=pointer]
+        - generic [ref=e47]:
+          - button "ShmakkGui" [ref=e48] [cursor=pointer]
+          - button "Show sessions in ShmakkGui" [ref=e52] [cursor=pointer]
+        - list "Code conversations" [ref=e55]:
+          - generic [ref=e56]:
+            - generic [ref=e57]: Today
+            - listitem [ref=e58]:
+              - 'button "Plan: The NSFW/SFW switch in the Prompt panel should be moved to the top, made full width, take up 50% of the" [ref=e59] [cursor=pointer]'
+              - 'button "Options for Plan: The NSFW/SFW switch in the Prompt panel should be moved to the top, made full width, take up 50% of the" [ref=e61] [cursor=pointer]'
+            - listitem [ref=e66]:
+              - 'button "Plan: Hide project-assigned chats from history list" [ref=e67] [cursor=pointer]'
+              - 'button "Options for Plan: Hide project-assigned chats from history list" [ref=e69] [cursor=pointer]'
+          - generic [ref=e74]:
+            - generic [ref=e75]: Yesterday
+            - listitem [ref=e76]:
+              - button "The Show & tell dialog is open over a dark app, an…" [ref=e77] [cursor=pointer]
+              - button "Options for The Show & tell dialog is open over a dark app, an…" [ref=e79] [cursor=pointer]
+            - listitem [ref=e84]:
+              - 'button "Give me a tour of this codebase: entry points, str…" [ref=e85] [cursor=pointer]'
+              - 'button "Options for Give me a tour of this codebase: entry points, str…" [ref=e87] [cursor=pointer]'
+          - generic [ref=e92]:
+            - generic [ref=e93]: Previous 7 days
+            - listitem [ref=e94]:
+              - button "can you remove all sessions called 'hello there' a…" [ref=e95] [cursor=pointer]
+              - button "Options for can you remove all sessions called 'hello there' a…" [ref=e97] [cursor=pointer]
+            - listitem [ref=e102]:
+              - button "I want you to implement a show and tell function f…" [ref=e103] [cursor=pointer]
+              - button "Options for I want you to implement a show and tell function f…" [ref=e105] [cursor=pointer]
+            - listitem [ref=e110]:
+              - button "To record a screen demonstration and generate a pl…" [ref=e111] [cursor=pointer]
+              - button "Options for To record a screen demonstration and generate a pl…" [ref=e113] [cursor=pointer]
+            - listitem [ref=e118]:
+              - button "/show2plan" [ref=e119] [cursor=pointer]
+              - button "Options for /show2plan" [ref=e121] [cursor=pointer]
+            - listitem [ref=e126]:
+              - button "Lets create a file vault with artefacts. the page…" [ref=e127] [cursor=pointer]
+              - button "Options for Lets create a file vault with artefacts. the page…" [ref=e129] [cursor=pointer]
+            - listitem [ref=e134]:
+              - button "you can see the bottom bar there. all of that is r…" [ref=e135] [cursor=pointer]
+              - button "Options for you can see the bottom bar there. all of that is r…" [ref=e137] [cursor=pointer]
+            - listitem [ref=e142]:
+              - button "this should be removed from all modes, the can be…" [ref=e143] [cursor=pointer]
+              - button "Options for this should be removed from all modes, the can be…" [ref=e145] [cursor=pointer]
+            - listitem [ref=e150]:
+              - button "REmove the profile and review and yes files from t…" [ref=e151] [cursor=pointer]
+              - button "Options for REmove the profile and review and yes files from t…" [ref=e153] [cursor=pointer]
+            - listitem [ref=e158]:
+              - button "This is..." [ref=e159] [cursor=pointer]
+              - button "Options for This is..." [ref=e161] [cursor=pointer]
+            - listitem [ref=e166]:
+              - button "The web app has \"new chat\" but it doesnt actually…" [ref=e167] [cursor=pointer]
+              - button "Options for The web app has \"new chat\" but it doesnt actually…" [ref=e169] [cursor=pointer]
+            - listitem [ref=e174]:
+              - button "Whats the weather in new york right now?" [ref=e175] [cursor=pointer]
+              - button "Options for Whats the weather in new york right now?" [ref=e177] [cursor=pointer]
+            - listitem [ref=e182]:
+              - button "GitHub session on marbad1994/SocialPostAPI marbad1994/SocialPostAPI · shmakk/test" [ref=e183] [cursor=pointer]:
+                - img "GitHub session on marbad1994/SocialPostAPI" [ref=e184]
+                - generic [ref=e188]: marbad1994/SocialPostAPI · shmakk/test
+              - button "Options for marbad1994/SocialPostAPI · shmakk/test" [ref=e189] [cursor=pointer]
+            - listitem [ref=e194]:
+              - button "git status" [ref=e195] [cursor=pointer]
+              - button "Options for git status" [ref=e197] [cursor=pointer]
+      - generic [ref=e203]:
+        - button "Account menu, marcusb" [ref=e204] [cursor=pointer]:
+          - generic [aria-hidden] [ref=e205]: m
+          - generic [ref=e206]:
+            - generic [ref=e207]: marcusb
+            - generic [ref=e208]: shmakk
+        - button "Settings" [ref=e210] [cursor=pointer]
+    - generic [ref=e214]:
+      - banner [ref=e215]:
+        - heading [level=1] [ref=e216]:
+          - generic "Code mode" [ref=e217]
+          - text: New session
+        - button "Toggle terminal" [ref=e222] [cursor=pointer]
+        - group "Inspector panels" [ref=e223]:
+          - button "Browser" [ref=e224] [cursor=pointer]
+          - button "Changes" [ref=e225] [cursor=pointer]
+          - button "Plan" [ref=e226] [cursor=pointer]
+      - generic [ref=e227]:
+        - main [ref=e228]:
+          - generic [ref=e229]:
+            - generic [ref=e231]:
+              - heading "What are we building in shmakk?" [level=2] [ref=e237]
+              - paragraph [ref=e238]: Ask for a change, run a command, or hand over a whole task. shmakk reads, edits and runs inside your workspace, and asks before anything risky.
+              - button [ref=e239] [cursor=pointer]:
+                - generic [ref=e244]:
+                  - strong [ref=e245]: Start from a GitHub repository
+                  - text: Clone a repo here and work on it in its own session, then push and open a PR when you’re done.
+              - generic [ref=e248]:
+                - 'button "understand Give me a tour of this codebase: entry points, structure, and how to run it" [ref=e249] [cursor=pointer]':
+                  - generic [ref=e250]: understand
+                  - generic [ref=e251]: "Give me a tour of this codebase: entry points, structure, and how to run it"
+                - button "fix Run the tests and fix whatever is failing" [ref=e252] [cursor=pointer]:
+                  - generic [ref=e253]: fix
+                  - generic [ref=e254]: Run the tests and fix whatever is failing
+                - button "shell $ git status" [ref=e255] [cursor=pointer]:
+                  - generic [ref=e256]: shell
+                  - generic [ref=e257]: $ git status
+                - button "review Review my uncommitted changes for bugs and risky edits" [ref=e258] [cursor=pointer]:
+                  - generic [ref=e259]: review
+                  - generic [ref=e260]: Review my uncommitted changes for bugs and risky edits
+              - button "Show different examples" [ref=e261] [cursor=pointer]: Show me something else
+            - generic [ref=e265]:
+              - generic [ref=e266]:
+                - generic [aria-hidden] [ref=e267]: ❯
+                - textbox "Message shmakk" [ref=e268]:
+                  - /placeholder: Ask shmakk anything — / for commands
+              - generic [ref=e269]:
+                - generic [ref=e270]:
+                  - radiogroup "Input mode" [ref=e271]:
+                    - radio "ask" [checked] [ref=e272] [cursor=pointer]
+                    - radio "shell" [ref=e273] [cursor=pointer]
+                  - button "deepseek-v4-flash-vision-exp" [ref=e274] [cursor=pointer]
+                - button "Attach files" [ref=e280] [cursor=pointer]
+                - button "Read replies aloud" [ref=e281] [cursor=pointer]
+                - button "Voice input" [ref=e282] [cursor=pointer]
+                - button "Send" [disabled] [ref=e283]
+        - complementary "Inspector":
+          - generic [ref=e286]:
+            - generic [ref=e287]: Browser
+            - button "Close inspector" [ref=e291] [cursor=pointer]
+          - generic:
+            - generic:
+              - generic [ref=e292]:
+                - button "Back" [disabled]
+                - button "Forward" [disabled]
+                - button "Reload preview" [ref=e293] [cursor=pointer]
+                - textbox "Address" [ref=e294]:
+                  - /placeholder: localhost:5173 or a full URL
+                  - text: http://localhost:4317
+                - button "Open in a new tab" [ref=e295] [cursor=pointer]
+              - generic [ref=e296]:
+                - generic:
+                  - button ":4317" [ref=e297] [cursor=pointer]
+                  - button ":4399" [ref=e298] [cursor=pointer]
+                  - button ":41423" [ref=e299] [cursor=pointer]
+                  - button "Find dev servers" [ref=e300] [cursor=pointer]
+                - radiogroup "Preview size" [ref=e306]:
+                  - radio "desktop" [checked] [ref=e307] [cursor=pointer]
+                  - radio "tablet" [ref=e310] [cursor=pointer]
+                  - radio "phone" [ref=e313] [cursor=pointer]
+                - button "Edit" [ref=e316] [cursor=pointer]
+              - generic:
+                - generic:
+                  - iframe
+  - region "Notifications alt+T"

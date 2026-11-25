@@ -1,4 +1,4 @@
-// Task classifier — keeps routing consistent across model providers.
+// Task classifier — matches the model provider's classification to ensure consistent routing.
 // Analyzes message content to detect task type (architecture, implementation, debugging, etc).
 
 function normalizeContent(content) {
@@ -64,7 +64,7 @@ function makeProfile(taskType, scope, reasoning, urgency, risk) {
   };
 }
 
-// Classify task type from messages.
+// Classify task type from messages
 function classifyTask(messages) {
   const text = messagesToText(messages);
 

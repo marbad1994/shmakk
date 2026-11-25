@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Screen + Mic Recorder</title>
+    <style>
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #f4f4f9; }
+        .controls { margin-bottom: 20px; display: flex; gap: 10px; }
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; border: none; border-radius: 5px; background: #007bff; color: white; transition: background 0.2s; }
+        button:disabled { background: #cccccc; cursor: not-allowed; }
+        button#stopBtn { background: #dc3545; }
+        video { width: 80%; max-width: 800px; border: 2px solid #333; border-radius: 8px; background: black; }
+    </style>
+</head>
+<body>
+
+    <div class="controls">
+        <button id="startBtn">Start Recording (Screen + Mic)</button>
+        <button id="stopBtn" disabled>Stop Recording</button>
+    </div>
+
+    <video id="preview" autoplay muted playsinline></video>
+
+    <script>
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const preview = document.getElementById('preview');
+
+        let mediaRecorder = null;
+        let recordedChunks = [];
+        let screenStream = null;
+        let voiceStream = null;
+
+        startBtn.addEventListener('click', async () => {
+            recordedChunks = [];
+
+            try {
+                // 1. Request Screen Stream
+                screenStream = await navigator.mediaDevices.getDisplayMedia({
+                    video: { frameRate: { ideal: 30, max: 60 } },
+                    audio: true // System/Tab audio
+                });
+
+                // 2. Request Microphone Stream
+                try {
+                    voiceStream = await navigator.mediaDevices.getUserMedia({
+                        audio: {
+                            echoCancellation: true,
+                            noiseSuppression: true
+                        },
+                        video: false // Change to true if you want raw webcam access
+                    });
+                } catch (micErr) {
+                    console.warn("Microphone access denied or unavailable. Recording screen only.", micErr);
+                }
+
+                // 3. Mix Tracks Together
+                const tracks = [];
+                
+                // Add screen video
+                if (screenStream.getVideoTracks().length > 0) {
+                    tracks.push(screenStream.getVideoTracks()[0]);
+                }
+
+                // Audio mixing logic using Web Audio API (handles both system audio + mic safely)
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const audioDestination = audioContext.createMediaStreamDestination();
+                let hasAudio = false;
+
+                // Add screen/system audio to mix if present
+                if (screenStream.getAudioTracks().length > 0) {
+                    const screenAudioSource = audioContext.createMediaStreamSource(screenStream);
+                    screenAudioSource.connect(audioDestination);
+                    hasAudio = true;
+                }
+
+                // Add voice/microphone audio to mix if present
+                if (voiceStream && voiceStream.getAudioTracks().length > 0) {
+                    const voiceAudioSource = audioContext.createMediaStreamSource(voiceStream);
+                    voiceAudioSource.connect(audioDestination);
+                    hasAudio = true;
+                }
+
+                // Add the mixed audio track to our final array
+                if (hasAudio) {
+                    tracks.push(audioDestination.stream.getAudioTracks()[0]);
+                }
+
+                // 4. Create the Combined Stream
+                const combinedStream = new MediaStream(tracks);
+                preview.srcObject = combinedStream;
+
+                // 5. Setup MediaRecorder
+                const options = { mimeType: MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9' : 'video/webm' };
+                mediaRecorder = new MediaRecorder(combinedStream, options);
+
+                mediaRecorder.ondataavailable = (e) => {
+                    if (e.data && e.data.size > 0) recordedChunks.push(e.data);
+                };
+
+                mediaRecorder.onstop = () => {
+                    const blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType });
+                    const url = URL.createObjectURL(blob);
+
+                    preview.srcObject = null;
+                    preview.src = url;
+                    preview.controls = true;
+                    preview.muted = false;
+
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `recording-${Date.now()}.webm`;
+                    a.click();
+
+                    // Clean up all tracks completely
+                    if (screenStream) screenStream.getTracks().forEach(t => t.stop());
+                    if (voiceStream) voiceStream.getTracks().forEach(t => t.stop());
+                    audioContext.close();
+
+                    startBtn.disabled = false;
+                    stopBtn.disabled = true;
+                };
+
+                // Stop gracefully if user uses browser native UI to stop sharing
+                screenStream.getVideoTracks()[0].onended = () => {
+                    if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+                };
+
+                mediaRecorder.start(1000);
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+
+            } catch (err) {
+                console.error("Error setting up stream mixing:", err);
+                alert("Could not start recording.");
+            }
+        });
+
+        stopBtn.addEventListener('click', () => {
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+        });
+    </script>
+</body>
+</html>
+

@@ -117,7 +117,7 @@ function preserveCase(original, corrected) {
 async function correct({ input, glossary, signal: _unused }) {
   // Null/empty input: can happen at shell startup when precmd fires before
   // any command is executed (especially in zsh). Nothing to correct.
-  if (!input || !input.trim()) {
+  if (typeof input !== 'string' || !input.trim()) {
     return { category: 'not_a_correction', proposed: null, safety: 'uncertain', reason: 'empty input' };
   }
 
@@ -126,7 +126,6 @@ async function correct({ input, glossary, signal: _unused }) {
   if (/^\//.test(input) || /^shmakk\s/i.test(input)) {
     return { category: 'not_a_correction', proposed: null, safety: 'uncertain', reason: 'shmakk self-command prefix — not a shell command' };
   }
-
   // Pre-filter natural language
   if (looksLikeNaturalLanguage(input)) {
     return { category: 'not_a_correction', proposed: null, safety: 'uncertain', reason: 'looks like natural language' };

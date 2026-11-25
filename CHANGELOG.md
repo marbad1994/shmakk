@@ -2,6 +2,66 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+- **Recorded automations**: a spoken control description is normalized to the accessible name, so the step
+  replay looks for is the one the page actually exposes. `the Save button`, `Save button` and `a Save button`
+  all become `Save`; the article is dropped only when a role noun was removed or the role is known, so a name
+  that merely starts with `the` (`the Netherlands`) survives; a name that is nothing but a role word is never
+  stripped to empty, and URLs pass through untouched. `name` and `target` go through the same rule, so they
+  cannot disagree about which control a step means.
+- Warnings raised by normalization (an action that could not be mapped, a click that names no control, a
+  recording with no actions) are still carried on the spec unchanged.
+
+### Added
+- `docs/automations.md` — the recorded-automation spec reference: step shape, action vocabulary, spoken-name
+  rules, browser and desktop resolution order, inputs, and the replay tuning variables
+- `docs/migration-guide.md` — rebuilding a stored spec from its `sourceAnalysis` without another vision pass
+- README section for recorded automations
+- Unit tests for spoken-name normalization, including the cases that must not change
+
+## [1.3.0] - 2026-11-14
+
+### Added
+- **Web interface** (`shmakk --web`) — a React app served by a small built-in server, with feature parity with the CLI:
+  chat with streaming markdown, tool timeline with inline diffs, approval cards (review mode / unsafe tools / plans /
+  command corrections), shell mode with the correction engine, plan-first and team runs, an integrated terminal running
+  the real CLI, and pages for skills, memory & rules, plan & resume journal, changes (with revert), session recall,
+  agents & workflows, MCP servers, audit log and settings (provider, endpoints, profile, voice, workspace, theme)
+- `/` commands in the composer and a `Ctrl/⌘ K` command palette mapped onto every CLI flag and self-command
+- Voice in the browser: mic → local Whisper, replies → local Kokoro, with Web Speech fallbacks; hands-free mode
+- **Mobile**: responsive down to phone widths with a bottom tab bar, bottom-sheet dialogs, swipeable drawer,
+  safe-area and on-screen-keyboard handling, a terminal key bar, and an installable PWA manifest
+- **Desktop app** (`shmakk --desktop`, `desktop/`) — Electron shell with native menus, folder picker and window state
+- `--port`, `--host`, `--no-open`, `--new-token` flags; `npm run build:web`, `dev:web`, `test:web`, `web`, `desktop`
+- Conversations persist under `~/.local/state/shmakk/web/`; UI settings in `~/.config/shmakk/web.json` (0600)
+- `runAgent` and `runTeam` accept an optional `onEvent` sink for structured progress (used by the web UI; the
+  terminal output is unchanged when it is not set)
+
+- **Four modes** with a switcher: **Chat** (plain conversation with web search), **Code** (the existing agent),
+  **Design** (the agent writes HTML/CSS into a per-chat folder; live sandboxed preview, device sizes, version history
+  with restore) and **Cowork** (agent plus automation tools)
+- **Automations**: multi-step jobs triggered by schedule (cron with time zones), webhook, or by hand; per-automation
+  unattended-permission policy; run history where every run is its own chat; creatable from a Cowork conversation
+- **Projects**: group chats from any mode; project instructions, optional workspace folder, and a
+  *Share context between chats* setting that gives each chat a digest of its siblings and read access to the
+  project's design files
+- **GitHub cloud sessions** — connect an account (token, environment variable, or device sign-in), browse
+  repositories, and start a session on a fresh clone with its own branch; in-chat source-control bar with
+  commit & push and pull-request creation; `/clone owner/repo`; GitHub Enterprise via `SHMAKK_GITHUB_URL` /
+  `SHMAKK_GITHUB_API_URL`
+- **Docker deployment** — `Dockerfile`, `docker-compose.yml` (port 1029), `.env.docker.example`, `docs/deploy.md`;
+  `/healthz`, `SHMAKK_PUBLIC_URL`, `SHMAKK_TRUST_PROXY`, optional built-in TLS, sign-out
+- Conversations are bound to a workspace; opening one switches the terminal and pages to it
+
+### Security
+- Web server binds to loopback by default, requires a token on every request (HttpOnly, SameSite=Strict cookie or
+  Bearer), rejects cross-origin requests and WebSocket upgrades, and ships a strict Content-Security-Policy
+- Token guesses are rate-limited per address; the cookie is `Secure` over HTTPS
+- GitHub tokens are stored owner-only, never returned by the API, never written into clones or remote URLs
+  (git authenticates through a credential helper), and session state (`.shmakk/`) is excluded from commits
+
 ## [1.1.0] - 2026-05-12
 
 ### Added

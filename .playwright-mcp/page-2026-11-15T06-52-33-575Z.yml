@@ -1,0 +1,119 @@
+- generic [ref=f1e2]:
+  - generic [ref=f1e3]:
+    - link "Skip to message box" [ref=f1e4] [cursor=pointer]:
+      - /url: "#composer-input"
+    - complementary "Navigation" [ref=f1e6]:
+      - generic [ref=f1e7]:
+        - button "shmakk, new chat" [ref=f1e8] [cursor=pointer]:
+          - generic [aria-hidden] [ref=f1e9]: ❯
+          - text: shmakk
+        - button "Hide sidebar" [ref=f1e11] [cursor=pointer]
+      - tablist "Mode" [ref=f1e12]:
+        - tab "Chat" [ref=f1e13] [cursor=pointer]
+        - tab "Code" [ref=f1e16] [cursor=pointer]
+        - tab "Design" [selected] [ref=f1e21] [cursor=pointer]
+        - tab "Cowork" [ref=f1e28] [cursor=pointer]
+      - button "New design" [ref=f1e358] [cursor=pointer]
+      - generic [ref=f1e37]:
+        - generic [ref=f1e38]:
+          - generic [ref=f1e39]: Projects
+          - button "New project" [ref=f1e40] [cursor=pointer]
+        - list "Design conversations" [ref=f1e359]:
+          - generic [ref=f1e43]:
+            - generic [ref=f1e44]: Today
+            - listitem [ref=f1e882]:
+              - button "Design a landing page for a saas AI mareting platf…" [ref=f1e883] [cursor=pointer]
+              - button "Options for Design a landing page for a saas AI mareting platf…" [ref=f1e885] [cursor=pointer]
+            - listitem [ref=f1e890]:
+              - button "Design a three-screen mobile onboarding for a habi…" [ref=f1e891] [cursor=pointer]
+              - button "Options for Design a three-screen mobile onboarding for a habi…" [ref=f1e893] [cursor=pointer]
+            - listitem [ref=f1e898]:
+              - button "Design an analytics dashboard for a small online s…" [ref=f1e899] [cursor=pointer]
+              - button "Options for Design an analytics dashboard for a small online s…" [ref=f1e901] [cursor=pointer]
+      - generic [ref=f1e172]:
+        - button "Account menu, marcusb" [ref=f1e173] [cursor=pointer]:
+          - generic [aria-hidden] [ref=f1e174]: m
+          - generic [ref=f1e175]:
+            - generic [ref=f1e176]: marcusb
+            - generic [ref=f1e177]: shmakk
+        - button "Settings" [ref=f1e179] [cursor=pointer]
+    - generic [ref=f1e183]:
+      - banner [ref=f1e184]:
+        - heading [level=1] [ref=f1e1370]:
+          - generic "Design mode" [ref=f1e385]
+          - text: New design
+        - group "Inspector panels" [ref=f1e192]:
+          - button "Browser" [ref=f1e193] [cursor=pointer]
+          - button "Changes" [ref=f1e194] [cursor=pointer]
+          - button "Plan" [ref=f1e195] [cursor=pointer]
+      - generic [ref=f1e196]:
+        - main [ref=f1e197]:
+          - generic [ref=f1e198]:
+            - generic [ref=f1e199]:
+              - generic [ref=f1e1371]:
+                - heading "What should we design?" [level=2] [ref=f1e1379]
+                - paragraph [ref=f1e1380]: Describe a screen or a flow. shmakk builds it as real, clickable HTML next to the chat and keeps every version.
+                - generic [ref=f1e1381]:
+                  - button "landing page Design a landing page for a coffee subscription — warm, editorial, one clear call to action" [ref=f1e1382] [cursor=pointer]:
+                    - generic [ref=f1e1383]: landing page
+                    - generic [ref=f1e1384]: Design a landing page for a coffee subscription — warm, editorial, one clear call to action
+                  - 'button "dashboard Design an analytics dashboard for a small online shop: revenue, orders, top products" [ref=f1e1385] [cursor=pointer]':
+                    - generic [ref=f1e1386]: dashboard
+                    - generic [ref=f1e1387]: "Design an analytics dashboard for a small online shop: revenue, orders, top products"
+                  - button "mobile flow Design a three-screen mobile onboarding for a habit tracker" [ref=f1e1388] [cursor=pointer]:
+                    - generic [ref=f1e1389]: mobile flow
+                    - generic [ref=f1e1390]: Design a three-screen mobile onboarding for a habit tracker
+                  - button "options Give me three different directions for a pricing page, as separate files" [ref=f1e1391] [cursor=pointer]:
+                    - generic [ref=f1e1392]: options
+                    - generic [ref=f1e1393]: Give me three different directions for a pricing page, as separate files
+              - generic [ref=f1e1321]:
+                - generic [ref=f1e1322]:
+                  - generic [aria-hidden] [ref=f1e1323]: ❯
+                  - textbox "Message shmakk" [active] [ref=f1e1324]:
+                    - /placeholder: Describe what to design
+                    - text: Design a landing page for a coffee subscription — warm, editorial, one clear call to action
+                - generic [ref=f1e1325]:
+                  - generic [ref=f1e1326]:
+                    - generic [ref=f1e1327]: design
+                    - button "deepseek-v4-pro" [ref=f1e1334] [cursor=pointer]
+                  - button "Attach files" [ref=f1e1340] [cursor=pointer]
+                  - button "Read replies aloud" [ref=f1e1341] [cursor=pointer]
+                  - button "Voice input" [ref=f1e1342] [cursor=pointer]
+                  - button "Send" [ref=f1e1343] [cursor=pointer]
+            - generic [ref=f1e1347]:
+              - strong [ref=f1e1400]: Your design appears here
+              - paragraph [ref=f1e1401]: Describe a screen, a page or a whole flow. shmakk builds it as real HTML you can click through.
+        - complementary "Inspector":
+          - generic [ref=f1e254]:
+            - generic [ref=f1e255]: Browser
+            - button "Close inspector" [ref=f1e259] [cursor=pointer]
+          - generic:
+            - generic:
+              - generic [ref=f1e853]:
+                - generic:
+                  - textbox "Preview URL" [ref=f1e854]:
+                    - /placeholder: http://localhost:5173
+                    - text: http://localhost:5173
+                  - button "Open address" [ref=f1e855] [cursor=pointer]
+                - button "Reload preview" [ref=f1e856] [cursor=pointer]
+                - button "Open in a new tab" [ref=f1e857] [cursor=pointer]
+              - generic [ref=f1e858]:
+                - generic:
+                  - button ":5173" [ref=f1e859] [cursor=pointer]
+                  - button ":3000" [ref=f1e860] [cursor=pointer]
+                  - button ":8080" [ref=f1e861] [cursor=pointer]
+                - radiogroup "Preview size" [ref=f1e862]:
+                  - radio "desktop" [checked] [ref=f1e863] [cursor=pointer]
+                  - radio "tablet" [ref=f1e866] [cursor=pointer]
+                  - radio "phone" [ref=f1e869] [cursor=pointer]
+              - generic:
+                - generic:
+                  - iframe
+                - generic [ref=f1e872]:
+                  - generic: Nothing answered at http://localhost:5173
+                  - paragraph: Start your dev server, or point this pane at the port it prints. Reload once it is up.
+                  - button "Try again" [ref=f1e879] [cursor=pointer]
+              - generic [ref=f1e880]:
+                - generic: Chromium — the agent can drive this page with its browser tools.
+                - button "Ask the agent to inspect this page" [ref=f1e881] [cursor=pointer]
+  - region "Notifications alt+T"

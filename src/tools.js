@@ -10,11 +10,22 @@ const { dispatchBrowser, classifyBrowserCommand } = require('./browser');
 const { dispatchMobile, classifyMobileCommand } = require('./mobile');
 const { dispatchElectron, classifyElectronCommand } = require('./electron');
 const { recordEdit } = require('./edit-tracker');
+const { isImagePath, mimeForFile, normalizeImage } = require('./images');
 const { appendMemory } = require('./memory');
 const { isMutationTool, hashArgs } = require('./guard');
+const windows = require('./services/windows');
 const https = require('https');
 const http = require('http');
 const os = require('os');
+
+// Lazy-load the deliver module (writes to the web UI state dir). Only needed
+// when deliver_file is called; CLI sessions still get a working file + URL.
+let _deliver = null;
+function _getDeliver() {
+  if (_deliver) return _deliver;
+  _deliver = require('./webui/deliver');
+  return _deliver;
+}
 
 // Lazy-load SSH (optional — only required when ssh_* tools are called).
 let _ssh = null;
@@ -165,18 +176,32 @@ const TOOLS = [
   }},
   { type: 'function', function: {
     name: 'browser',
-    description: 'Control a headless browser. Commands: navigate (go to URL), click (CSS selector), type (fill input), read_page (extract page content, links, forms), screenshot (save PNG), evaluate (run JS), select (dropdown), wait (for selector or seconds), scroll (up/down), close.',
+    description: 'Control a headless browser. Commands: show (open the live browser pane in the web UI and navigate to a URL), navigate (go to URL), click (CSS selector), type (fill input), read_page (extract page content, links, forms), screenshot (save PNG), evaluate (run JS), select (dropdown), wait (for selector or seconds), scroll (up/down), close.',
     parameters: {
       type: 'object',
       required: ['command'],
       properties: {
-        command: { type: 'string', enum: ['navigate', 'click', 'type', 'read_page', 'screenshot', 'evaluate', 'select', 'wait', 'scroll', 'close'] },
+        command: { type: 'string', enum: ['show', 'navigate', 'click', 'type', 'read_page', 'screenshot', 'evaluate', 'select', 'wait', 'scroll', 'close'] },
         url: { type: 'string', description: 'URL for navigate' },
         selector: { type: 'string', description: 'CSS selector for click/type/select/wait' },
         text: { type: 'string', description: 'Text to type or option to select' },
         code: { type: 'string', description: 'JavaScript for evaluate' },
         seconds: { type: 'number', description: 'Seconds to wait' },
         direction: { type: 'string', enum: ['up', 'down'], description: 'Scroll direction' },
+      },
+    },
+  }},
+  { type: 'function', function: {
+    name: 'deliver_file',
+    description: 'Give the user a file as a download in chat. Provide either `content` (text) or `data` (base64, for images/binary). Returns `url`, `viewUrl`, and a ready-to-paste `markdown` link; put that markdown link in your reply and the web UI renders it as a download button (images render inline via viewUrl).',
+    parameters: {
+      type: 'object',
+      required: ['name'],
+      properties: {
+        name: { type: 'string', description: 'File name, e.g. report.md or chart.png' },
+        content: { type: 'string', description: 'Text content of the file (for text files)' },
+        data: { type: 'string', description: 'Base64-encoded bytes (for images and binary files)' },
+        mimeType: { type: 'string', description: 'MIME type; inferred from the name when omitted' },
       },
     },
   }},
@@ -321,6 +346,8 @@ const TOOLS = [
       },
     },
   }},
+  // Desktop window awareness (KDE Plasma): src/services/windows.js
+  ...windows.TOOL_DEFS,
 ];
 
 // Tool safety classification.
@@ -347,10 +374,12 @@ function classifyTool(name, args, mcpManager) {
   if (name === 'browser') return classifyBrowserCommand(args);
   if (name === 'mobile') return classifyMobileCommand(args);
   if (name === 'electron') return classifyElectronCommand(args);
+  if (windows.TOOL_NAMES.has(name)) return windows.classifyWindowsTool(name, args);
   if (name === 'remember') return 'safe';
   if (name === 'image_gen') return 'unsafe';       // external API call, costs money
   if (name === 'tts_generate') return 'safe';       // local-only, no network
   if (name === 'video_probe') return 'safe';        // read-only local metadata
+  if (name === 'deliver_file') return 'safe';       // writes only into the user's own state dir
   if (name === 'video_compose') return 'safe';      // local ffmpeg, reads only workspace files
   if (name === 'ssh_run' || name === 'ssh_push' || name === 'ssh_pull') return 'unsafe';
   return 'uncertain';
@@ -368,8 +397,11 @@ function describeTool(name, args, mcpManager) {
   if (name === 'web_search') return `web search: "${(args.query || '').slice(0, 100)}"`;
   if (name === 'fetch_url') return `fetch ${args.url}`;
   if (name === 'remember') return `remember [${args.scope || 'workspace'}/${args.category || 'Notes'}]: ${(args.fact || '').slice(0, 100)}`;
+  if (name === 'deliver_file') return `deliver ${args.name || 'file'}`;
+  if (windows.TOOL_NAMES.has(name)) return windows.describeWindowsTool(name, args);
   if (name === 'browser') {
     const cmd = args.command || '';
+    if (cmd === 'show') return `browser show ${args.url || ''}`;
     if (cmd === 'navigate') return `browser navigate ${args.url || ''}`;
     if (cmd === 'click') return `browser click ${args.selector || ''}`;
     if (cmd === 'type') return `browser type into ${args.selector || ''}`;
@@ -409,6 +441,11 @@ function describeTool(name, args, mcpManager) {
   return `${name} ${JSON.stringify(args).slice(0, 80)}`;
 }
 
+// Optional observer for shell commands the agent runs (macros use it to
+// decide when to offer themselves). Set by src/webui/macros.js.
+let commandObserver = null;
+function setCommandObserver(fn) { commandObserver = typeof fn === 'function' ? fn : null; }
+
 function runCmd(cwd, cmd, signal) {
   return new Promise((resolve) => {
     let removeAbortListener = null;
@@ -433,7 +470,7 @@ function runCmd(cwd, cmd, signal) {
   });
 }
 
-async function dispatchTool(name, args, roots, confirmTool, signal, mcpManager) {
+async function dispatchTool(name, args, roots, confirmTool, signal, mcpManager, scope) {
   if (signal && signal.aborted) return { error: 'aborted' };
   const safety = classifyTool(name, args, mcpManager);
 
@@ -466,28 +503,28 @@ async function dispatchTool(name, args, roots, confirmTool, signal, mcpManager) 
     if (!p) return { error: 'path outside workspace' };
     try {
       const buf = fs.readFileSync(p);
-      const ext = path.extname(p).toLowerCase();
 
-      // Image files: return as base64 for vision-capable providers.
+      // Image files: return as base64 for vision-capable providers. Formats the
+      // provider cannot read (bmp, tiff, ico, avif, heic, svg) are converted to
+      // png first; if that is impossible the image is described in words only.
       // Mode-specific sub-reads don't apply to images — always return full.
-      const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg']);
-      const MIME_MAP = {
-        '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-        '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp',
-        '.svg': 'image/svg+xml',
-      };
-      if (IMAGE_EXTS.has(ext)) {
+      if (isImagePath(p)) {
         const maxImageBytes = 2 * 1024 * 1024; // 2 MB binary (~2.7 MB base64)
         const slice = buf.length > maxImageBytes ? buf.subarray(0, maxImageBytes) : buf;
         const b64 = slice.toString('base64');
+        const normalized = await normalizeImage({
+          name: path.basename(p),
+          mimeType: mimeForFile(p, slice),
+          data: b64,
+          dataLength: b64.length,
+          truncated: buf.length > maxImageBytes,
+        });
+        const notes = [];
+        if (normalized.convertedFrom) notes.push(`converted from ${normalized.convertedFrom}`);
+        if (normalized.unsupported) notes.push(`${normalized.mimeType || 'unknown format'} cannot be shown to the model${normalized.reason ? ` (${normalized.reason})` : ''}`);
         return {
-          content: `[Image: ${path.basename(p)} — ${buf.length} bytes${buf.length > maxImageBytes ? ' (truncated to 2MB for display)' : ''}]`,
-          images: [{
-            mimeType: MIME_MAP[ext],
-            data: b64,
-            dataLength: b64.length,
-            truncated: buf.length > maxImageBytes,
-          }],
+          content: `[Image: ${path.basename(p)} — ${buf.length} bytes${buf.length > maxImageBytes ? ' (truncated to 2MB for display)' : ''}${notes.length ? ` — ${notes.join('; ')}` : ''}]`,
+          images: normalized.unsupported ? [] : [normalized],
         };
       }
 
@@ -551,7 +588,7 @@ async function dispatchTool(name, args, roots, confirmTool, signal, mcpManager) 
     const oldContent = fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null;
     fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.writeFileSync(p, args.content ?? '');
-    recordEdit({ filePath: p, oldContent, newContent: args.content ?? '', tool: 'write_file' });
+    recordEdit({ filePath: p, oldContent, newContent: args.content ?? '', tool: 'write_file', scope });
     return { ok: true };
   }
   if (name === 'edit_file') {
@@ -568,7 +605,7 @@ async function dispatchTool(name, args, roots, confirmTool, signal, mcpManager) 
       if (second !== -1) return { error: 'old_string is ambiguous; appears multiple times' };
       const updated = content.slice(0, first) + newString + content.slice(first + oldString.length);
       fs.writeFileSync(p, updated);
-      recordEdit({ filePath: p, oldContent: content, newContent: updated, tool: 'edit_file' });
+      recordEdit({ filePath: p, oldContent: content, newContent: updated, tool: 'edit_file', scope });
       return { ok: true, replaced: 1 };
     } catch (e) { return { error: String(e.message) }; }
   }
@@ -586,7 +623,10 @@ async function dispatchTool(name, args, roots, confirmTool, signal, mcpManager) 
   }
   if (name === 'run') {
     // run from the first root as cwd
-    return await runCmd(roots[0], args.cmd, signal);
+    const out = await runCmd(roots[0], args.cmd, signal);
+    // Macros watch commands for their "when should this be offered" rule.
+    try { if (commandObserver) commandObserver({ cmd: String(args.cmd || ''), cwd: roots[0], scope }); } catch {}
+    return out;
   }
   if (name === 'web_search') {
     return await webSearch(args.query, args.max_results, signal);
@@ -603,6 +643,9 @@ async function dispatchTool(name, args, roots, confirmTool, signal, mcpManager) 
   if (name === 'electron') {
     return await dispatchElectron(args);
   }
+  if (windows.TOOL_NAMES.has(name)) {
+    return await windows.dispatchWindows(name, args);
+  }
   if (name === 'remember') {
     const r = appendMemory({
       category: args.category,
@@ -613,6 +656,28 @@ async function dispatchTool(name, args, roots, confirmTool, signal, mcpManager) 
     return r.ok
       ? { ok: true, saved_to: r.path, line: r.line }
       : { error: r.error };
+  }
+  if (name === 'deliver_file') {
+    try {
+      const d = _getDeliver().create({
+        name: args.name,
+        content: args.content,
+        data: args.data,
+        mimeType: args.mimeType,
+      });
+      return {
+        ok: true,
+        url: d.url,
+        viewUrl: d.viewUrl,
+        filename: d.name,
+        mimeType: d.mimeType,
+        size: d.size,
+        markdown: d.markdown,
+        hint: 'Paste the `markdown` link into your reply so the user gets a download button.',
+      };
+    } catch (e) {
+      return { error: `deliver_file failed: ${e.message}` };
+    }
   }
   if (name === 'image_gen') {
     const apiKey = process.env.SHMAKK_OPENAI_API_KEY;
@@ -671,7 +736,7 @@ async function dispatchTool(name, args, roots, confirmTool, signal, mcpManager) 
     if (!b64) return { error: 'No image data in OpenAI response' };
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     fs.writeFileSync(outputPath, Buffer.from(b64, 'base64'));
-    recordEdit({ filePath: outputPath, oldContent: null, newContent: `[binary image ${(b64.length * 0.75) | 0} bytes]`, tool: 'image_gen' });
+    recordEdit({ filePath: outputPath, oldContent: null, newContent: `[binary image ${(b64.length * 0.75) | 0} bytes]`, tool: 'image_gen', scope });
     return {
       ok: true,
       imagePath: outputPath,
@@ -1090,6 +1155,7 @@ module.exports = {
   describeTool,
   dispatchTool,
   runCmd,
+  setCommandObserver,
   normalizeToolCalls,
   applyRoundToolBudget,
   within,

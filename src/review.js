@@ -97,6 +97,39 @@ function makePrompter(pty, write, opts = {}) {
   };
 }
 
+// One line of free text. Resolves with the trimmed line on Enter, or null on
+// Ctrl-C (onCancel is called too).
+function makeLinePrompter(pty, write) {
+  return function askText(question, { onCancel } = {}) {
+    return new Promise((resolve) => {
+      write(question);
+      let buf = '';
+      const release = pty.captureStdin((data) => {
+        for (const ch of data.toString('utf8')) {
+          const code = ch.charCodeAt(0);
+          if (ch === '\r' || ch === '\n') {
+            write('\n');
+            release();
+            return resolve(buf.trim());
+          }
+          if (code === 0x03) {
+            write('^C\n');
+            release();
+            if (onCancel) onCancel();
+            return resolve(null);
+          }
+          if (code === 0x7f || code === 0x08) {
+            if (buf.length) { buf = buf.slice(0, -1); write('\b \b'); }
+          } else if (code >= 0x20) {
+            buf += ch;
+            write(ch);
+          }
+        }
+      });
+    });
+  };
+}
+
 function decisionBanner({ input, decision, mode }) {
   const lines = [];
   lines.push('');
@@ -113,4 +146,4 @@ function decisionBanner({ input, decision, mode }) {
   return lines.join('\r\n') + '\r\n';
 }
 
-module.exports = { makePrompter, decisionBanner };
+module.exports = { makePrompter, makeLinePrompter, decisionBanner };

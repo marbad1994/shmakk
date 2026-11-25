@@ -1,0 +1,63 @@
+# shmakk web for sh.makketing.com — reached on port 1029 through the Caddy proxy
+# service (same pattern as the other stacks on this machine).
+#
+#   cp .env.docker.example .env   # fill in the token and model provider
+#   docker compose up -d --build
+#   docker compose logs shmakk    # prints the sign-in link
+
+services:
+  shmakk:
+    build: .
+    image: shmakk-web:latest
+    container_name: shmakk
+    restart: unless-stopped
+    init: false            # tini is already the entrypoint
+    # Not published directly — the proxy service below is the only way in.
+    expose:
+      - "1029"
+      - "1087"
+    env_file: .env
+    environment:
+      PORT: "1029"
+      # The browser pane's preview proxy (its own origin, see src/webui/preview.js).
+      # Behind a TLS front door, set SHMAKK_PREVIEW_URL to the public address
+      # that reaches it, e.g. https://preview.sh.makketing.com
+      SHMAKK_PREVIEW_PORT: "1087"
+      SHMAKK_PREVIEW_URL: ${SHMAKK_PREVIEW_URL:-}
+      SHMAKK_PUBLIC_URL: ${SHMAKK_PUBLIC_URL:-https://sh.makketing.com,http://sh.makketing.com:1029}
+      SHMAKK_TRUST_PROXY: ${SHMAKK_TRUST_PROXY:-1}
+    volumes:
+      # Conversations, settings, GitHub token, cloned repositories.
+      - shmakk-data:/data
+    # The agent runs shell commands: keep it boxed in.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 1024
+    mem_limit: ${SHMAKK_MEM_LIMIT:-4g}
+
+  # Front door on 1029 (80/443 belong to other services on this machine).
+  # Binds to localhost by default; set SHMAKK_BIND=0.0.0.0 in .env to expose
+  # the port on all interfaces.
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    command: ["caddy", "reverse-proxy", "--from", ":1029", "--to", "shmakk:1029"]
+    ports:
+      - "${SHMAKK_BIND:-127.0.0.1}:1029:1029"
+    depends_on:
+      - shmakk
+
+  # Front door for the browser pane's preview proxy.
+  preview:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    command: ["caddy", "reverse-proxy", "--from", ":1087", "--to", "shmakk:1087"]
+    ports:
+      - "${SHMAKK_BIND:-127.0.0.1}:1087:1087"
+    depends_on:
+      - shmakk
+
+volumes:
+  shmakk-data:

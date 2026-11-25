@@ -33,12 +33,16 @@ function loadDatabase() {
   }
 }
 
+function configBase() {
+  return process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
+}
+
 function dbPath() {
-  return path.join(os.homedir(), '.config', 'shmakk', 'sessions.db');
+  return path.join(configBase(), 'shmakk', 'sessions.db');
 }
 
 function indexerStatePath() {
-  return path.join(os.homedir(), '.config', 'shmakk', 'sessions-indexer.json');
+  return path.join(configBase(), 'shmakk', 'sessions-indexer.json');
 }
 
 // ── Schema ───────────────────────────────────────────────────────────────
@@ -311,6 +315,26 @@ function listSessions({ limit = 20 } = {}) {
   }
 }
 
+// Sessions that actually hold turns, newest first. The desktop app mirrors
+// these into its own conversation list so terminal sessions show up there.
+function listSessionsWithTurns({ limit = 100 } = {}) {
+  const db = getDB();
+  if (!db) return [];
+  try {
+    return db.prepare(`
+      SELECT s.*,
+             (SELECT COUNT(*) FROM turns t WHERE t.session_id = s.id) AS turn_count,
+             (SELECT MAX(t.ts) FROM turns t WHERE t.session_id = s.id) AS last_turn
+      FROM sessions s
+      WHERE EXISTS (SELECT 1 FROM turns t WHERE t.session_id = s.id)
+      ORDER BY s.started_at DESC
+      LIMIT ?
+    `).all(Math.max(1, Math.min(1000, Number(limit) || 100)));
+  } catch {
+    return [];
+  }
+}
+
 function getLastSession() {
   const db = getDB();
   if (!db) return null;
@@ -448,6 +472,7 @@ module.exports = {
   searchTurns,
   expandHits,
   listSessions,
+  listSessionsWithTurns,
   getLastSession,
   getSessionTurns,
   indexAuditLog,
